@@ -5,7 +5,7 @@ import { useI18n } from "@/lib/i18n/context"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { CreditCard, Package, Clock, AlertCircle, CheckCircle2 } from "lucide-react"
+import { CreditCard, Package, Clock, AlertCircle, CheckCircle2, Loader2 } from "lucide-react"
 import { CopyButton } from "@/components/copy-button"
 import { ClientDate } from "@/components/client-date"
 import { Textarea } from "@/components/ui/textarea"
@@ -169,16 +169,54 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                             </div>
                         )
                     ) : (
-                        <div className={`flex items-center gap-3 p-4 rounded-xl border ${order.status === 'paid'
-                                ? 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20'
-                                : 'bg-muted/20 text-muted-foreground border-border/30'
+                        <div className={`flex items-center justify-between gap-3 p-4 rounded-xl border ${order.status === 'paid'
+                            ? 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20'
+                            : 'bg-muted/20 text-muted-foreground border-border/30'
                             }`}>
-                            {order.status === 'paid' ? (
-                                <AlertCircle className="h-5 w-5" />
-                            ) : (
-                                <Clock className="h-5 w-5" />
+                            <div className="flex items-center gap-3">
+                                {order.status === 'paid' ? (
+                                    <AlertCircle className="h-5 w-5" />
+                                ) : (
+                                    <Clock className="h-5 w-5" />
+                                )}
+                                <p className="text-sm">{getStatusMessage(order.status)}</p>
+                            </div>
+
+                            {isOwner && order.status === 'pending' && (
+                                <Button
+                                    size="sm"
+                                    onClick={async () => {
+                                        setSubmitting(true)
+                                        try {
+                                            const { getRetryPaymentParams } = await import("@/actions/checkout")
+                                            const result = await getRetryPaymentParams(order.orderId)
+                                            if (result.success && result.url && result.params) {
+                                                const form = document.createElement('form')
+                                                form.method = 'POST'
+                                                form.action = result.url
+                                                Object.entries(result.params).forEach(([k, v]) => {
+                                                    const input = document.createElement('input')
+                                                    input.type = 'hidden'
+                                                    input.name = k
+                                                    input.value = String(v)
+                                                    form.appendChild(input)
+                                                })
+                                                document.body.appendChild(form)
+                                                form.submit()
+                                            } else {
+                                                toast.error(result.error ? t(result.error) : t('common.error'))
+                                            }
+                                        } catch (e: any) {
+                                            toast.error(e.message)
+                                        } finally {
+                                            setSubmitting(false)
+                                        }
+                                    }}
+                                    disabled={submitting}
+                                >
+                                    {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : t('common.payNow')}
+                                </Button>
                             )}
-                            <p className="text-sm">{getStatusMessage(order.status)}</p>
                         </div>
                     )}
 

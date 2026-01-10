@@ -33,6 +33,7 @@
         "stock": "库存",
         "sold": "已售",
         "buyNow": "立即购买",
+        "payNow": "立即支付",
         "processing": "处理中...",
         "viewDetails": "查看详情",
         "reviews": "评价管理",

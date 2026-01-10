@@ -380,3 +380,38 @@ export async function createOrder(productId: string, email?: string, usePoints: 
         params: payParams
     }
 }
+
+export async function getRetryPaymentParams(orderId: string) {
+    const session = await auth()
+    const user = session?.user
+
+    if (!user?.id) return { success: false, error: 'common.error' }
+
+    const order = await db.query.orders.findFirst({
+        where: and(eq(orders.orderId, orderId), eq(orders.userId, user.id))
+    })
+
+    if (!order) return { success: false, error: 'buy.productNotFound' }
+    if (order.status !== 'pending') return { success: false, error: 'order.status.paid' } // Or just generic error
+
+    // Generate Pay Params
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+    const payParams: Record<string, any> = {
+        pid: process.env.MERCHANT_ID!,
+        type: 'epay',
+        out_trade_no: order.orderId,
+        notify_url: `${baseUrl}/api/notify`,
+        return_url: `${baseUrl}/callback/${order.orderId}`,
+        name: order.productName,
+        money: Number(order.amount).toFixed(2),
+        sign_type: 'MD5'
+    }
+
+    payParams.sign = generateSign(payParams, process.env.MERCHANT_KEY!)
+
+    return {
+        success: true,
+        url: process.env.PAY_URL || 'https://credit.linux.do/epay/pay/submit.php',
+        params: payParams
+    }
+}
