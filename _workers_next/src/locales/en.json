@@ -581,7 +581,7 @@
                 "refund_return": "Refund Return",
                 "admin_adjust": "Admin Adjustment"
             },
-            "orders": {
+            "orderDetail": {
                 "expand": "Expand Order",
                 "collapse": "Collapse Order",
                 "viewOrder": "View Admin Order",

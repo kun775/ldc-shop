@@ -267,11 +267,11 @@ export function AdminUserDetailContent(props: {
                                             size="sm"
                                             onClick={() => toggleOrder(order.orderId)}
                                         >
-                                            {expanded ? t("admin.users.orders.collapse") : t("admin.users.orders.expand")}
+                                            {expanded ? t("admin.users.orderDetail.collapse") : t("admin.users.orderDetail.expand")}
                                         </Button>
                                         <Button asChild type="button" variant="ghost" size="sm">
                                             <Link href={`/admin/orders/${order.orderId}`}>
-                                                {t("admin.users.orders.viewOrder")}
+                                                {t("admin.users.orderDetail.viewOrder")}
                                             </Link>
                                         </Button>
                                     </div>
@@ -279,28 +279,28 @@ export function AdminUserDetailContent(props: {
 
                                 {expanded ? (
                                     <div className="mt-4 grid gap-3 rounded-md bg-muted/20 p-3 md:grid-cols-2">
-                                        <div>{t("admin.users.orders.amount")}: {Number(order.amount)}</div>
-                                        <div>{t("admin.users.orders.pointsUsed")}: {order.pointsUsed || 0}</div>
-                                        <div>{t("admin.users.orders.quantity")}: {order.quantity}</div>
-                                        <div>{t("admin.users.orders.email")}: {order.email || "-"}</div>
+                                        <div>{t("admin.users.orderDetail.amount")}: {Number(order.amount)}</div>
+                                        <div>{t("admin.users.orderDetail.pointsUsed")}: {order.pointsUsed || 0}</div>
+                                        <div>{t("admin.users.orderDetail.quantity")}: {order.quantity}</div>
+                                        <div>{t("admin.users.orderDetail.email")}: {order.email || "-"}</div>
                                         <div className="space-y-1">
-                                            <div>{t("admin.users.orders.tradeNo")}</div>
+                                            <div>{t("admin.users.orderDetail.tradeNo")}</div>
                                             {order.tradeNo ? <CopyButton text={order.tradeNo} truncate maxLength={28} /> : <div>-</div>}
                                         </div>
                                         <div className="space-y-1">
-                                            <div>{t("admin.users.orders.cardKey")}</div>
+                                            <div>{t("admin.users.orderDetail.cardKey")}</div>
                                             {order.cardKey ? <CopyButton text={order.cardKey} truncate maxLength={28} /> : <div>-</div>}
                                         </div>
                                         <div className="space-y-1">
-                                            <div>{t("admin.users.orders.createdAt")}</div>
+                                            <div>{t("admin.users.orderDetail.createdAt")}</div>
                                             <ClientDate value={order.createdAt} format="dateTime" placeholder="-" />
                                         </div>
                                         <div className="space-y-1">
-                                            <div>{t("admin.users.orders.paidAt")}</div>
+                                            <div>{t("admin.users.orderDetail.paidAt")}</div>
                                             <ClientDate value={order.paidAt} format="dateTime" placeholder="-" />
                                         </div>
                                         <div className="space-y-1">
-                                            <div>{t("admin.users.orders.deliveredAt")}</div>
+                                            <div>{t("admin.users.orderDetail.deliveredAt")}</div>
                                             <ClientDate value={order.deliveredAt} format="dateTime" placeholder="-" />
                                         </div>
                                     </div>

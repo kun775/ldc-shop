@@ -9,8 +9,9 @@ type Translations = typeof en
 
 const translations: Record<Locale, Translations> = { en, zh }
 
-function getNestedValue(obj: any, path: string): string {
-  return path.split('.').reduce((acc, part) => acc?.[part], obj) || path
+function getNestedValue(obj: any, path: string): string | null {
+  const value = path.split('.').reduce((acc, part) => acc?.[part], obj)
+  return typeof value === 'string' ? value : null
 }
 
 function interpolate(text: string, params?: Record<string, string | number>): string {
@@ -35,7 +36,7 @@ export async function getServerI18n() {
     getSetting('currency_unit').catch(() => null),
   ])
   const t = (key: string, params?: Record<string, string | number>): string => {
-    const text = getNestedValue(translations[locale], key)
+    const text = getNestedValue(translations[locale], key) ?? key
     return interpolate(text, { currencyUnit: resolveCurrencyUnit(locale, currencyUnit), ...params })
   }
   return { locale, t }

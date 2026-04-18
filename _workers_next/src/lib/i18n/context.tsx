@@ -18,8 +18,9 @@ interface I18nContextType {
 
 const I18nContext = createContext<I18nContextType | null>(null)
 
-function getNestedValue(obj: any, path: string): string {
-    return path.split('.').reduce((acc, part) => acc?.[part], obj) || path
+function getNestedValue(obj: any, path: string): string | null {
+    const value = path.split('.').reduce((acc, part) => acc?.[part], obj)
+    return typeof value === 'string' ? value : null
 }
 
 function interpolate(text: string, params?: Record<string, string | number>): string {
@@ -59,7 +60,7 @@ export function I18nProvider({
     }
 
     const t = (key: string, params?: Record<string, string | number>): string => {
-        const text = getNestedValue(translations[locale], key)
+        const text = getNestedValue(translations[locale], key) ?? key
         return interpolate(text, { currencyUnit: resolveCurrencyUnit(locale, currencyUnit), ...params })
     }
 
@@ -78,7 +79,7 @@ export function useI18n() {
             locale: 'en' as Locale,
             setLocale: () => { },
             t: (key: string, params?: Record<string, string | number>) => {
-                const text = getNestedValue(en, key)
+                const text = getNestedValue(en, key) ?? key
                 return interpolate(text, { currencyUnit: resolveCurrencyUnit('en', null), ...params })
             }
         }

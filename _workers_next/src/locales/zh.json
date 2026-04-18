@@ -581,7 +581,7 @@
                 "refund_return": "退款返还",
                 "admin_adjust": "后台调整"
             },
-            "orders": {
+            "orderDetail": {
                 "expand": "展开订单",
                 "collapse": "收起订单",
                 "viewOrder": "查看后台订单",
