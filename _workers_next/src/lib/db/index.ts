@@ -77,14 +77,7 @@ function createBuildTimeMockD1() {
 
 function shouldUseBuildTimeMockD1() {
     const phase = process.env.NEXT_PHASE;
-    if (phase === PHASE_PRODUCTION_BUILD || phase === PHASE_EXPORT) {
-        return true;
-    }
-
-    // OpenNext on Cloudflare may evaluate server code during `next build`
-    // without exposing request bindings. In that node-only production stage,
-    // we should keep using the mock D1 adapter instead of hard failing.
-    return process.env.NODE_ENV === "production" && typeof (globalThis as any).EdgeRuntime === "undefined";
+    return phase === PHASE_PRODUCTION_BUILD || phase === PHASE_EXPORT;
 }
 
 async function getD1() {
