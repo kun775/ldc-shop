@@ -1,12 +1,13 @@
 'use server'
 
 import { db } from "@/lib/db"
-import { cards, orders, refundRequests, loginUsers } from "@/lib/db/schema"
+import { cards, orders, refundRequests } from "@/lib/db/schema"
 import { and, eq, sql } from "drizzle-orm"
 import { revalidatePath, updateTag } from "next/cache"
 import { checkAdmin } from "@/actions/admin"
 import { recalcProductAggregates, recalcProductAggregatesForMany, createUserNotification } from "@/lib/db/queries"
 import { pullOneCardFromApi } from "@/lib/card-api"
+import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
 
 export async function markOrderPaid(orderId: string) {
   await checkAdmin()
@@ -108,9 +109,21 @@ export async function cancelOrder(orderId: string) {
   })
 
   if (order?.userId && order.pointsUsed && order.pointsUsed > 0) {
-    await db.update(loginUsers)
-      .set({ points: sql`${loginUsers.points} + ${order.pointsUsed}` })
-      .where(eq(loginUsers.userId, order.userId))
+    await ensurePointLedgerUserRecord({
+      userId: order.userId,
+    })
+    await applyUserAutomaticPointEvent({
+      userId: order.userId,
+      eventType: "refund_return",
+      delta: order.pointsUsed,
+      businessKey: `refund_return:${orderId}`,
+      sourceType: "order",
+      sourceId: orderId,
+      reason: `订单 ${orderId} 取消返还积分`,
+      metadata: JSON.stringify({
+        action: "cancel",
+      }),
+    })
   }
 
   await db.update(orders).set({ status: 'cancelled' }).where(eq(orders.orderId, orderId))
@@ -124,6 +137,10 @@ export async function cancelOrder(orderId: string) {
     .where(sql`${cards.reservedOrderId} = ${orderId} AND ${cards.isUsed} = false`)
 
   revalidatePath('/admin/orders')
+  revalidatePath('/admin/users')
+  if (order?.userId) {
+    revalidatePath(`/admin/users/${order.userId}`)
+  }
   revalidatePath(`/admin/orders/${orderId}`)
   revalidatePath(`/order/${orderId}`)
   if (order?.productId) {
@@ -155,9 +172,25 @@ async function deleteOneOrder(orderId: string) {
 
   // Refund points if used
   if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
-    await db.update(loginUsers)
-      .set({ points: sql`${loginUsers.points} + ${order.pointsUsed}` })
-      .where(eq(loginUsers.userId, order.userId))
+    await ensurePointLedgerUserRecord({
+      userId: order.userId,
+      username: order.username ?? null,
+      email: order.email ?? null,
+    })
+    await applyUserAutomaticPointEvent({
+      userId: order.userId,
+      username: order.username ?? null,
+      email: order.email ?? null,
+      eventType: "refund_return",
+      delta: order.pointsUsed,
+      businessKey: `refund_return:${orderId}`,
+      sourceType: "order",
+      sourceId: orderId,
+      reason: `订单 ${orderId} 删除返还积分`,
+      metadata: JSON.stringify({
+        action: "delete",
+      }),
+    })
   }
 
   // Release reserved card if any
@@ -185,10 +218,17 @@ export async function deleteOrder(orderId: string) {
   await checkAdmin()
   if (!orderId) throw new Error("Missing order id")
 
-  const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId), columns: { productId: true } })
+  const order = await db.query.orders.findFirst({
+    where: eq(orders.orderId, orderId),
+    columns: { productId: true, userId: true }
+  })
   await deleteOneOrder(orderId)
 
   revalidatePath('/admin/orders')
+  revalidatePath('/admin/users')
+  if (order?.userId) {
+    revalidatePath(`/admin/users/${order.userId}`)
+  }
   revalidatePath(`/admin/orders/${orderId}`)
   if (order?.productId) {
     try {
@@ -218,6 +258,7 @@ export async function deleteOrders(orderIds: string[]) {
   }
 
   revalidatePath('/admin/orders')
+  revalidatePath('/admin/users')
   try {
     await recalcProductAggregatesForMany(touchedProducts)
   } catch {
@@ -242,21 +283,8 @@ export async function verifyOrderRefundStatus(orderId: string) {
     if (result.success) {
       // status 0 = Refunded
       if (result.status === 0) {
-        const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId), columns: { productId: true } })
-        await db.update(orders).set({ status: 'refunded' }).where(eq(orders.orderId, orderId))
-        revalidatePath('/admin/orders')
-        if (order?.productId) {
-          try {
-            await recalcProductAggregates(order.productId)
-          } catch {
-            // best effort
-          }
-        }
-        try {
-          updateTag('home:products')
-        } catch {
-          // best effort
-        }
+        const { markOrderRefunded } = await import("@/actions/refund")
+        await markOrderRefunded(orderId)
         return { success: true, status: result.status, msg: 'Refunded (Verified)' }
       } else if (result.status === 1) {
         return { success: true, status: result.status, msg: 'Paid (Not Refunded)' }

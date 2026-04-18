@@ -5,7 +5,7 @@ import { db } from "@/lib/db"
 import { products, cards, orders, loginUsers } from "@/lib/db/schema"
 import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded, recalcProductAggregates, createUserNotification } from "@/lib/db/queries"
 import { generateOrderId, generateSign } from "@/lib/crypto"
-import { eq, sql, and, or, isNull, lt, gt } from "drizzle-orm"
+import { eq, sql, and, or, isNull, lt, gt, inArray } from "drizzle-orm"
 import { cookies } from "next/headers"
 import { updateTag } from "next/cache"
 import { after } from "next/server"
@@ -13,6 +13,7 @@ import { notifyAdminPaymentSuccess } from "@/lib/notifications"
 import { sendOrderEmail } from "@/lib/email"
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
 import { pullOneCardFromApi } from "@/lib/card-api"
+import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
 
 const MAX_ORDER_QUANTITY = 10000
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -91,6 +92,12 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
     // 2. Check Blocked Status
     if (user?.id) {
+        await ensurePointLedgerUserRecord({
+            userId: user.id,
+            username: session?.user?.username ?? null,
+            email: user.email ?? null,
+        })
+
         const userRec = await db.query.loginUsers.findFirst({
             where: eq(loginUsers.userId, user.id),
             columns: { isBlocked: true }
@@ -349,27 +356,12 @@ export async function createOrder(productId: string, quantity: number = 1, email
     };
 
     const createOrderRecord = async (reservedCards: any[], joinedKeys: string, isZeroPrice: boolean, pointsToUse: number, finalAmount: number, user: any, canonicalUsername: any, contactInfo: any, product: any, orderId: string, qty: number) => {
-        let pointsDeducted = false
         let orderInserted = false
         const normalizedUsername = canonicalUsername || user?.username || user?.name || null
+        const uniqueCardIds = Array.from(new Set(reservedCards.map(c => c.id).filter((id: any) => id !== null && id !== undefined)));
+        const cardIdsValue = uniqueCardIds.length > 0 ? uniqueCardIds.join(',') : null;
 
         try {
-            if (pointsToUse > 0) {
-                const updatedUser = await db.update(loginUsers)
-                    .set({ points: sql`${loginUsers.points} - ${pointsToUse}` })
-                    .where(and(eq(loginUsers.userId, user!.id!), sql`${loginUsers.points} >= ${pointsToUse}`))
-                    .returning({ points: loginUsers.points });
-
-                if (!updatedUser.length) {
-                    throw new Error('insufficient_points');
-                }
-
-                pointsDeducted = true
-            }
-
-            const uniqueCardIds = Array.from(new Set(reservedCards.map(c => c.id).filter((id: any) => id !== null && id !== undefined)));
-            const cardIdsValue = uniqueCardIds.length > 0 ? uniqueCardIds.join(',') : null;
-
             if (isZeroPrice) {
                 const cardIds = reservedCards.map(c => c.id)
                 if (cardIds.length > 0) {
@@ -407,7 +399,46 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     createdAt: new Date()
                 });
                 orderInserted = true
+            }
 
+            if (!isZeroPrice) {
+                await db.insert(orders).values({
+                    orderId,
+                    productId: product.id,
+                    productName: product.name,
+                    amount: finalAmount.toString(),
+                    email: resolvedContactInfo,
+                    userId: user?.id || null,
+                    username: normalizedUsername,
+                    status: 'pending',
+                    pointsUsed: pointsToUse,
+                    currentPaymentId: orderId, // Store current payment ID
+                    cardIds: cardIdsValue,
+                    quantity: qty,
+                    createdAt: new Date()
+                });
+                orderInserted = true
+            }
+
+            if (pointsToUse > 0 && user?.id) {
+                await applyUserAutomaticPointEvent({
+                    userId: user.id,
+                    username: normalizedUsername,
+                    email: user.email ?? null,
+                    eventType: "order_deduction",
+                    delta: -pointsToUse,
+                    businessKey: `order_deduction:${orderId}`,
+                    sourceType: "order",
+                    sourceId: orderId,
+                    reason: `订单 ${orderId} 积分抵扣`,
+                    metadata: JSON.stringify({
+                        productId: product.id,
+                        quantity: qty,
+                    }),
+                })
+            }
+
+            if (isZeroPrice) {
                 if (user?.id) {
                     try {
                         await createUserNotification({
@@ -460,33 +491,33 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         }).catch(err => console.error('[Email] Points payment email failed:', err));
                     }
                 })
-
-            } else {
-                await db.insert(orders).values({
-                    orderId,
-                    productId: product.id,
-                    productName: product.name,
-                    amount: finalAmount.toString(),
-                    email: resolvedContactInfo,
-                    userId: user?.id || null,
-                    username: normalizedUsername,
-                    status: 'pending',
-                    pointsUsed: pointsToUse,
-                    currentPaymentId: orderId, // Store current payment ID
-                    cardIds: cardIdsValue,
-                    quantity: qty,
-                    createdAt: new Date()
-                });
-                orderInserted = true
             }
         } catch (error) {
-            if (pointsDeducted && !orderInserted && user?.id) {
+            if (orderInserted) {
                 try {
-                    await db.update(loginUsers)
-                        .set({ points: sql`${loginUsers.points} + ${pointsToUse}` })
-                        .where(eq(loginUsers.userId, user.id))
+                    await db.delete(orders).where(eq(orders.orderId, orderId))
                 } catch {
-                    // Best effort rollback
+                    // best effort rollback
+                }
+            }
+
+            if (uniqueCardIds.length > 0) {
+                try {
+                    if (isZeroPrice && !product.isShared) {
+                        await db.update(cards).set({
+                            isUsed: false,
+                            usedAt: null,
+                            reservedOrderId: null,
+                            reservedAt: null
+                        }).where(inArray(cards.id, uniqueCardIds))
+                    } else {
+                        await db.update(cards).set({
+                            reservedOrderId: null,
+                            reservedAt: null
+                        }).where(inArray(cards.id, uniqueCardIds))
+                    }
+                } catch {
+                    // best effort rollback
                 }
             }
             throw error;
@@ -505,11 +536,19 @@ export async function createOrder(productId: string, quantity: number = 1, email
         } catch {
             // best effort
         }
+        if (user?.id && pointsToUse > 0) {
+            try {
+                revalidatePath('/admin/users')
+                revalidatePath(`/admin/users/${user.id}`)
+            } catch {
+                // best effort
+            }
+        }
     } catch (error: any) {
         if (error?.message === 'stock_locked') {
             return { success: false, error: 'buy.stockLocked' };
         }
-        if (error?.message === 'insufficient_points') {
+        if (error?.message === 'POINT_BALANCE_NEGATIVE' || error?.message === 'insufficient_points') {
             return { success: false, error: 'Points mismatch, please try again.' };
         }
         throw error;

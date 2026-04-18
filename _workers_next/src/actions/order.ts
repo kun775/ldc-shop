@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm"
 import { withOrderColumnFallback, recalcProductAggregates } from "@/lib/db/queries"
 import { cookies } from "next/headers"
 import { updateTag } from "next/cache"
+import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
 
 export async function checkOrderStatus(orderId: string) {
     const session = await auth()
@@ -75,7 +76,14 @@ export async function cancelPendingOrder(orderId: string) {
     const order = await withOrderColumnFallback(async () => {
         return await db.query.orders.findFirst({
             where: eq(orders.orderId, orderId),
-            columns: { userId: true, status: true, productId: true }
+            columns: {
+                userId: true,
+                username: true,
+                email: true,
+                status: true,
+                productId: true,
+                pointsUsed: true,
+            }
         })
     })
 
@@ -84,6 +92,28 @@ export async function cancelPendingOrder(orderId: string) {
     if (order.status !== 'pending') return { success: false, error: 'order.cannotCancel' }
 
     try {
+        if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
+            await ensurePointLedgerUserRecord({
+                userId: order.userId,
+                username: order.username ?? null,
+                email: order.email ?? null,
+            })
+            await applyUserAutomaticPointEvent({
+                userId: order.userId,
+                username: order.username ?? null,
+                email: order.email ?? null,
+                eventType: "refund_return",
+                delta: order.pointsUsed,
+                businessKey: `refund_return:${orderId}`,
+                sourceType: "order",
+                sourceId: orderId,
+                reason: `订单 ${orderId} 用户取消返还积分`,
+                metadata: JSON.stringify({
+                    action: "user_cancel",
+                }),
+            })
+        }
+
         // Release reserved cards
         await db.update(cards)
             .set({ reservedOrderId: null, reservedAt: null })
@@ -96,6 +126,8 @@ export async function cancelPendingOrder(orderId: string) {
 
         revalidatePath(`/order/${orderId}`)
         revalidatePath('/orders')
+        revalidatePath('/admin/users')
+        revalidatePath(`/admin/users/${order.userId}`)
         if (order.productId) {
             try {
                 await recalcProductAggregates(order.productId)

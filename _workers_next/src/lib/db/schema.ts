@@ -77,6 +77,23 @@ export const loginUsers = sqliteTable('login_users', {
     consecutiveDays: integer('consecutive_days').default(0),
 });
 
+export const userPointLedger = sqliteTable('user_point_ledger', {
+    id: integer('id', { mode: 'number' }).primaryKey({ autoIncrement: true }),
+    userId: text('user_id').notNull().references(() => loginUsers.userId, { onDelete: 'cascade' }),
+    eventType: text('event_type').notNull(),
+    delta: integer('delta').notNull(),
+    balanceAfter: integer('balance_after'),
+    businessKey: text('business_key').notNull(),
+    sourceType: text('source_type').notNull(),
+    sourceId: text('source_id'),
+    reason: text('reason').notNull(),
+    operatorUserId: text('operator_user_id'),
+    operatorUsername: text('operator_username'),
+    metadata: text('metadata'),
+    status: text('status').default('completed').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
+});
+
 // Daily Check-ins
 export const dailyCheckins = sqliteTable('daily_checkins_v2', {
     id: integer('id', { mode: 'number' }).primaryKey({ autoIncrement: true }),

@@ -1,13 +1,31 @@
 'use server'
 
+import { auth } from "@/lib/auth"
 import { checkAdmin } from "./admin"
-import { updateUserPoints } from "@/lib/db/queries"
+import { applyUserManualPointAdjustment } from "@/lib/points/ledger-db"
 import { revalidatePath } from "next/cache"
 
-export async function saveUserPoints(userId: string, points: number) {
+export async function adjustUserPoints(input: {
+    userId: string
+    direction: "increase" | "decrease"
+    amount: number
+    reason: string
+}) {
+    const session = await auth()
     await checkAdmin()
-    await updateUserPoints(userId, points)
+
+    await applyUserManualPointAdjustment({
+        userId: input.userId,
+        direction: input.direction,
+        amount: input.amount,
+        reason: input.reason,
+        operatorUserId: session?.user?.id ?? null,
+        operatorUsername: session?.user?.username ?? null,
+        businessKey: `admin_adjust:${input.userId}:${Date.now()}`,
+    })
+
     revalidatePath('/admin/users')
+    revalidatePath(`/admin/users/${input.userId}`)
 }
 
 export async function toggleBlock(userId: string, isBlocked: boolean) {
@@ -16,4 +34,5 @@ export async function toggleBlock(userId: string, isBlocked: boolean) {
     await checkAdmin()
     await toggleUserBlock(userId, isBlocked)
     revalidatePath('/admin/users')
+    revalidatePath(`/admin/users/${userId}`)
 }

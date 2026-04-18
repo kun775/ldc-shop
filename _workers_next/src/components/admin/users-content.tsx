@@ -1,17 +1,17 @@
 'use client'
 
+import Link from "next/link"
 import { useRef, useState } from "react"
 import { useI18n } from "@/lib/i18n/context"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
 import { toast } from "sonner"
-import { saveUserPoints, toggleBlock } from "@/actions/admin-users"
+import { toggleBlock } from "@/actions/admin-users"
 import { Loader2, Search, ArrowLeft, ArrowRight, Edit, Ban, CheckCircle } from "lucide-react"
-import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { getDisplayUsername } from "@/lib/user-profile-link"
+import { UserPointAdjustmentDialog } from "./user-point-adjustment-dialog"
 
 interface User {
     userId: string
@@ -43,8 +43,6 @@ export function UsersContent({ data }: UsersContentProps) {
 
     // Edit state
     const [editingUser, setEditingUser] = useState<User | null>(null)
-    const [newPoints, setNewPoints] = useState('')
-    const [saving, setSaving] = useState(false)
     const [blockingId, setBlockingId] = useState<string | null>(null)
     const blockLock = useRef<string | null>(null)
 
@@ -70,25 +68,6 @@ export function UsersContent({ data }: UsersContentProps) {
 
     const openEditDialog = (user: User) => {
         setEditingUser(user)
-        setNewPoints(String(user.points))
-    }
-
-    const handleSavePoints = async () => {
-        if (!editingUser) return
-        const points = parseInt(newPoints)
-        if (isNaN(points)) return
-
-        setSaving(true)
-        try {
-            await saveUserPoints(editingUser.userId, points)
-            toast.success(t('common.success'))
-            setEditingUser(null)
-            router.refresh()
-        } catch (e: any) {
-            toast.error(e.message || t('common.error'))
-        } finally {
-            setSaving(false)
-        }
     }
 
     const handleToggleBlock = async (user: User) => {
@@ -160,18 +139,9 @@ export function UsersContent({ data }: UsersContentProps) {
                                 <TableRow key={user.userId}>
                                     <TableCell className="font-mono text-xs">{user.userId}</TableCell>
                                     <TableCell>
-                                        {user.username ? (
-                                            <a
-                                                href={getExternalProfileUrl(user.username, user.userId) || "#"}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                className="font-medium text-sm hover:underline text-primary"
-                                            >
-                                                {getDisplayUsername(user.username, user.userId)}
-                                            </a>
-                                        ) : (
-                                            '-'
-                                        )}
+                                        <Link href={`/admin/users/${user.userId}`} className="font-medium text-sm hover:underline text-primary">
+                                            {user.username ? getDisplayUsername(user.username, user.userId) : user.userId}
+                                        </Link>
                                     </TableCell>
                                     <TableCell className="font-bold">{user.points}</TableCell>
                                     <TableCell>{user.orderCount}</TableCell>
@@ -188,7 +158,7 @@ export function UsersContent({ data }: UsersContentProps) {
                                             onClick={() => openEditDialog(user)}
                                         >
                                             <Edit className="h-4 w-4 mr-2" />
-                                            {t('admin.users.editPoints')}
+                                            {t('admin.users.adjustPoints')}
                                         </Button>
                                         <Button
                                             variant={user.isBlocked ? "default" : "destructive"}
@@ -232,55 +202,21 @@ export function UsersContent({ data }: UsersContentProps) {
                 </div>
             )}
 
-            {/* Edit Dialog */}
-            <Dialog open={!!editingUser} onOpenChange={(open) => !open && setEditingUser(null)}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>{t('admin.users.editPoints')}</DialogTitle>
-                    </DialogHeader>
-                    {editingUser && (
-                        <div className="grid gap-4 py-4">
-                            <div className="grid gap-2">
-                                <Label>{t('admin.users.username')}</Label>
-                                <div className="text-sm font-medium">
-                                    {editingUser.username ? (
-                                        <a
-                                            href={getExternalProfileUrl(editingUser.username, editingUser.userId) || "#"}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="hover:underline text-primary"
-                                        >
-                                            {getDisplayUsername(editingUser.username, editingUser.userId)}
-                                        </a>
-                                    ) : (
-                                        editingUser.userId
-                                    )}
-                                </div>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>{t('admin.users.currentPoints')}</Label>
-                                <div className="text-sm font-medium">{editingUser.points}</div>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label htmlFor="new-points">{t('admin.users.newPoints')}</Label>
-                                <Input
-                                    id="new-points"
-                                    type="number"
-                                    value={newPoints}
-                                    onChange={(e) => setNewPoints(e.target.value)}
-                                />
-                            </div>
-                        </div>
-                    )}
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setEditingUser(null)}>{t('common.cancel')}</Button>
-                        <Button onClick={handleSavePoints} disabled={saving}>
-                            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            {t('admin.users.save')}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            <UserPointAdjustmentDialog
+                open={!!editingUser}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setEditingUser(null)
+                    }
+                }}
+                userId={editingUser?.userId || ""}
+                username={editingUser?.username || null}
+                currentPoints={editingUser?.points || 0}
+                onSuccess={() => {
+                    setEditingUser(null)
+                    router.refresh()
+                }}
+            />
         </div>
     )
 }

@@ -1,6 +1,7 @@
 import { db } from "./index";
 import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes } from "./schema";
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants";
+import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -2524,7 +2525,14 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
         const fiveMinutesAgoMs = Date.now() - RESERVATION_TTL_MS;
         // Preselect expired orders because D1 may not return rows for UPDATE ... RETURNING
         const candidates = await db
-            .select({ orderId: orders.orderId, productId: orders.productId })
+            .select({
+                orderId: orders.orderId,
+                productId: orders.productId,
+                userId: orders.userId,
+                username: orders.username,
+                email: orders.email,
+                pointsUsed: orders.pointsUsed,
+            })
             .from(orders)
             .where(and(
                 eq(orders.status, 'pending'),
@@ -2540,6 +2548,27 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
         for (const expired of candidates) {
             const expiredOrderId = expired.orderId;
             if (!expiredOrderId) continue;
+            if (expired.userId && expired.pointsUsed && expired.pointsUsed > 0) {
+                await ensurePointLedgerUserRecord({
+                    userId: expired.userId,
+                    username: expired.username ?? null,
+                    email: expired.email ?? null,
+                });
+                await applyUserAutomaticPointEvent({
+                    userId: expired.userId,
+                    username: expired.username ?? null,
+                    email: expired.email ?? null,
+                    eventType: "refund_return",
+                    delta: expired.pointsUsed,
+                    businessKey: `refund_return:${expiredOrderId}`,
+                    sourceType: "order",
+                    sourceId: expiredOrderId,
+                    reason: `订单 ${expiredOrderId} 超时取消返还积分`,
+                    metadata: JSON.stringify({
+                        action: "timeout_cancel",
+                    }),
+                });
+            }
             try {
                 // Mirror manual cancel behavior to guarantee release
                 await db.update(cards)
@@ -2570,9 +2599,13 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
         try {
             revalidatePath('/orders');
             revalidatePath('/admin/orders');
+            revalidatePath('/admin/users');
             for (const expired of candidates) {
                 if (expired.orderId) {
                     revalidatePath(`/order/${expired.orderId}`);
+                }
+                if (expired.userId) {
+                    revalidatePath(`/admin/users/${expired.userId}`);
                 }
             }
         } catch {
@@ -2639,13 +2672,6 @@ export async function getUsers(page = 1, pageSize = 20, q = '') {
         }
         throw error
     }
-}
-
-export async function updateUserPoints(userId: string, points: number) {
-    await ensureLoginUsersTable();
-    await db.update(loginUsers)
-        .set({ points })
-        .where(eq(loginUsers.userId, userId));
 }
 
 export async function toggleUserBlock(userId: string, isBlocked: boolean) {

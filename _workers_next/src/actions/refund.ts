@@ -1,11 +1,12 @@
 'use server'
 
 import { db } from "@/lib/db"
-import { cards, orders, refundRequests, loginUsers, products } from "@/lib/db/schema"
-import { and, eq, sql, inArray } from "drizzle-orm"
+import { cards, orders, refundRequests, products } from "@/lib/db/schema"
+import { and, eq, inArray } from "drizzle-orm"
 import { revalidatePath, updateTag } from "next/cache"
 import { getSetting, recalcProductAggregates } from "@/lib/db/queries"
 import { checkAdmin } from "@/actions/admin"
+import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
 
 export async function markOrderRefunded(orderId: string) {
     await checkAdmin()
@@ -13,12 +14,31 @@ export async function markOrderRefunded(orderId: string) {
     // No transaction - D1 doesn't support SQL transactions in HTTP api easily
     const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
     if (!order) throw new Error("Order not found")
+    if (order.status === 'refunded') {
+        return { success: true }
+    }
 
     // Refund points if used
     if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
-        await db.update(loginUsers)
-            .set({ points: sql`${loginUsers.points} + ${order.pointsUsed}` })
-            .where(eq(loginUsers.userId, order.userId))
+        await ensurePointLedgerUserRecord({
+            userId: order.userId,
+            username: order.username ?? null,
+            email: order.email ?? null,
+        })
+        await applyUserAutomaticPointEvent({
+            userId: order.userId,
+            username: order.username ?? null,
+            email: order.email ?? null,
+            eventType: "refund_return",
+            delta: order.pointsUsed,
+            businessKey: `refund_return:${orderId}`,
+            sourceType: "refund",
+            sourceId: orderId,
+            reason: `订单 ${orderId} 退款返还积分`,
+            metadata: JSON.stringify({
+                status: order.status ?? null,
+            }),
+        })
     }
 
     // Update order status
@@ -76,6 +96,10 @@ export async function markOrderRefunded(orderId: string) {
 
     revalidatePath('/admin/orders')
     revalidatePath('/admin/refunds')
+    revalidatePath('/admin/users')
+    if (order.userId) {
+        revalidatePath(`/admin/users/${order.userId}`)
+    }
     revalidatePath(`/order/${orderId}`)
 
     if (order.productId) {
