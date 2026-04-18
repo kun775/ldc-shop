@@ -58,34 +58,51 @@ class D1Proxy {
     }
 }
 
-async function getD1() {
+function createBuildTimeMockD1() {
+    return {
+        prepare() {
+            return {
+                bind() { return this },
+                async all() { return { results: [] } },
+                async first() { return null },
+                async run() { return { success: true } },
+                async raw() { return [] },
+            }
+        },
+        async batch() { return [] },
+        async exec() { return { success: true } },
+        async dump() { return new Uint8Array() },
+    } as any;
+}
+
+function shouldUseBuildTimeMockD1() {
     const phase = process.env.NEXT_PHASE;
     if (phase === PHASE_PRODUCTION_BUILD || phase === PHASE_EXPORT) {
-        // Build-time fallback to avoid hard failures when D1 bindings are unavailable.
-        const mock = {
-            prepare() {
-                return {
-                    bind() { return this },
-                    async all() { return { results: [] } },
-                    async first() { return null },
-                    async run() { return { success: true } },
-                    async raw() { return [] },
-                }
-            },
-            async batch() { return [] },
-            async exec() { return { success: true } },
-            async dump() { return new Uint8Array() },
-        } as any;
-        return mock;
+        return true;
     }
+
+    // OpenNext on Cloudflare may evaluate server code during `next build`
+    // without exposing request bindings. In that node-only production stage,
+    // we should keep using the mock D1 adapter instead of hard failing.
+    return process.env.NODE_ENV === "production" && typeof (globalThis as any).EdgeRuntime === "undefined";
+}
+
+async function getD1() {
+    if (shouldUseBuildTimeMockD1()) {
+        return createBuildTimeMockD1();
+    }
+
     try {
-        const ctx = await getCloudflareContext();
+        const ctx = await getCloudflareContext({ async: true });
         if ((ctx as any)?.env?.DB) {
             return (ctx as any).env.DB;
         }
-    } catch (e) {
-        // Ignore
+    } catch {
+        if (shouldUseBuildTimeMockD1()) {
+            return createBuildTimeMockD1();
+        }
     }
+
     throw new Error("D1 Database binding not found in Cloudflare context");
 }
 
