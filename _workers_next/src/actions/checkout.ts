@@ -7,7 +7,7 @@ import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded, recalcProductAggregat
 import { generateOrderId, generateSign } from "@/lib/crypto"
 import { eq, sql, and, or, isNull, lt, gt, inArray } from "drizzle-orm"
 import { cookies } from "next/headers"
-import { updateTag } from "next/cache"
+import { revalidatePath, updateTag } from "next/cache"
 import { after } from "next/server"
 import { notifyAdminPaymentSuccess } from "@/lib/notifications"
 import { sendOrderEmail } from "@/lib/email"
