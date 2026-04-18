@@ -30,6 +30,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
     const [formSeed, setFormSeed] = useState(0)
     // Only show warning section if purchaseWarning has actual content
     const [showWarning, setShowWarning] = useState(Boolean(product?.purchaseWarning && String(product.purchaseWarning).trim()))
+    const [pointDiscountEnabled, setPointDiscountEnabled] = useState(Boolean(product?.pointDiscountEnabled))
     const [visibilityLevel, setVisibilityLevel] = useState(String(product?.visibilityLevel ?? -1))
     const [productImageValue, setProductImageValue] = useState(product?.image || '')
     const [productGalleryValues, setProductGalleryValues] = useState<string[]>(() => parseStoredProductImages(product?.productImages))
@@ -55,6 +56,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
     useEffect(() => {
         setCurrentProduct(product)
         setShowWarning(Boolean(product?.purchaseWarning && String(product.purchaseWarning).trim()))
+        setPointDiscountEnabled(Boolean(product?.pointDiscountEnabled))
         setVisibilityLevel(String(product?.visibilityLevel ?? -1))
         setProductImageValue(product?.image || '')
         setProductGalleryValues(parseStoredProductImages(product?.productImages))
@@ -90,6 +92,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                     if (!active || !latest) return
                     setCurrentProduct(latest as any)
                     setShowWarning(Boolean(latest?.purchaseWarning && String(latest.purchaseWarning).trim()))
+                    setPointDiscountEnabled(Boolean((latest as any)?.pointDiscountEnabled))
                     setVisibilityLevel(String(latest?.visibilityLevel ?? -1))
                     setProductImageValue(latest?.image || '')
                     setProductGalleryValues(parseStoredProductImages((latest as any)?.productImages))
@@ -384,6 +387,45 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                                 <p className="text-xs text-muted-foreground">{t('admin.productForm.purchaseWarningHint')}</p>
                             </div>
                         )}
+                    </div>
+
+                    <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+                        <div className="flex items-center gap-2">
+                            <input
+                                id="pointDiscountEnabled"
+                                name="pointDiscountEnabled"
+                                type="checkbox"
+                                checked={pointDiscountEnabled}
+                                onChange={(e) => setPointDiscountEnabled(e.target.checked)}
+                                className="h-4 w-4 accent-primary"
+                            />
+                            <div className="flex flex-col">
+                                <Label htmlFor="pointDiscountEnabled" className="cursor-pointer font-medium">
+                                    {t('admin.productForm.pointDiscountEnabledLabel')}
+                                </Label>
+                                <span className="text-xs text-muted-foreground">
+                                    {t('admin.productForm.pointDiscountEnabledHint')}
+                                </span>
+                            </div>
+                        </div>
+                        <div className="grid gap-2">
+                            <Label htmlFor="pointDiscountPercent">{t('admin.productForm.pointDiscountPercentLabel')}</Label>
+                            <Input
+                                id="pointDiscountPercent"
+                                name="pointDiscountPercent"
+                                type="number"
+                                min={1}
+                                max={100}
+                                step="1"
+                                defaultValue={currentProduct?.pointDiscountPercent || ''}
+                                placeholder={t('admin.productForm.pointDiscountPercentPlaceholder')}
+                                disabled={!pointDiscountEnabled}
+                                onWheel={(e) => e.currentTarget.blur()}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                {t('admin.productForm.pointDiscountPercentHint')}
+                            </p>
+                        </div>
                     </div>
 
                     <div className="space-y-2 p-3 border rounded-md bg-muted/30">

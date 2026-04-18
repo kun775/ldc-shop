@@ -12,6 +12,7 @@ import { getProductCardApiConfig, pullOneCardFromApi, saveProductCardApiConfig }
 import { unstable_noStore } from "next/cache"
 import { isThemeFont } from "@/lib/theme-fonts"
 import { normalizeCurrencyUnit } from "@/lib/currency-unit"
+import { normalizeProductPointDiscountConfig } from "@/lib/points/product-point-discount"
 import {
     PRODUCT_GALLERY_MAX_ITEMS,
     PRODUCT_GALLERY_MAX_JSON_LENGTH,
@@ -61,6 +62,8 @@ export async function saveProduct(formData: FormData) {
     const isHot = formData.get('isHot') === 'on'
     const isShared = formData.get('isShared') === 'on'
     const purchaseWarning = (formData.get('purchaseWarning') as string | null)?.trim() || null
+    const pointDiscountEnabled = formData.get('pointDiscountEnabled') === 'on'
+    const pointDiscountPercentRaw = (formData.get('pointDiscountPercent') as string | null)?.trim() ?? ''
     const visibilityLevelRaw = (formData.get('visibilityLevel') as string | null)?.trim() ?? ''
     const variantGroupId = (formData.get('variantGroupId') as string | null)?.trim() || null
     const variantLabel = (formData.get('variantLabel') as string | null)?.trim() || null
@@ -82,6 +85,10 @@ export async function saveProduct(formData: FormData) {
     if (![ -1, 0, 1, 2, 3 ].includes(visibilityLevel)) {
         throw new Error("Invalid visibility level")
     }
+    const pointDiscountConfig = normalizeProductPointDiscountConfig({
+        pointDiscountEnabled,
+        pointDiscountPercent: pointDiscountPercentRaw,
+    })
     const submittedGallery = normalizeProductImageRefs([image, ...parseStoredProductImages(productImagesRaw)])
     if (submittedGallery.length > PRODUCT_GALLERY_MAX_ITEMS) {
         throw new Error(`Product gallery supports up to ${PRODUCT_GALLERY_MAX_ITEMS} images`)
@@ -121,6 +128,8 @@ export async function saveProduct(formData: FormData) {
             productImages: additionalImagesJson,
             purchaseLimit,
             purchaseWarning,
+            pointDiscountEnabled: pointDiscountConfig.pointDiscountEnabled,
+            pointDiscountPercent: pointDiscountConfig.pointDiscountPercent,
             isHot,
             isShared,
             visibilityLevel,
@@ -139,6 +148,8 @@ export async function saveProduct(formData: FormData) {
                 productImages: additionalImagesJson,
                 purchaseLimit,
                 purchaseWarning,
+                pointDiscountEnabled: pointDiscountConfig.pointDiscountEnabled,
+                pointDiscountPercent: pointDiscountConfig.pointDiscountPercent,
                 isHot,
                 isShared,
                 visibilityLevel,
@@ -165,6 +176,12 @@ export async function saveProduct(formData: FormData) {
         } catch { /* column exists */ }
         try {
             await db.run(sql.raw(`ALTER TABLE products ADD COLUMN visibility_level INTEGER DEFAULT -1`));
+        } catch { /* column exists */ }
+        try {
+            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN point_discount_enabled INTEGER DEFAULT 0`));
+        } catch { /* column exists */ }
+        try {
+            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN point_discount_percent INTEGER DEFAULT 0`));
         } catch { /* column exists */ }
         try {
             await db.run(sql.raw(`ALTER TABLE products ADD COLUMN product_images TEXT`));

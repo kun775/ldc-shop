@@ -14,6 +14,7 @@ import { sendOrderEmail } from "@/lib/email"
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
+import { resolveCheckoutPointUsage } from "@/lib/points/product-point-discount"
 
 const MAX_ORDER_QUANTITY = 10000
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -60,7 +61,9 @@ export async function createOrder(productId: string, quantity: number = 1, email
             price: true,
             purchaseLimit: true,
             isShared: true,
-            purchaseQuestions: true
+            purchaseQuestions: true,
+            pointDiscountEnabled: true,
+            pointDiscountPercent: true,
         }
     })
     if (!product) return { success: false, error: 'buy.productNotFound' }
@@ -107,23 +110,26 @@ export async function createOrder(productId: string, quantity: number = 1, email
         }
     }
 
-    // Points Calculation
-    let pointsToUse = 0
-    let finalAmount = Number(product.price) * quantity
+    const orderAmount = Number(product.price) * quantity
+    let availablePoints = 0
 
-    if (usePoints && user?.id) {
+    if (user?.id) {
         const userRec = await db.query.loginUsers.findFirst({
             where: eq(loginUsers.userId, user.id),
             columns: { points: true }
         })
-        const currentPoints = userRec?.points || 0
-
-        if (currentPoints > 0) {
-            // Logic: 1 Point = 1 Unit of currency
-            pointsToUse = Math.min(currentPoints, Math.ceil(finalAmount))
-            finalAmount = Math.max(0, finalAmount - pointsToUse)
-        }
+        availablePoints = userRec?.points || 0
     }
+
+    const pricing = resolveCheckoutPointUsage({
+        orderAmount,
+        availablePoints,
+        usePoints,
+        pointDiscountEnabled: Boolean(product.pointDiscountEnabled),
+        pointDiscountPercent: Number(product.pointDiscountPercent || 0),
+    })
+    const pointsToUse = pricing.pointsToUse
+    const finalAmount = pricing.finalAmount
 
     const isZeroPrice = finalAmount <= 0
     const contactInfo = (email || '').trim()

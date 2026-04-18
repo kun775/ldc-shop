@@ -96,6 +96,8 @@ export async function importData(formData: FormData) {
             purchaseLimit: 'purchase_limit',
             purchaseWarning: 'purchase_warning',
             visibilityLevel: 'visibility_level',
+            pointDiscountEnabled: 'point_discount_enabled',
+            pointDiscountPercent: 'point_discount_percent',
             stockCount: 'stock_count',
             lockedCount: 'locked_count',
             soldCount: 'sold_count',

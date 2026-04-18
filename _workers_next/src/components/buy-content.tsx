@@ -40,6 +40,8 @@ interface Product {
     purchaseLimit?: number | null
     purchaseWarning?: string | null
     purchaseQuestions?: string | null
+    pointDiscountEnabled?: boolean | null
+    pointDiscountPercent?: number | null
     isHot?: boolean | null
     sold?: number
 }
@@ -124,6 +126,8 @@ export function BuyContent({
                     purchaseLimit: v.purchaseLimit,
                     purchaseWarning: v.purchaseWarning ?? null,
                     purchaseQuestions: v.purchaseQuestions ?? null,
+                    pointDiscountEnabled: v.pointDiscountEnabled ?? false,
+                    pointDiscountPercent: v.pointDiscountPercent ?? 0,
                     isHot: v.isHot ?? false,
                 } satisfies Product
             }
@@ -724,6 +728,8 @@ export function BuyContent({
                                                         autoOpen={warningConfirmed && !!displayProduct.purchaseWarning}
                                                         emailConfigured={emailConfiguredState}
                                                         answers={hasQuestions ? questionAnswers : undefined}
+                                                        pointDiscountEnabled={Boolean(displayProduct.pointDiscountEnabled)}
+                                                        pointDiscountPercent={Number(displayProduct.pointDiscountPercent || 0)}
                                                         className="h-11 flex-1 rounded-full bg-primary px-5 font-medium text-primary-foreground shadow-[0_16px_34px_-20px_rgba(15,23,42,0.55)] transition-all hover:bg-primary/90 hover:shadow-[0_18px_40px_-22px_rgba(15,23,42,0.6)]"
                                                     />
                                                     {renderShareButton(true)}

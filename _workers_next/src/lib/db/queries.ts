@@ -10,7 +10,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 20;
+const CURRENT_SCHEMA_VERSION = 21;
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
 const columnEnsureState: Record<ColumnEnsureKey, { ready: boolean; pending: Promise<void> | null }> = {
     products: { ready: false, pending: null },
@@ -223,6 +223,8 @@ async function ensureDatabaseInitialized() {
             purchase_limit INTEGER,
             purchase_warning TEXT,
             visibility_level INTEGER DEFAULT -1,
+            point_discount_enabled INTEGER DEFAULT 0,
+            point_discount_percent INTEGER DEFAULT 0,
             stock_count INTEGER DEFAULT 0,
             locked_count INTEGER DEFAULT 0,
             sold_count INTEGER DEFAULT 0,
@@ -436,6 +438,8 @@ async function ensureProductsColumns() {
         await safeAddColumn('products', 'purchase_warning', 'TEXT');
         await safeAddColumn('products', 'is_shared', 'INTEGER DEFAULT 0');
         await safeAddColumn('products', 'visibility_level', 'INTEGER DEFAULT -1');
+        await safeAddColumn('products', 'point_discount_enabled', 'INTEGER DEFAULT 0');
+        await safeAddColumn('products', 'point_discount_percent', 'INTEGER DEFAULT 0');
         await safeAddColumn('products', 'stock_count', 'INTEGER DEFAULT 0');
         await safeAddColumn('products', 'locked_count', 'INTEGER DEFAULT 0');
         await safeAddColumn('products', 'sold_count', 'INTEGER DEFAULT 0');
@@ -1073,6 +1077,8 @@ export async function getProduct(id: string, options?: { isLoggedIn?: boolean; t
             sold: sql<number>`COALESCE(${products.soldCount}, 0)`,
             purchaseLimit: products.purchaseLimit,
             purchaseWarning: products.purchaseWarning,
+            pointDiscountEnabled: products.pointDiscountEnabled,
+            pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
             visibilityLevel: products.visibilityLevel,
             stock: sql<number>`COALESCE(${products.stockCount}, 0)`,
             locked: sql<number>`COALESCE(${products.lockedCount}, 0)`,
@@ -1126,6 +1132,8 @@ export type ProductVariantRow = {
     isHot: boolean | null;
     purchaseWarning: string | null;
     purchaseQuestions: string | null;
+    pointDiscountEnabled: boolean | null;
+    pointDiscountPercent: number;
 };
 
 export async function getProductVariants(
@@ -1150,6 +1158,8 @@ export async function getProductVariants(
             isHot: products.isHot,
             purchaseWarning: products.purchaseWarning,
             purchaseQuestions: products.purchaseQuestions,
+            pointDiscountEnabled: products.pointDiscountEnabled,
+            pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
         })
             .from(products)
             .where(and(
@@ -1191,6 +1201,8 @@ export async function getProductForAdmin(id: string) {
             isShared: products.isShared,
             purchaseLimit: products.purchaseLimit,
             purchaseWarning: products.purchaseWarning,
+            pointDiscountEnabled: products.pointDiscountEnabled,
+            pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
             visibilityLevel: products.visibilityLevel,
             variantGroupId: products.variantGroupId,
             variantLabel: products.variantLabel,

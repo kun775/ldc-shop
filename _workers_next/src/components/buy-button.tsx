@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import { createOrder } from "@/actions/checkout"
 import { getUserPoints } from "@/actions/points"
+import { calculatePointDiscountPreview } from "@/lib/points/product-point-discount"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -21,10 +22,24 @@ interface BuyButtonProps {
     autoOpen?: boolean
     emailConfigured?: boolean
     answers?: string[]
+    pointDiscountEnabled?: boolean
+    pointDiscountPercent?: number
     className?: string
 }
 
-export function BuyButton({ productId, price, productName, disabled, quantity = 1, autoOpen = false, emailConfigured = false, answers, className }: BuyButtonProps) {
+export function BuyButton({
+    productId,
+    price,
+    productName,
+    disabled,
+    quantity = 1,
+    autoOpen = false,
+    emailConfigured = false,
+    answers,
+    pointDiscountEnabled = false,
+    pointDiscountPercent = 0,
+    className,
+}: BuyButtonProps) {
     const [loading, setLoading] = useState(false)
     const [open, setOpen] = useState(false)
     const [points, setPoints] = useState(0)
@@ -36,15 +51,24 @@ export function BuyButton({ productId, price, productName, disabled, quantity = 
     const { t } = useI18n()
 
     const numericalPrice = Number(price) * quantity
+    const preview = calculatePointDiscountPreview({
+        orderAmount: numericalPrice,
+        availablePoints: points,
+        usePoints,
+        pointDiscountEnabled,
+        pointDiscountPercent,
+    })
 
     const openDialog = async () => {
         if (disabled) return
         setOpen(true)
+        setPoints(0)
+        setUsePoints(false)
         setPointsLoading(true)
         try {
             const p = await getUserPoints()
             setPoints(p)
-            setUsePoints(p > 0)
+            setUsePoints(false)
         } catch (e) {
             console.error(e)
             setUsePoints(false)
@@ -125,9 +149,7 @@ export function BuyButton({ productId, price, productName, disabled, quantity = 
         }
     }
 
-    // Calculation for UI
-    const pointsToUse = usePoints ? Math.min(points, Math.ceil(numericalPrice)) : 0
-    const finalPrice = Math.max(0, numericalPrice - pointsToUse)
+    const finalPrice = preview.finalAmount
 
     return (
         <>
@@ -169,7 +191,7 @@ export function BuyButton({ productId, price, productName, disabled, quantity = 
                         </Label>
                     </div>
 
-                        {points > 0 && (
+                        {preview.shouldShowPointOption && (
                             <div className="flex items-center space-x-2 border p-3 rounded-md">
                                 <input
                                     type="checkbox"
@@ -182,11 +204,18 @@ export function BuyButton({ productId, price, productName, disabled, quantity = 
                                     <span className="flex items-center gap-1">
                                         {t('buy.modal.usePoints')} <Coins className="w-3 h-3 text-yellow-500" />
                                     </span>
-                                    <span className="text-muted-foreground">
-                                        {t('buy.modal.pointsDetails', { points: pointsToUse, available: points })}
-                                    </span>
                                 </Label>
                             </div>
+                        )}
+
+                        {preview.shouldShowPointOption && (
+                            <p className="text-sm text-muted-foreground">
+                                {t('buy.modal.pointDiscountSummary', {
+                                    maxPoints: preview.maxDiscountPoints,
+                                    percent: preview.pointDiscountPercent,
+                                    available: points,
+                                })}
+                            </p>
                         )}
 
                         <div className="flex justify-between items-center border-t pt-4 font-bold text-lg">
