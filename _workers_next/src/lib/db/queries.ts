@@ -868,6 +868,8 @@ export async function getProducts() {
             visibilityLevel: products.visibilityLevel,
             sortOrder: products.sortOrder,
             purchaseLimit: products.purchaseLimit,
+            pointDiscountEnabled: products.pointDiscountEnabled,
+            pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
             variantGroupId: products.variantGroupId,
             variantLabel: products.variantLabel,
             stock: sql<number>`COALESCE(${products.stockCount}, 0)`,

@@ -29,18 +29,21 @@ export default async function AdminPage() {
                 const locked = stat.locked
                 const stockCount = available >= INFINITE_STOCK ? INFINITE_STOCK : (available + locked)
                 return {
-                id: p.id,
-                name: p.name,
-                price: p.price,
-                compareAtPrice: p.compareAtPrice ?? null,
-                category: p.category,
-                stockCount,
-                isActive: p.isActive ?? true,
-                isHot: p.isHot ?? false,
-                sortOrder: p.sortOrder ?? 0,
-                variantGroupId: p.variantGroupId ?? null,
-                variantLabel: p.variantLabel ?? null
-            }})}
+                    id: p.id,
+                    name: p.name,
+                    price: p.price,
+                    compareAtPrice: p.compareAtPrice ?? null,
+                    category: p.category,
+                    stockCount,
+                    isActive: p.isActive ?? true,
+                    isHot: p.isHot ?? false,
+                    sortOrder: p.sortOrder ?? 0,
+                    pointDiscountEnabled: Boolean(p.pointDiscountEnabled),
+                    pointDiscountPercent: Number(p.pointDiscountPercent || 0),
+                    variantGroupId: p.variantGroupId ?? null,
+                    variantLabel: p.variantLabel ?? null
+                }
+            })}
             lowStockThreshold={lowStockThreshold}
         />
     )

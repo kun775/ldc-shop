@@ -26,6 +26,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
         productName: order.productName,
         productVariantLabel,
         amount: order.amount,
+        pointsUsed: Number(order.pointsUsed || 0),
         status: order.status,
         tradeNo: order.tradeNo,
         cardKey: order.cardKey,

@@ -15,6 +15,7 @@ import { RefundButton } from "@/components/admin/refund-button"
 import { toast } from "sonner"
 import { markOrderDelivered, markOrderPaid, cancelOrder, updateOrderEmail, deleteOrder } from "@/actions/admin-orders"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
 
 function statusVariant(status: string | null) {
   switch (status) {
@@ -29,6 +30,10 @@ function statusVariant(status: string | null) {
 export function AdminOrderDetailContent({ order }: { order: any }) {
   const { t } = useI18n()
   const router = useRouter()
+  const paymentBreakdown = getOrderPaymentBreakdown({
+    amount: order.amount,
+    pointsUsed: order.pointsUsed
+  })
   const [email, setEmail] = useState(order.email || '')
   const [savingEmail, setSavingEmail] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
@@ -148,9 +153,22 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
               <div className="text-xs text-muted-foreground font-mono">{order.productId}</div>
             </div>
 
-            <div className="space-y-1">
-              <div className="text-sm text-muted-foreground">{t('admin.orders.amount')}</div>
-              <div className="font-medium">{Number(order.amount)} {t('common.credits')}</div>
+            <div className="space-y-2">
+              <div className="text-sm text-muted-foreground">{t('admin.orders.paymentBreakdown')}</div>
+              <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">{t('admin.orders.ldcPaid')}</span>
+                  <span className="font-medium">{paymentBreakdown.ldcAmount}</span>
+                </div>
+                <div className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">{t('admin.orders.pointsDeduction')}</span>
+                  <span className="font-medium">{paymentBreakdown.pointsAmount}</span>
+                </div>
+                <div className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-muted-foreground">{t('admin.orders.orderTotal')}</span>
+                  <span className="font-semibold">{paymentBreakdown.totalAmount}</span>
+                </div>
+              </div>
             </div>
 
             <div className="space-y-1">

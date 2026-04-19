@@ -23,6 +23,8 @@ interface Product {
     isActive: boolean
     isHot: boolean
     sortOrder: number
+    pointDiscountEnabled?: boolean | null
+    pointDiscountPercent?: number | null
     variantGroupId?: string | null
     variantLabel?: string | null
 }
@@ -164,12 +166,19 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                                     </div>
                                 </TableCell>
                                 <TableCell>
-                                    <div className="flex items-center gap-2">
-                                        <span>{Number(product.price)}</span>
-                                        {product.compareAtPrice && Number(product.compareAtPrice) > Number(product.price) && (
-                                            <span className="text-xs text-muted-foreground line-through">
-                                                {Number(product.compareAtPrice)}
-                                            </span>
+                                    <div className="flex flex-col gap-1">
+                                        <div className="flex items-center gap-2">
+                                            <span>{Number(product.price)}</span>
+                                            {product.compareAtPrice && Number(product.compareAtPrice) > Number(product.price) && (
+                                                <span className="text-xs text-muted-foreground line-through">
+                                                    {Number(product.compareAtPrice)}
+                                                </span>
+                                            )}
+                                        </div>
+                                        {product.pointDiscountEnabled && Number(product.pointDiscountPercent || 0) > 0 && (
+                                            <Badge variant="secondary" className="w-fit text-[10px]">
+                                                {t('common.pointDiscountBadge', { percent: Number(product.pointDiscountPercent || 0) })}
+                                            </Badge>
                                         )}
                                     </div>
                                 </TableCell>

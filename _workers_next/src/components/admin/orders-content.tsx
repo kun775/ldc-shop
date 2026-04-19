@@ -15,6 +15,7 @@ import { AdminOrderActions } from "@/components/admin/order-actions"
 import { deleteOrders } from "@/actions/admin-orders"
 import { toast } from "sonner"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
 
 interface Order {
     orderId: string
@@ -24,6 +25,7 @@ interface Order {
     email: string | null
     productName: string
     amount: string
+    pointsUsed: number
     status: string | null
     cardKey: string | null
     tradeNo: string | null
@@ -270,7 +272,7 @@ export function AdminOrdersContent({
                             <TableHead>{t('admin.orders.orderId')}</TableHead>
                             <TableHead>{t('admin.orders.user')}</TableHead>
                             <TableHead>{t('admin.orders.product')}</TableHead>
-                            <TableHead>{t('admin.orders.amount')}</TableHead>
+                            <TableHead>{t('admin.orders.paymentBreakdown')}</TableHead>
                             <TableHead>{t('admin.orders.status')}</TableHead>
                             <TableHead>{t('admin.orders.tradeNo')}</TableHead>
                             <TableHead>{t('admin.orders.cardKey')}</TableHead>
@@ -279,80 +281,99 @@ export function AdminOrdersContent({
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {orders.map(order => (
-                            <TableRow key={order.orderId}>
-                                <TableCell>
-                                    <input
-                                        type="checkbox"
-                                        checked={!!selected[order.orderId]}
-                                        onChange={(e) => setSelected((prev) => ({ ...prev, [order.orderId]: e.target.checked }))}
-                                        aria-label={t('admin.orders.selectOne')}
-                                        className="h-4 w-4"
-                                    />
-                                </TableCell>
-                                <TableCell className="font-mono text-xs">
-                                    <Link href={`/admin/orders/${order.orderId}`} className="hover:underline">
-                                        {order.orderId}
-                                    </Link>
-                                </TableCell>
-                                <TableCell>
-                                    {order.username ? (
-                                        <div className="space-y-0.5">
-                                            <a
-                                                href={getExternalProfileUrl(order.username, order.userId) || "#"}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                className="font-medium text-sm hover:underline text-primary"
-                                            >
-                                                {getDisplayUsername(order.username, order.userId)}
-                                            </a>
-                                            {order.email && (
-                                                <div className="text-xs text-muted-foreground">
-                                                    <CopyButton text={order.email} truncate maxLength={20} />
-                                                </div>
-                                            )}
+                        {orders.map(order => {
+                            const paymentBreakdown = getOrderPaymentBreakdown({
+                                amount: order.amount,
+                                pointsUsed: order.pointsUsed
+                            })
+
+                            return (
+                                <TableRow key={order.orderId}>
+                                    <TableCell>
+                                        <input
+                                            type="checkbox"
+                                            checked={!!selected[order.orderId]}
+                                            onChange={(e) => setSelected((prev) => ({ ...prev, [order.orderId]: e.target.checked }))}
+                                            aria-label={t('admin.orders.selectOne')}
+                                            className="h-4 w-4"
+                                        />
+                                    </TableCell>
+                                    <TableCell className="font-mono text-xs">
+                                        <Link href={`/admin/orders/${order.orderId}`} className="hover:underline">
+                                            {order.orderId}
+                                        </Link>
+                                    </TableCell>
+                                    <TableCell>
+                                        {order.username ? (
+                                            <div className="space-y-0.5">
+                                                <a
+                                                    href={getExternalProfileUrl(order.username, order.userId) || "#"}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="font-medium text-sm hover:underline text-primary"
+                                                >
+                                                    {getDisplayUsername(order.username, order.userId)}
+                                                </a>
+                                                {order.email && (
+                                                    <div className="text-xs text-muted-foreground">
+                                                        <CopyButton text={order.email} truncate maxLength={20} />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <span className="font-medium text-sm text-muted-foreground">Guest</span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell>
+                                        <span>{order.productName}</span>
+                                        {order.productId && productVariantLabels[order.productId] && (
+                                            <span className="ml-1.5 text-muted-foreground">· {productVariantLabels[order.productId]}</span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell>
+                                        <div className="space-y-1 text-sm leading-5">
+                                            <div className="font-medium">
+                                                {t('admin.orders.ldcPaid')} {paymentBreakdown.ldcAmount}
+                                            </div>
+                                            <div className="text-muted-foreground">
+                                                {t('admin.orders.pointsDeduction')} {paymentBreakdown.pointsAmount}
+                                            </div>
+                                            <div className="text-xs text-muted-foreground">
+                                                {t('admin.orders.orderTotal')} {paymentBreakdown.totalAmount}
+                                            </div>
                                         </div>
-                                    ) : (
-                                        <span className="font-medium text-sm text-muted-foreground">Guest</span>
-                                    )}
-                                </TableCell>
-                                <TableCell>
-                                    <span>{order.productName}</span>
-                                    {order.productId && productVariantLabels[order.productId] && (
-                                        <span className="ml-1.5 text-muted-foreground">· {productVariantLabels[order.productId]}</span>
-                                    )}
-                                </TableCell>
-                                <TableCell>{Number(order.amount)}</TableCell>
-                                <TableCell>
-                                    <Badge variant={getStatusBadgeVariant(order.status)} className="uppercase text-xs">
-                                        {getStatusText(order.status)}
-                                    </Badge>
-                                </TableCell>
-                                <TableCell>
-                                    {order.tradeNo ? (
-                                        <CopyButton text={order.tradeNo} truncate maxLength={12} />
-                                    ) : (
-                                        <span className="text-muted-foreground">-</span>
-                                    )}
-                                </TableCell>
-                                <TableCell>
-                                    {order.cardKey ? (
-                                        <CopyButton text={order.cardKey} truncate maxLength={15} />
-                                    ) : (
-                                        <span className="text-muted-foreground">-</span>
-                                    )}
-                                </TableCell>
-                                <TableCell className="text-muted-foreground text-xs">
-                                    <ClientDate value={order.createdAt} format="dateTime" />
-                                </TableCell>
-                                <TableCell className="text-right">
-                                    <div className="flex justify-end gap-2">
-                                        <AdminOrderActions order={order} />
-                                        <RefundButton order={order} />
-                                    </div>
-                                </TableCell>
-                            </TableRow>
-                        ))}
+                                    </TableCell>
+                                    <TableCell>
+                                        <Badge variant={getStatusBadgeVariant(order.status)} className="uppercase text-xs">
+                                            {getStatusText(order.status)}
+                                        </Badge>
+                                    </TableCell>
+                                    <TableCell>
+                                        {order.tradeNo ? (
+                                            <CopyButton text={order.tradeNo} truncate maxLength={12} />
+                                        ) : (
+                                            <span className="text-muted-foreground">-</span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell>
+                                        {order.cardKey ? (
+                                            <CopyButton text={order.cardKey} truncate maxLength={15} />
+                                        ) : (
+                                            <span className="text-muted-foreground">-</span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell className="text-muted-foreground text-xs">
+                                        <ClientDate value={order.createdAt} format="dateTime" />
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        <div className="flex justify-end gap-2">
+                                            <AdminOrderActions order={order} />
+                                            <RefundButton order={order} />
+                                        </div>
+                                    </TableCell>
+                                </TableRow>
+                            )
+                        })}
                     </TableBody>
                 </Table>
             </div>

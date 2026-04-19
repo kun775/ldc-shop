@@ -112,6 +112,7 @@ export default async function AdminOrdersPage(props: {
                 email: o.email,
                 productName: o.productName,
                 amount: o.amount,
+                pointsUsed: Number(o.pointsUsed || 0),
                 status: o.status,
                 cardKey: o.cardKey,
                 tradeNo: o.tradeNo,
