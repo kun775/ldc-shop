@@ -18,11 +18,18 @@ import { checkForUpdatesClient, type ClientUpdateCheckResult } from "@/lib/updat
 import { toast } from "sonner"
 import { normalizeCurrencyUnit } from "@/lib/currency-unit"
 
+interface StatPeriod {
+    count: number
+    revenue: number
+    pointsProduced: number
+    pointsConsumed: number
+}
+
 interface Stats {
-    today: { count: number; revenue: number }
-    week: { count: number; revenue: number }
-    month: { count: number; revenue: number }
-    total: { count: number; revenue: number }
+    today: StatPeriod
+    week: StatPeriod
+    month: StatPeriod
+    total: StatPeriod
 }
 
 interface AdminSettingsContentProps {
@@ -71,6 +78,12 @@ export function AdminSettingsContent({ stats, shopName, shopDescription, shopLog
     const { t } = useI18n()
     const router = useRouter()
     const shopLogoFileInputRef = useRef<HTMLInputElement | null>(null)
+    const statCards = [
+        { key: 'today', title: t('admin.stats.today'), icon: ShoppingCart, value: stats.today },
+        { key: 'week', title: t('admin.stats.week'), icon: TrendingUp, value: stats.week },
+        { key: 'month', title: t('admin.stats.month'), icon: CreditCard, value: stats.month },
+        { key: 'total', title: t('admin.stats.total'), icon: Package, value: stats.total },
+    ] as const
 
     // State
     const [shopNameValue, setShopNameValue] = useState(shopName || '')
@@ -387,46 +400,22 @@ export function AdminSettingsContent({ stats, shopName, shopDescription, shopLog
 
             {/* Dashboard Stats */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">{t('admin.stats.today')}</CardTitle>
-                        <ShoppingCart className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{stats.today.count}</div>
-                        <p className="text-xs text-muted-foreground">{stats.today.revenue.toFixed(0)} {t('common.credits')}</p>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">{t('admin.stats.week')}</CardTitle>
-                        <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{stats.week.count}</div>
-                        <p className="text-xs text-muted-foreground">{stats.week.revenue.toFixed(0)} {t('common.credits')}</p>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">{t('admin.stats.month')}</CardTitle>
-                        <CreditCard className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{stats.month.count}</div>
-                        <p className="text-xs text-muted-foreground">{stats.month.revenue.toFixed(0)} {t('common.credits')}</p>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">{t('admin.stats.total')}</CardTitle>
-                        <Package className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{stats.total.count}</div>
-                        <p className="text-xs text-muted-foreground">{stats.total.revenue.toFixed(0)} {t('common.credits')}</p>
-                    </CardContent>
-                </Card>
+                {statCards.map(({ key, title, icon: Icon, value }) => (
+                    <Card key={key}>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                            <CardTitle className="text-sm font-medium">{title}</CardTitle>
+                            <Icon className="h-4 w-4 text-muted-foreground" />
+                        </CardHeader>
+                        <CardContent className="space-y-2">
+                            <div className="text-2xl font-bold">{value.count}</div>
+                            <div className="space-y-1 text-xs text-muted-foreground">
+                                <p>{t('admin.stats.ldcRevenue')}: {value.revenue.toFixed(0)} {t('common.credits')}</p>
+                                <p>{t('admin.stats.pointsProduced')}: {value.pointsProduced}</p>
+                                <p>{t('admin.stats.pointsConsumed')}: {value.pointsConsumed}</p>
+                            </div>
+                        </CardContent>
+                    </Card>
+                ))}
                 <Link href="/admin/users" className="block">
                     <Card className="hover:bg-accent/50 transition-colors h-full">
                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

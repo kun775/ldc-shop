@@ -512,6 +512,9 @@
             "month": "This Month",
             "total": "Total",
             "visitors": "Customers",
+            "ldcRevenue": "LDC Revenue",
+            "pointsProduced": "Points Produced",
+            "pointsConsumed": "Points Consumed",
             "lowStock": "Low stock",
             "lowStockHint": "Threshold ≤ {{threshold}}",
             "recentOrders": "Recent Orders"

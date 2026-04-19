@@ -1,7 +1,7 @@
 import { db } from "./index";
-import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes } from "./schema";
+import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger } from "./schema";
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants";
-import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db";
+import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema } from "@/lib/points/ledger-db";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -1230,7 +1230,7 @@ export async function getDashboardStats(nowMs: number) {
         const todayStartMs = todayStart.getTime();
         const weekStartMs = weekStart.getTime();
         const monthStartMs = monthStart.getTime();
-        const stats = await db.select({
+        const orderStats = await db.select({
             totalCount: sql<number>`count(*)`,
             totalRevenue: sql<number>`COALESCE(sum(CAST(${orders.amount} AS REAL)), 0)`,
             todayCount: sql<number>`COALESCE(sum(CASE WHEN ${orders.paidAt} >= ${todayStartMs} THEN 1 ELSE 0 END), 0)`,
@@ -1243,7 +1243,7 @@ export async function getDashboardStats(nowMs: number) {
             .from(orders)
             .where(eq(orders.status, 'delivered'));
 
-        const row = stats[0] || {
+        const orderRow = orderStats[0] || {
             totalCount: 0,
             totalRevenue: 0,
             todayCount: 0,
@@ -1254,11 +1254,62 @@ export async function getDashboardStats(nowMs: number) {
             monthRevenue: 0,
         };
 
+        const emptyPointRow = {
+            totalProduced: 0,
+            totalConsumed: 0,
+            todayProduced: 0,
+            todayConsumed: 0,
+            weekProduced: 0,
+            weekConsumed: 0,
+            monthProduced: 0,
+            monthConsumed: 0,
+        };
+        let pointRow = emptyPointRow;
+
+        try {
+            await ensureUserPointLedgerSchema();
+            const pointStats = await db.select({
+                totalProduced: sql<number>`COALESCE(SUM(CASE WHEN ${userPointLedger.status} = 'completed' AND ${userPointLedger.eventType} = 'checkin_reward' THEN ${userPointLedger.delta} ELSE 0 END), 0)`,
+                totalConsumed: sql<number>`ABS(COALESCE(SUM(CASE WHEN ${userPointLedger.status} = 'completed' AND ${userPointLedger.eventType} = 'order_deduction' THEN ${userPointLedger.delta} ELSE 0 END), 0))`,
+                todayProduced: sql<number>`COALESCE(SUM(CASE WHEN ${userPointLedger.status} = 'completed' AND ${userPointLedger.eventType} = 'checkin_reward' AND ${normalizeTimestampMs(userPointLedger.createdAt)} >= ${todayStartMs} THEN ${userPointLedger.delta} ELSE 0 END), 0)`,
+                todayConsumed: sql<number>`ABS(COALESCE(SUM(CASE WHEN ${userPointLedger.status} = 'completed' AND ${userPointLedger.eventType} = 'order_deduction' AND ${normalizeTimestampMs(userPointLedger.createdAt)} >= ${todayStartMs} THEN ${userPointLedger.delta} ELSE 0 END), 0))`,
+                weekProduced: sql<number>`COALESCE(SUM(CASE WHEN ${userPointLedger.status} = 'completed' AND ${userPointLedger.eventType} = 'checkin_reward' AND ${normalizeTimestampMs(userPointLedger.createdAt)} >= ${weekStartMs} THEN ${userPointLedger.delta} ELSE 0 END), 0)`,
+                weekConsumed: sql<number>`ABS(COALESCE(SUM(CASE WHEN ${userPointLedger.status} = 'completed' AND ${userPointLedger.eventType} = 'order_deduction' AND ${normalizeTimestampMs(userPointLedger.createdAt)} >= ${weekStartMs} THEN ${userPointLedger.delta} ELSE 0 END), 0))`,
+                monthProduced: sql<number>`COALESCE(SUM(CASE WHEN ${userPointLedger.status} = 'completed' AND ${userPointLedger.eventType} = 'checkin_reward' AND ${normalizeTimestampMs(userPointLedger.createdAt)} >= ${monthStartMs} THEN ${userPointLedger.delta} ELSE 0 END), 0)`,
+                monthConsumed: sql<number>`ABS(COALESCE(SUM(CASE WHEN ${userPointLedger.status} = 'completed' AND ${userPointLedger.eventType} = 'order_deduction' AND ${normalizeTimestampMs(userPointLedger.createdAt)} >= ${monthStartMs} THEN ${userPointLedger.delta} ELSE 0 END), 0))`,
+            })
+                .from(userPointLedger);
+
+            pointRow = pointStats[0] || emptyPointRow;
+        } catch (error: any) {
+            if (!isMissingTableOrColumn(error)) throw error;
+        }
+
         return {
-            today: { count: row.todayCount || 0, revenue: row.todayRevenue || 0 },
-            week: { count: row.weekCount || 0, revenue: row.weekRevenue || 0 },
-            month: { count: row.monthCount || 0, revenue: row.monthRevenue || 0 },
-            total: { count: row.totalCount || 0, revenue: row.totalRevenue || 0 }
+            today: {
+                count: orderRow.todayCount || 0,
+                revenue: orderRow.todayRevenue || 0,
+                pointsProduced: pointRow.todayProduced || 0,
+                pointsConsumed: pointRow.todayConsumed || 0,
+            },
+            week: {
+                count: orderRow.weekCount || 0,
+                revenue: orderRow.weekRevenue || 0,
+                pointsProduced: pointRow.weekProduced || 0,
+                pointsConsumed: pointRow.weekConsumed || 0,
+            },
+            month: {
+                count: orderRow.monthCount || 0,
+                revenue: orderRow.monthRevenue || 0,
+                pointsProduced: pointRow.monthProduced || 0,
+                pointsConsumed: pointRow.monthConsumed || 0,
+            },
+            total: {
+                count: orderRow.totalCount || 0,
+                revenue: orderRow.totalRevenue || 0,
+                pointsProduced: pointRow.totalProduced || 0,
+                pointsConsumed: pointRow.totalConsumed || 0,
+            }
         };
     })
 }

@@ -512,6 +512,9 @@
             "month": "本月",
             "total": "总计",
             "visitors": "顾客数",
+            "ldcRevenue": "LDC 收入",
+            "pointsProduced": "积分产出",
+            "pointsConsumed": "积分消耗",
             "lowStock": "库存预警",
             "lowStockHint": "阈值 ≤ {{threshold}}",
             "recentOrders": "最近订单"
