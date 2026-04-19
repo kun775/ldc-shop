@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import ReactMarkdown from "react-markdown"
 import { cn } from "@/lib/utils"
+import { getProductPointDiscountBadge } from "@/lib/points/product-point-discount"
 
 type Category = { name: string; icon: string | null; sortOrder: number }
 type Product = {
@@ -18,6 +19,8 @@ type Product = {
   description: string | null
   price: string
   compareAtPrice: string | null
+  pointDiscountEnabled?: boolean | null
+  pointDiscountPercent?: number | null
   image: string | null
   category: string | null
   isHot: boolean
@@ -128,8 +131,13 @@ export function SearchContent(props: {
         </div>
       ) : (
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {props.products.map((product) => (
-            <Card key={product.id} className="group overflow-hidden hover:border-primary/30 transition-all duration-300 tech-card flex flex-col">
+          {props.products.map((product) => {
+            const pointDiscountBadge = getProductPointDiscountBadge({
+              pointDiscountEnabled: product.pointDiscountEnabled,
+              pointDiscountPercent: product.pointDiscountPercent,
+            })
+
+            return <Card key={product.id} className="group overflow-hidden hover:border-primary/30 transition-all duration-300 tech-card flex flex-col">
               <div className="relative overflow-hidden">
                 {product.isHot && (
                   <Badge className="absolute top-3 left-3 bg-primary/15 text-primary border border-primary/30">
@@ -162,6 +170,11 @@ export function SearchContent(props: {
                     {product.compareAtPrice && Number(product.compareAtPrice) > Number(product.price) && (
                       <span className="text-xs text-muted-foreground line-through">{Number(product.compareAtPrice)}</span>
                     )}
+                    {pointDiscountBadge && (
+                      <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                        {t('common.pointDiscountBadge', { percent: pointDiscountBadge.percent })}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-2 min-w-0">
@@ -184,7 +197,7 @@ export function SearchContent(props: {
                 </div>
               </CardFooter>
             </Card>
-          ))}
+          })}
         </div>
       )}
 

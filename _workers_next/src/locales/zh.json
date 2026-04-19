@@ -37,6 +37,7 @@
         "unlimited": "无限",
         "stock": "库存",
         "sold": "已售",
+        "pointDiscountBadge": "积分抵扣{{percent}}%",
         "buy": "购买",
         "buyNow": "立即购买",
         "payNow": "立即支付",

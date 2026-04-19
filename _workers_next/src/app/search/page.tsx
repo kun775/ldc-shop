@@ -73,6 +73,8 @@ export default async function SearchPage(props: {
           description: p.description,
           price: p.price,
           compareAtPrice: p.compareAtPrice ?? null,
+          pointDiscountEnabled: Boolean(p.pointDiscountEnabled),
+          pointDiscountPercent: Number(p.pointDiscountPercent || 0),
           image: p.image,
           category: p.category,
           isHot: isGroup ? (p.groupHot || false) : (p.isHot ?? false),

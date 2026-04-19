@@ -27,6 +27,7 @@ import { INFINITE_STOCK } from "@/lib/constants"
 import { getBuyPageMeta } from "@/actions/buy"
 import type { ProductVariantRow } from "@/lib/db/queries"
 import { buildProductImageGallery } from "@/lib/product-images"
+import { getProductPointDiscountBadge } from "@/lib/points/product-point-discount"
 
 interface Product {
     id: string
@@ -283,6 +284,10 @@ export function BuyContent({
         : maxStock
     const priceValue = Number(displayProduct.price)
     const compareAtPriceValue = displayProduct.compareAtPrice ? Number(displayProduct.compareAtPrice) : null
+    const pointDiscountBadge = getProductPointDiscountBadge({
+        pointDiscountEnabled: displayProduct.pointDiscountEnabled,
+        pointDiscountPercent: displayProduct.pointDiscountPercent,
+    })
     const stockLabel = hasUnlimitedStock
         ? `${t('common.stock')}: ${t('common.unlimited')}`
         : (displayStock > 0 ? `${t('common.stock')}: ${displayStock}` : t('common.outOfStock'))
@@ -548,6 +553,11 @@ export function BuyContent({
                                                         -{Math.round((1 - priceValue / compareAtPriceValue) * 100)}%
                                                     </span>
                                                 </>
+                                            )}
+                                            {pointDiscountBadge && (
+                                                <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                                                    {t('common.pointDiscountBadge', { percent: pointDiscountBadge.percent })}
+                                                </span>
                                             )}
                                         </div>
                                     </div>

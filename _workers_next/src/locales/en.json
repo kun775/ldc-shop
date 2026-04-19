@@ -37,6 +37,7 @@
         "unlimited": "Unlimited",
         "stock": "Stock",
         "sold": "Sold",
+        "pointDiscountBadge": "Points {{percent}}% Off",
         "buy": "Buy",
         "buyNow": "Buy Now",
         "payNow": "Pay Now",

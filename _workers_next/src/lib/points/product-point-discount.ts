@@ -10,6 +10,10 @@ export interface PointDiscountPreview extends ProductPointDiscountConfig {
   finalAmount: number
 }
 
+export interface ProductPointDiscountBadge {
+  percent: number
+}
+
 function sanitizeRuntimeProductPointDiscountConfig(input: {
   pointDiscountEnabled: boolean
   pointDiscountPercent: number | string | null | undefined
@@ -128,6 +132,35 @@ export function calculatePointDiscountPreview(input: {
     maxDiscountPoints,
     pointsToUse,
     finalAmount,
+  }
+}
+
+// getProductPointDiscountBadge 提取商品展示层的积分抵扣徽标配置
+//
+// 参数:
+//   - input.pointDiscountEnabled: 商品是否开启积分抵扣
+//   - input.pointDiscountPercent: 商品配置的抵扣百分比
+//
+// 元数据:
+//   - 作者: Codex
+//   - 创建时间: 2026-04-19
+//   - 更新时间: 2026-04-19
+//   - 更新内容: 新增前台展示层使用的积分抵扣徽标判断逻辑。
+export function getProductPointDiscountBadge(input: {
+  pointDiscountEnabled: boolean | null | undefined
+  pointDiscountPercent: number | string | null | undefined
+}): ProductPointDiscountBadge | null {
+  const config = sanitizeRuntimeProductPointDiscountConfig({
+    pointDiscountEnabled: Boolean(input.pointDiscountEnabled),
+    pointDiscountPercent: input.pointDiscountPercent,
+  })
+
+  if (!config.pointDiscountEnabled || config.pointDiscountPercent <= 0) {
+    return null
+  }
+
+  return {
+    percent: config.pointDiscountPercent,
   }
 }
 

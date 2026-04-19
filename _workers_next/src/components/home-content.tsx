@@ -17,6 +17,7 @@ import { NavigationPill } from "@/components/navigation-pill"
 import { CheckInButton } from "@/components/checkin-button"
 import { useI18n } from "@/lib/i18n/context"
 import { INFINITE_STOCK } from "@/lib/constants"
+import { getProductPointDiscountBadge } from "@/lib/points/product-point-discount"
 
 interface Product {
     id: string
@@ -25,6 +26,8 @@ interface Product {
     descriptionPlain?: string | null
     price: string
     compareAtPrice?: string | null
+    pointDiscountEnabled?: boolean | null
+    pointDiscountPercent?: number | null
     image: string | null
     category: string | null
     stockCount: number
@@ -311,8 +314,13 @@ export function HomeContent({
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                        {pageItems.map((product, index) => (
-                            <Link
+                        {pageItems.map((product, index) => {
+                            const pointDiscountBadge = getProductPointDiscountBadge({
+                                pointDiscountEnabled: product.pointDiscountEnabled,
+                                pointDiscountPercent: product.pointDiscountPercent,
+                            })
+
+                            return <Link
                                 key={product.id}
                                 href={`/buy/${product.id}`}
                                 prefetch={false}
@@ -440,6 +448,11 @@ export function HomeContent({
                                                             )}
                                                         </>
                                                     )}
+                                                    {pointDiscountBadge && (
+                                                        <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                                                            {t("common.pointDiscountBadge", { percent: pointDiscountBadge.percent })}
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                                                     <span>{t("common.stock")}: {product.stockCount >= INFINITE_STOCK ? "∞" : product.stockCount}</span>
@@ -454,7 +467,7 @@ export function HomeContent({
                                     </div>
                                 </CardContent>
                             </Link>
-                        ))}
+                        })}
                     </div>
                 )}
             </section>

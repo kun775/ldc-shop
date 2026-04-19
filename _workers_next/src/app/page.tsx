@@ -88,6 +88,8 @@ export default async function Home({
 
     return {
       ...p,
+      pointDiscountEnabled: Boolean(p.pointDiscountEnabled),
+      pointDiscountPercent: Number(p.pointDiscountPercent || 0),
       stockCount: stockTotal,
       soldCount: isGroup ? (p.totalSold || 0) : (p.sold || 0),
       isHot: isGroup ? (p.groupHot || false) : p.isHot,
