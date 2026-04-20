@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
-import { type ChangeEvent, useEffect, useRef, useState } from "react"
+import { Loader2 } from "lucide-react"
+import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { useRouter } from "next/navigation"
 import { useI18n } from "@/lib/i18n/context"
@@ -117,8 +118,12 @@ export default function ProductForm({ product, categories = [] }: { product?: an
         }
     }, [product?.id])
 
-    async function handleSubmit(formData: FormData) {
+    async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+        event.preventDefault()
         if (submitLock.current) return
+
+        const formData = new FormData(event.currentTarget)
+
         submitLock.current = true
         setLoading(true)
         try {
@@ -239,8 +244,21 @@ export default function ProductForm({ product, categories = [] }: { product?: an
             <CardHeader>
                 <CardTitle>{product ? t('admin.productForm.editTitle') : t('admin.productForm.addTitle')}</CardTitle>
             </CardHeader>
-            <CardContent>
-                <form key={formSeed} action={handleSubmit} className="space-y-5">
+            <CardContent className="relative overflow-hidden">
+                {loading && (
+                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/70 backdrop-blur-sm">
+                        <div
+                            role="status"
+                            aria-live="polite"
+                            className="flex items-center gap-2 rounded-lg border border-border/60 bg-background/95 px-4 py-3 text-sm font-medium shadow-lg"
+                        >
+                            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                            <span>{t('admin.productForm.saving')}</span>
+                        </div>
+                    </div>
+                )}
+                <form key={formSeed} onSubmit={handleSubmit} className="space-y-5" aria-busy={loading}>
+                    <fieldset disabled={loading} className="space-y-5">
                     {currentProduct && <input type="hidden" name="id" value={currentProduct.id} />}
 
                     <div className="grid gap-2">
@@ -519,7 +537,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                                 variant="outline"
                                 className="w-fit"
                                 onClick={() => productImageFileInputRef.current?.click()}
-                                disabled={processingProductImageFile}
+                                disabled={loading || processingProductImageFile}
                             >
                                 {processingProductImageFile ? t('common.processing') : t('admin.productForm.imageUpload')}
                             </Button>
@@ -548,7 +566,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                                 type="button"
                                 variant="outline"
                                 onClick={handleAddGalleryImage}
-                                disabled={!galleryImageInputValue.trim() || !hasRoomForMoreGalleryImages}
+                                disabled={loading || !galleryImageInputValue.trim() || !hasRoomForMoreGalleryImages}
                             >
                                 {t('admin.productForm.galleryAdd')}
                             </Button>
@@ -570,7 +588,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                                 variant="outline"
                                 className="w-fit"
                                 onClick={() => productGalleryFileInputRef.current?.click()}
-                                disabled={processingProductGalleryFiles || !hasRoomForMoreGalleryImages}
+                                disabled={loading || processingProductGalleryFiles || !hasRoomForMoreGalleryImages}
                             >
                                 {processingProductGalleryFiles ? t('common.processing') : t('admin.productForm.galleryUpload')}
                             </Button>
@@ -611,9 +629,21 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                     </div>
 
                     <div className="pt-4 flex justify-end gap-2">
-                        <Button variant="outline" type="button" onClick={() => router.back()}>{t('common.cancel')}</Button>
-                        <Button type="submit" disabled={loading}>{loading ? t('admin.productForm.saving') : t('admin.productForm.saveButton')}</Button>
+                        <Button variant="outline" type="button" onClick={() => router.back()} disabled={loading}>
+                            {t('common.cancel')}
+                        </Button>
+                        <Button type="submit" disabled={loading}>
+                            {loading ? (
+                                <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    {t('admin.productForm.saving')}
+                                </>
+                            ) : (
+                                t('admin.productForm.saveButton')
+                            )}
+                        </Button>
                     </div>
+                    </fieldset>
                 </form>
             </CardContent>
         </Card>
