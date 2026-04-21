@@ -8,6 +8,7 @@ import {
     type PointLedgerRepository,
 } from "./ledger-service"
 import { buildLegacyPointLedgerEntries } from "./legacy-reconciliation"
+import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once"
 
 type UserIdentity = {
     userId: string
@@ -42,8 +43,46 @@ type ManualPointAdjustmentInput = {
 
 let pointLedgerSchemaReady = false
 let pointLedgerLoginUsersSchemaReady = false
+const pointLedgerSchemaState = createAsyncOnceState()
+const pointLedgerLoginUsersState = createAsyncOnceState()
+const persistedPointLedgerSchemaVersionState = createAsyncOnceState()
+const POINT_LEDGER_SCHEMA_VERSION = 1
 
 const TIMESTAMP_MS_THRESHOLD = 1_000_000_000_000
+let persistedPointLedgerSchemaVersion: number | null = null
+
+function primePointLedgerSchemaVersion(version: number | null) {
+    persistedPointLedgerSchemaVersion = version
+    persistedPointLedgerSchemaVersionState.ready = true
+    persistedPointLedgerSchemaVersionState.pending = null
+}
+
+function markPointLedgerSchemaReady(version: number = POINT_LEDGER_SCHEMA_VERSION) {
+    primePointLedgerSchemaVersion(version)
+    pointLedgerSchemaReady = true
+    pointLedgerLoginUsersSchemaReady = true
+}
+
+async function getPointLedgerSchemaVersion() {
+    if (persistedPointLedgerSchemaVersionState.ready) {
+        return persistedPointLedgerSchemaVersion
+    }
+
+    await ensureOnce(persistedPointLedgerSchemaVersionState, async () => {
+        persistedPointLedgerSchemaVersion = parseSchemaVersion(await getSettingValue("point_ledger_schema_version"))
+    })
+
+    return persistedPointLedgerSchemaVersion
+}
+
+async function hasCurrentPointLedgerSchema() {
+    const version = await getPointLedgerSchemaVersion()
+    if (version !== null && isSchemaVersionSatisfied(version, POINT_LEDGER_SCHEMA_VERSION)) {
+        markPointLedgerSchemaReady(version)
+        return true
+    }
+    return false
+}
 
 function normalizeTimestampMs(column: any) {
     return sql<number>`CASE WHEN ${column} < ${TIMESTAMP_MS_THRESHOLD} THEN ${column} * 1000 ELSE ${column} END`
@@ -86,6 +125,9 @@ async function setSettingValue(key: string, value: string) {
             target: settings.key,
             set: { value, updatedAt: new Date() },
         })
+    if (key === "point_ledger_schema_version") {
+        primePointLedgerSchemaVersion(parseSchemaVersion(value))
+    }
 }
 
 async function getProductVariantLabels(productIds: string[]) {
@@ -108,32 +150,35 @@ async function getProductVariantLabels(productIds: string[]) {
 
 async function ensurePointLedgerLoginUsersSchema() {
     if (pointLedgerLoginUsersSchemaReady) return
+    if (await hasCurrentPointLedgerSchema()) return
 
-    await db.run(sql`
-        CREATE TABLE IF NOT EXISTS login_users (
-            user_id TEXT PRIMARY KEY,
-            username TEXT,
-            email TEXT,
-            points INTEGER DEFAULT 0 NOT NULL,
-            is_blocked INTEGER DEFAULT 0,
-            desktop_notifications_enabled INTEGER DEFAULT 0,
-            created_at INTEGER DEFAULT (unixepoch() * 1000),
-            last_login_at INTEGER DEFAULT (unixepoch() * 1000),
-            last_checkin_at INTEGER,
-            consecutive_days INTEGER DEFAULT 0
-        )
-    `)
+    await ensureOnce(pointLedgerLoginUsersState, async () => {
+        await db.run(sql`
+            CREATE TABLE IF NOT EXISTS login_users (
+                user_id TEXT PRIMARY KEY,
+                username TEXT,
+                email TEXT,
+                points INTEGER DEFAULT 0 NOT NULL,
+                is_blocked INTEGER DEFAULT 0,
+                desktop_notifications_enabled INTEGER DEFAULT 0,
+                created_at INTEGER DEFAULT (unixepoch() * 1000),
+                last_login_at INTEGER DEFAULT (unixepoch() * 1000),
+                last_checkin_at INTEGER,
+                consecutive_days INTEGER DEFAULT 0
+            )
+        `)
 
-    await safeAddColumn('login_users', 'email', 'TEXT')
-    await safeAddColumn('login_users', 'points', 'INTEGER DEFAULT 0 NOT NULL')
-    await safeAddColumn('login_users', 'is_blocked', 'INTEGER DEFAULT 0')
-    await safeAddColumn('login_users', 'desktop_notifications_enabled', 'INTEGER DEFAULT 0')
-    await safeAddColumn('login_users', 'created_at', 'INTEGER DEFAULT (unixepoch() * 1000)')
-    await safeAddColumn('login_users', 'last_login_at', 'INTEGER DEFAULT (unixepoch() * 1000)')
-    await safeAddColumn('login_users', 'last_checkin_at', 'INTEGER')
-    await safeAddColumn('login_users', 'consecutive_days', 'INTEGER DEFAULT 0')
+        await safeAddColumn('login_users', 'email', 'TEXT')
+        await safeAddColumn('login_users', 'points', 'INTEGER DEFAULT 0 NOT NULL')
+        await safeAddColumn('login_users', 'is_blocked', 'INTEGER DEFAULT 0')
+        await safeAddColumn('login_users', 'desktop_notifications_enabled', 'INTEGER DEFAULT 0')
+        await safeAddColumn('login_users', 'created_at', 'INTEGER DEFAULT (unixepoch() * 1000)')
+        await safeAddColumn('login_users', 'last_login_at', 'INTEGER DEFAULT (unixepoch() * 1000)')
+        await safeAddColumn('login_users', 'last_checkin_at', 'INTEGER')
+        await safeAddColumn('login_users', 'consecutive_days', 'INTEGER DEFAULT 0')
 
-    pointLedgerLoginUsersSchemaReady = true
+        pointLedgerLoginUsersSchemaReady = true
+    })
 }
 
 /**
@@ -150,37 +195,43 @@ async function ensurePointLedgerLoginUsersSchema() {
  */
 export async function ensureUserPointLedgerSchema() {
     if (pointLedgerSchemaReady) return
+    await ensureOnce(pointLedgerSchemaState, async () => {
+        if (await hasCurrentPointLedgerSchema()) {
+            return
+        }
 
-    await ensurePointLedgerLoginUsersSchema()
+        await ensurePointLedgerLoginUsersSchema()
 
-    await db.run(sql`
-        CREATE TABLE IF NOT EXISTS user_point_ledger (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL REFERENCES login_users(user_id) ON DELETE CASCADE,
-            event_type TEXT NOT NULL,
-            delta INTEGER NOT NULL,
-            balance_after INTEGER,
-            business_key TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            source_id TEXT,
-            reason TEXT NOT NULL,
-            operator_user_id TEXT,
-            operator_username TEXT,
-            metadata TEXT,
-            status TEXT NOT NULL DEFAULT 'completed',
-            created_at INTEGER DEFAULT (unixepoch() * 1000)
-        )
-    `)
-    await db.run(sql`
-        CREATE UNIQUE INDEX IF NOT EXISTS user_point_ledger_business_key_uq
-        ON user_point_ledger (business_key)
-    `)
-    await db.run(sql`
-        CREATE INDEX IF NOT EXISTS user_point_ledger_user_created_idx
-        ON user_point_ledger (user_id, created_at DESC, id DESC)
-    `)
+        await db.run(sql`
+            CREATE TABLE IF NOT EXISTS user_point_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES login_users(user_id) ON DELETE CASCADE,
+                event_type TEXT NOT NULL,
+                delta INTEGER NOT NULL,
+                balance_after INTEGER,
+                business_key TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_id TEXT,
+                reason TEXT NOT NULL,
+                operator_user_id TEXT,
+                operator_username TEXT,
+                metadata TEXT,
+                status TEXT NOT NULL DEFAULT 'completed',
+                created_at INTEGER DEFAULT (unixepoch() * 1000)
+            )
+        `)
+        await db.run(sql`
+            CREATE UNIQUE INDEX IF NOT EXISTS user_point_ledger_business_key_uq
+            ON user_point_ledger (business_key)
+        `)
+        await db.run(sql`
+            CREATE INDEX IF NOT EXISTS user_point_ledger_user_created_idx
+            ON user_point_ledger (user_id, created_at DESC, id DESC)
+        `)
 
-    pointLedgerSchemaReady = true
+        await setSettingValue("point_ledger_schema_version", String(POINT_LEDGER_SCHEMA_VERSION))
+        markPointLedgerSchemaReady()
+    })
 }
 
 /**
@@ -253,9 +304,12 @@ function mapLedgerRow(row: any): PointLedgerRecord {
  *   - 更新内容: 初始化积分账本数据库仓储实现。
  */
 function createPointLedgerRepository(identity: UserIdentity): PointLedgerRepository {
+    const readyState = createAsyncOnceState()
     const ensureReady = async () => {
-        await ensureUserPointLedgerSchema()
-        await ensurePointLedgerUserRecord(identity)
+        await ensureOnce(readyState, async () => {
+            await ensureUserPointLedgerSchema()
+            await ensurePointLedgerUserRecord(identity)
+        })
     }
 
     return {

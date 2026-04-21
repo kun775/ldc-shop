@@ -2,6 +2,7 @@ import { db } from "./index";
 import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger } from "./schema";
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema } from "@/lib/points/ledger-db";
+import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -11,6 +12,8 @@ let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
 const CURRENT_SCHEMA_VERSION = 21;
+const dbInitializationState = createAsyncOnceState();
+const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
 const columnEnsureState: Record<ColumnEnsureKey, { ready: boolean; pending: Promise<void> | null }> = {
     products: { ready: false, pending: null },
@@ -19,10 +22,57 @@ const columnEnsureState: Record<ColumnEnsureKey, { ready: boolean; pending: Prom
     loginUsers: { ready: false, pending: null },
 };
 const reviewRepliesEnsureState = { ready: false, pending: null as Promise<void> | null };
+let persistedSchemaVersion: number | null = null;
+
+function primePersistedSchemaVersion(version: number | null) {
+    persistedSchemaVersion = version;
+    persistedSchemaVersionState.ready = true;
+    persistedSchemaVersionState.pending = null;
+}
+
+function markCurrentSchemaReady(version: number = CURRENT_SCHEMA_VERSION) {
+    primePersistedSchemaVersion(version);
+    dbInitialized = true;
+    loginUsersSchemaReady = true;
+    wishlistTablesReady = true;
+    reviewRepliesEnsureState.ready = true;
+    reviewRepliesEnsureState.pending = null;
+
+    for (const key of Object.keys(columnEnsureState) as ColumnEnsureKey[]) {
+        columnEnsureState[key].ready = true;
+        columnEnsureState[key].pending = null;
+    }
+}
+
+async function getPersistedSchemaVersion(): Promise<number | null> {
+    if (persistedSchemaVersionState.ready) {
+        return persistedSchemaVersion;
+    }
+
+    await ensureOnce(persistedSchemaVersionState, async () => {
+        try {
+            persistedSchemaVersion = parseSchemaVersion(await getSetting('schema_version'));
+        } catch {
+            persistedSchemaVersion = null;
+        }
+    });
+
+    return persistedSchemaVersion;
+}
+
+async function hasCurrentSchemaVersion() {
+    const version = await getPersistedSchemaVersion();
+    if (version !== null && isSchemaVersionSatisfied(version, CURRENT_SCHEMA_VERSION)) {
+        markCurrentSchemaReady(version);
+        return true;
+    }
+    return false;
+}
 
 async function ensureColumnsOnce(key: ColumnEnsureKey, task: () => Promise<void>) {
     const state = columnEnsureState[key];
     if (state.ready) return;
+    if (await hasCurrentSchemaVersion()) return;
     if (state.pending) {
         await state.pending;
         return;
@@ -119,6 +169,7 @@ async function ensureIndexes() {
 
 async function ensureReviewRepliesTable() {
     if (reviewRepliesEnsureState.ready) return;
+    if (await hasCurrentSchemaVersion()) return;
     if (reviewRepliesEnsureState.pending) {
         await reviewRepliesEnsureState.pending;
         return;
@@ -154,58 +205,44 @@ async function ensureReviewRepliesTable() {
 async function ensureDatabaseInitialized() {
     if (dbInitialized) return;
 
-    try {
-        // OPTIMIZATION: Check schema version first to avoid heavy DDL checks
-        try {
-            const version = await getSetting('schema_version');
-            const parsedVersion = Number.parseInt(String(version || '').trim(), 10);
-            if (
-                version === String(CURRENT_SCHEMA_VERSION) ||
-                (Number.isFinite(parsedVersion) && parsedVersion >= CURRENT_SCHEMA_VERSION)
-            ) {
-                dbInitialized = true;
-                return;
-            }
-        } catch (e) {
-            // Settings table likely doesn't exist, proceed to full checks
+    await ensureOnce(dbInitializationState, async () => {
+        if (await hasCurrentSchemaVersion()) {
+            return;
         }
 
-        // Quick check if products table exists
-        await db.run(sql`SELECT 1 FROM products LIMIT 1`);
+        try {
+            // Quick check if products table exists
+            await db.run(sql`SELECT 1 FROM products LIMIT 1`);
 
-        // IMPORTANT: Even if table exists, ensure columns exist!
-        await ensureProductsColumns();
-        await ensureOrdersColumns();
-        await ensureCardsColumns();
-        await ensureCardKeyDuplicatesAllowed();
-        await ensureLoginUsersTable();
-        await ensureLoginUsersColumns(); // Add this call
-        loginUsersSchemaReady = true;
-        await ensureUserNotificationsTable();
-        await ensureAdminMessagesTable();
-        await ensureUserMessagesTable();
-        await ensureBroadcastTables();
-        await ensureWishlistTables();
-        await migrateTimestampColumnsToMs();
-        await migrateMalformedGitHubUserIds();
-        await migrateGitHubUsersDedupAndCanonicalize();
-        await ensureIndexes();
-        await backfillProductAggregates();
+            // IMPORTANT: Even if table exists, ensure columns exist!
+            await ensureProductsColumns();
+            await ensureOrdersColumns();
+            await ensureCardsColumns();
+            await ensureCardKeyDuplicatesAllowed();
+            await ensureLoginUsersTable();
+            await ensureLoginUsersColumns();
+            loginUsersSchemaReady = true;
+            await ensureUserNotificationsTable();
+            await ensureAdminMessagesTable();
+            await ensureUserMessagesTable();
+            await ensureBroadcastTables();
+            await ensureWishlistTables();
+            await migrateTimestampColumnsToMs();
+            await migrateMalformedGitHubUserIds();
+            await migrateGitHubUsersDedupAndCanonicalize();
+            await ensureIndexes();
+            await backfillProductAggregates();
 
-        // Update schema version
-        await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
+            await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
+            markCurrentSchemaReady();
+            return;
+        } catch {
+            // Table doesn't exist, initialize database
+        }
 
-        dbInitialized = true;
-        return;
-    } catch {
-        // Table doesn't exist, initialize database
-    }
-    // ...
+        console.log("First run detected, initializing database...");
 
-
-    console.log("First run detected, initializing database...");
-
-    await db.run(sql`
+        await db.run(sql`
         -- Products table
         CREATE TABLE IF NOT EXISTS products (
             id TEXT PRIMARY KEY,
@@ -412,23 +449,24 @@ async function ensureDatabaseInitialized() {
         CREATE UNIQUE INDEX IF NOT EXISTS wishlist_votes_item_user_uq ON wishlist_votes(item_id, user_id);
     `);
 
-    await migrateTimestampColumnsToMs();
-    await migrateMalformedGitHubUserIds();
-    await migrateGitHubUsersDedupAndCanonicalize();
-    await ensureIndexes();
-    await backfillProductAggregates();
+        await migrateTimestampColumnsToMs();
+        await migrateMalformedGitHubUserIds();
+        await migrateGitHubUsersDedupAndCanonicalize();
+        await ensureIndexes();
+        await backfillProductAggregates();
 
-    // Set initial schema version
-    try {
-        await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
-    } catch {
-        // If setSetting failed (e.g. settings table issue), try to ensure it exists and retry
-        await ensureSettingsTable();
-        await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
-    }
+        // Set initial schema version
+        try {
+            await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
+        } catch {
+            // If setSetting failed (e.g. settings table issue), try to ensure it exists and retry
+            await ensureSettingsTable();
+            await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
+        }
 
-    dbInitialized = true;
-    console.log("Database initialized successfully");
+        markCurrentSchemaReady();
+        console.log("Database initialized successfully");
+    });
 }
 
 async function ensureProductsColumns() {
@@ -479,6 +517,7 @@ async function ensureLoginUsersColumns() {
 
 export async function ensureLoginUsersSchema() {
     if (loginUsersSchemaReady) return;
+    if (await hasCurrentSchemaVersion()) return;
     await ensureLoginUsersTable();
     await ensureLoginUsersColumns();
     await safeAddColumn('login_users', 'email', 'TEXT');
@@ -1354,6 +1393,9 @@ export async function setSetting(key: string, value: string): Promise<void> {
             target: settings.key,
             set: { value, updatedAt: new Date() }
         });
+    if (key === 'schema_version') {
+        primePersistedSchemaVersion(parseSchemaVersion(value));
+    }
 }
 
 // Categories (best-effort; table created on demand)
