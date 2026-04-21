@@ -38,33 +38,29 @@ async function AdminLayoutContent({ children }: { children: React.ReactNode }) {
     const shouldPrompt = registryEnabled && registryPrompted !== "true" && registryOptIn !== "true"
 
     return (
-        <div className="flex min-h-screen flex-col">
+        <div className="min-h-screen bg-background md:h-screen">
             <UpdateNotification currentVersion={APP_VERSION} />
             <RegistryPrompt shouldPrompt={shouldPrompt} registryEnabled={registryEnabled} />
-            <div className="flex flex-1 flex-col md:flex-row">
-                <AdminSidebar username={user.username} />
-                <main className="flex-1 p-6 md:p-12 overflow-y-auto">
-                    {children}
-                </main>
-            </div>
+            <AdminSidebar username={user.username} />
+            <main className="px-4 py-6 md:ml-64 md:h-screen md:overflow-y-auto md:px-8 md:py-10">
+                {children}
+            </main>
         </div>
     )
 }
 
 function AdminLayoutFallback() {
     return (
-        <div className="flex min-h-screen flex-col">
-            <div className="h-16 border-b border-border/40 bg-background/70" />
-            <div className="flex flex-1 flex-col md:flex-row">
-                <div className="hidden md:block w-64 border-r border-border/40 bg-muted/10" />
-                <main className="flex-1 p-6 md:p-12">
-                    <div className="space-y-4">
-                        <div className="h-8 w-40 rounded-md bg-muted/60 animate-pulse" />
-                        <div className="h-24 w-full rounded-xl bg-muted/40 animate-pulse" />
-                        <div className="h-24 w-full rounded-xl bg-muted/40 animate-pulse" />
-                    </div>
-                </main>
-            </div>
+        <div className="min-h-screen bg-background md:h-screen">
+            <div className="h-16 border-b border-border/40 bg-background/70 md:hidden" />
+            <div className="hidden md:fixed md:inset-y-0 md:left-0 md:block md:w-64 md:border-r md:border-border/40 md:bg-muted/10" />
+            <main className="p-6 md:ml-64 md:h-screen md:overflow-y-auto md:px-8 md:py-10">
+                <div className="space-y-4">
+                    <div className="h-8 w-40 rounded-md bg-muted/60 animate-pulse" />
+                    <div className="h-24 w-full rounded-xl bg-muted/40 animate-pulse" />
+                    <div className="h-24 w-full rounded-xl bg-muted/40 animate-pulse" />
+                </div>
+            </main>
         </div>
     )
 }

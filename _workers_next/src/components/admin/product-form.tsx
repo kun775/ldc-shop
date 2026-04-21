@@ -1,13 +1,11 @@
 'use client'
 
 import { getProductForAdminAction, saveProduct } from "@/actions/admin"
+import { ProductContentSection } from "@/components/admin/product-content-section"
+import { ProductMediaSection } from "@/components/admin/product-media-section"
+import { ProductQuestionsSection } from "@/components/admin/product-questions-section"
+import { ProductSettingsSidebar } from "@/components/admin/product-settings-sidebar"
 import { prepareUploadedImage } from "@/lib/client-image"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Textarea } from "@/components/ui/textarea"
 import { Loader2 } from "lucide-react"
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -50,8 +48,6 @@ export default function ProductForm({ product, categories = [] }: { product?: an
     })
     const [showQuestions, setShowQuestions] = useState(purchaseQuestions.length > 0)
     const { t } = useI18n()
-    const usingUploadedProductImage = productImageValue.startsWith('data:')
-    const productImageInputValue = usingUploadedProductImage ? '' : productImageValue
     const hasRoomForMoreGalleryImages = productGalleryValues.length < PRODUCT_GALLERY_MAX_ITEMS - 1
 
     useEffect(() => {
@@ -240,13 +236,17 @@ export default function ProductForm({ product, categories = [] }: { product?: an
     }
 
     return (
-        <Card className="max-w-2xl mx-auto">
-            <CardHeader>
-                <CardTitle>{product ? t('admin.productForm.editTitle') : t('admin.productForm.addTitle')}</CardTitle>
-            </CardHeader>
-            <CardContent className="relative overflow-hidden">
+        <div className="mx-auto max-w-7xl space-y-6">
+            <div className="space-y-1">
+                <h1 className="text-2xl font-semibold tracking-tight">
+                    {product ? t('admin.productForm.editTitle') : t('admin.productForm.addTitle')}
+                </h1>
+                <p className="text-sm text-muted-foreground">{t('admin.productForm.layoutHint')}</p>
+            </div>
+
+            <div className="relative rounded-2xl">
                 {loading && (
-                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/70 backdrop-blur-sm">
+                    <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-background/70 backdrop-blur-sm">
                         <div
                             role="status"
                             aria-live="polite"
@@ -257,395 +257,63 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                         </div>
                     </div>
                 )}
-                <form key={formSeed} onSubmit={handleSubmit} className="space-y-5" aria-busy={loading}>
-                    <fieldset disabled={loading} className="space-y-5">
-                    {currentProduct && <input type="hidden" name="id" value={currentProduct.id} />}
 
-                    <div className="grid gap-2">
-                        <Label htmlFor="slug">{t('admin.productForm.slugLabel')}</Label>
-                        <div className="flex items-center gap-2">
-                            <span className="text-sm text-muted-foreground">/buy/</span>
-                            <Input
-                                id="slug"
-                                name="slug"
-                                defaultValue={currentProduct?.id || ''}
-                                placeholder={t('admin.productForm.slugPlaceholder')}
-                                pattern="^[a-zA-Z0-9_-]+$"
-                                className="flex-1"
-                                disabled={!!currentProduct}
+                <form key={formSeed} onSubmit={handleSubmit} className="relative" aria-busy={loading}>
+                    <fieldset disabled={loading} className="grid gap-6 lg:grid-cols-[minmax(0,1.7fr)_360px]">
+                        {currentProduct && <input type="hidden" name="id" value={currentProduct.id} />}
+
+                        <div className="space-y-6">
+                            <ProductContentSection
+                                currentProduct={currentProduct}
+                                showWarning={showWarning}
+                                setShowWarning={setShowWarning}
+                                productIdReadonly={!!currentProduct}
+                                t={t}
+                            />
+                            <ProductMediaSection
+                                currentProduct={currentProduct}
+                                loading={loading}
+                                productImageValue={productImageValue}
+                                setProductImageValue={setProductImageValue}
+                                productGalleryValues={productGalleryValues}
+                                galleryImageInputValue={galleryImageInputValue}
+                                setGalleryImageInputValue={setGalleryImageInputValue}
+                                processingProductImageFile={processingProductImageFile}
+                                processingProductGalleryFiles={processingProductGalleryFiles}
+                                hasRoomForMoreGalleryImages={hasRoomForMoreGalleryImages}
+                                galleryLimit={PRODUCT_GALLERY_MAX_ITEMS - 1}
+                                productImageFileInputRef={productImageFileInputRef}
+                                productGalleryFileInputRef={productGalleryFileInputRef}
+                                handleAddGalleryImage={handleAddGalleryImage}
+                                handlePromoteGalleryImage={handlePromoteGalleryImage}
+                                handleRemoveGalleryImage={handleRemoveGalleryImage}
+                                handleSelectProductImageFile={handleSelectProductImageFile}
+                                handleSelectProductGalleryFiles={handleSelectProductGalleryFiles}
+                                t={t}
+                            />
+                            <ProductQuestionsSection
+                                showQuestions={showQuestions}
+                                setShowQuestions={setShowQuestions}
+                                purchaseQuestions={purchaseQuestions}
+                                setPurchaseQuestions={setPurchaseQuestions}
+                                t={t}
                             />
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                            {currentProduct ? t('admin.productForm.slugReadonly') : t('admin.productForm.slugHint')}
-                        </p>
-                    </div>
 
-                    <div className="grid gap-2">
-                        <Label htmlFor="name">{t('admin.productForm.nameLabel')}</Label>
-                        <Input id="name" name="name" defaultValue={currentProduct?.name} placeholder={t('admin.productForm.namePlaceholder')} required />
-                    </div>
-
-                    <div className="grid gap-2">
-                        <Label htmlFor="price">{t('admin.productForm.priceLabel')}</Label>
-                        <Input id="price" name="price" type="number" step="0.01" defaultValue={currentProduct?.price} placeholder={t('admin.productForm.pricePlaceholder')} required onWheel={(e) => e.currentTarget.blur()} />
-                    </div>
-
-                    <div className="grid gap-2">
-                        <Label htmlFor="compareAtPrice">{t('admin.productForm.compareAtPriceLabel')}</Label>
-                        <Input
-                            id="compareAtPrice"
-                            name="compareAtPrice"
-                            type="number"
-                            step="0.01"
-                            defaultValue={currentProduct?.compareAtPrice || ''}
-                            placeholder={t('admin.productForm.compareAtPricePlaceholder')}
-                            onWheel={(e) => e.currentTarget.blur()}
+                        <ProductSettingsSidebar
+                            currentProduct={currentProduct}
+                            categories={categories}
+                            loading={loading}
+                            pointDiscountEnabled={pointDiscountEnabled}
+                            setPointDiscountEnabled={setPointDiscountEnabled}
+                            visibilityLevel={visibilityLevel}
+                            setVisibilityLevel={setVisibilityLevel}
+                            onCancel={() => router.back()}
+                            t={t}
                         />
-                    </div>
-
-                    <div className="grid gap-2">
-                        <Label htmlFor="purchaseLimit">{t('admin.productForm.purchaseLimitLabel') || "Per-user Purchase Limit (0 or empty for unlimited)"}</Label>
-                        <Input id="purchaseLimit" name="purchaseLimit" type="number" defaultValue={currentProduct?.purchaseLimit} placeholder={t('admin.productForm.purchaseLimitPlaceholder') || "e.g. 1"} onWheel={(e) => e.currentTarget.blur()} />
-                    </div>
-
-                    <div className="grid gap-2">
-                        <Label htmlFor="category">{t('admin.productForm.categoryLabel')}</Label>
-                        <Input id="category" name="category" list="ldc-category-list" defaultValue={currentProduct?.category} placeholder={t('admin.productForm.categoryPlaceholder')} />
-                        <datalist id="ldc-category-list">
-                            {categories.map(c => (
-                                <option key={c.name} value={c.name} />
-                            ))}
-                        </datalist>
-                    </div>
-
-                    <div className="grid gap-2">
-                        <Label htmlFor="variantGroupId">{t('admin.productForm.variantGroupLabel')}</Label>
-                        <Input
-                            id="variantGroupId"
-                            name="variantGroupId"
-                            defaultValue={currentProduct?.variantGroupId || ''}
-                            placeholder={t('admin.productForm.variantGroupPlaceholder')}
-                        />
-                        <p className="text-xs text-muted-foreground">{t('admin.productForm.variantGroupHint')}</p>
-                    </div>
-
-                    <div className="grid gap-2">
-                        <Label htmlFor="variantLabel">{t('admin.productForm.variantLabelLabel')}</Label>
-                        <Input
-                            id="variantLabel"
-                            name="variantLabel"
-                            defaultValue={currentProduct?.variantLabel || ''}
-                            placeholder={t('admin.productForm.variantLabelPlaceholder')}
-                        />
-                        <p className="text-xs text-muted-foreground">{t('admin.productForm.variantLabelHint')}</p>
-                    </div>
-
-                    <div className="grid gap-2">
-                        <Label htmlFor="visibilityLevel">{t('admin.productForm.visibilityLabel')}</Label>
-                        <select
-                            id="visibilityLevel"
-                            name="visibilityLevel"
-                            value={visibilityLevel}
-                            onChange={(e) => setVisibilityLevel(e.target.value)}
-                            className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-2"
-                        >
-                            <option value="-1">{t('admin.productForm.visibilityAll')}</option>
-                            <option value="0">{t('admin.productForm.visibilityLevel0')}</option>
-                            <option value="1">{t('admin.productForm.visibilityLevel1')}</option>
-                            <option value="2">{t('admin.productForm.visibilityLevel2')}</option>
-                            <option value="3">{t('admin.productForm.visibilityLevel3')}</option>
-                        </select>
-                        <p className="text-xs text-muted-foreground">{t('admin.productForm.visibilityHint')}</p>
-                    </div>
-
-                    <div className="flex items-center space-x-2">
-                        <Checkbox
-                            id="isShared"
-                            name="isShared"
-                            defaultChecked={currentProduct?.isShared ?? false}
-                            className="h-4 w-4 accent-primary"
-                        />
-                        <div className="flex flex-col">
-                            <Label htmlFor="isShared" className="cursor-pointer font-medium">{t('admin.productForm.isSharedLabel')}</Label>
-                            <span className="text-xs text-muted-foreground">{t('admin.productForm.isSharedHint')}</span>
-                        </div>
-                    </div>
-
-                    <div className="flex items-center space-x-2">
-                        <Checkbox
-                            id="isHot"
-                            name="isHot"
-                            defaultChecked={!!currentProduct?.isHot}
-                            className="h-4 w-4 accent-primary"
-                        />
-                        <Label htmlFor="isHot" className="cursor-pointer">{t('admin.productForm.isHotLabel')}</Label>
-                    </div>
-
-                    <div className="space-y-2 p-3 border rounded-md bg-muted/30">
-                        <div className="flex items-center gap-2">
-                            <input
-                                id="showWarning"
-                                type="checkbox"
-                                checked={showWarning}
-                                onChange={(e) => setShowWarning(e.target.checked)}
-                                className="h-4 w-4 accent-primary"
-                            />
-                            <Label htmlFor="showWarning" className="cursor-pointer">{t('admin.productForm.purchaseWarningLabel')}</Label>
-                        </div>
-                        {showWarning && (
-                            <div className="grid gap-2">
-                                <Label htmlFor="purchaseWarning">{t('admin.productForm.purchaseWarningLabel')}</Label>
-                                <Textarea
-                                    id="purchaseWarning"
-                                    name="purchaseWarning"
-                                    defaultValue={currentProduct?.purchaseWarning || ''}
-                                    placeholder={t('admin.productForm.purchaseWarningPlaceholder')}
-                                    className="min-h-[60px]"
-                                />
-                                <p className="text-xs text-muted-foreground">{t('admin.productForm.purchaseWarningHint')}</p>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="space-y-3 rounded-md border bg-muted/30 p-3">
-                        <div className="flex items-center gap-2">
-                            <input
-                                id="pointDiscountEnabled"
-                                name="pointDiscountEnabled"
-                                type="checkbox"
-                                checked={pointDiscountEnabled}
-                                onChange={(e) => setPointDiscountEnabled(e.target.checked)}
-                                className="h-4 w-4 accent-primary"
-                            />
-                            <div className="flex flex-col">
-                                <Label htmlFor="pointDiscountEnabled" className="cursor-pointer font-medium">
-                                    {t('admin.productForm.pointDiscountEnabledLabel')}
-                                </Label>
-                                <span className="text-xs text-muted-foreground">
-                                    {t('admin.productForm.pointDiscountEnabledHint')}
-                                </span>
-                            </div>
-                        </div>
-                        <div className="grid gap-2">
-                            <Label htmlFor="pointDiscountPercent">{t('admin.productForm.pointDiscountPercentLabel')}</Label>
-                            <Input
-                                id="pointDiscountPercent"
-                                name="pointDiscountPercent"
-                                type="number"
-                                min={1}
-                                max={100}
-                                step="1"
-                                defaultValue={currentProduct?.pointDiscountPercent || ''}
-                                placeholder={t('admin.productForm.pointDiscountPercentPlaceholder')}
-                                disabled={!pointDiscountEnabled}
-                                onWheel={(e) => e.currentTarget.blur()}
-                            />
-                            <p className="text-xs text-muted-foreground">
-                                {t('admin.productForm.pointDiscountPercentHint')}
-                            </p>
-                        </div>
-                    </div>
-
-                    <div className="space-y-2 p-3 border rounded-md bg-muted/30">
-                        <div className="flex items-center gap-2">
-                            <input
-                                id="showQuestions"
-                                type="checkbox"
-                                checked={showQuestions}
-                                onChange={(e) => {
-                                    setShowQuestions(e.target.checked)
-                                    if (!e.target.checked) setPurchaseQuestions([])
-                                }}
-                                className="h-4 w-4 accent-primary"
-                            />
-                            <Label htmlFor="showQuestions" className="cursor-pointer">{t('admin.productForm.purchaseQuestionsLabel')}</Label>
-                        </div>
-                        {showQuestions && (
-                            <div className="space-y-3">
-                                <input type="hidden" name="purchaseQuestions" value={JSON.stringify(purchaseQuestions)} />
-                                {purchaseQuestions.map((item, idx) => (
-                                    <div key={idx} className="flex items-start gap-2 rounded-md border bg-background/80 p-3">
-                                        <div className="flex-1 space-y-2">
-                                            <Input
-                                                value={item.q}
-                                                onChange={(e) => {
-                                                    const next = [...purchaseQuestions]
-                                                    next[idx] = { ...next[idx], q: e.target.value }
-                                                    setPurchaseQuestions(next)
-                                                }}
-                                                placeholder={t('admin.productForm.questionPlaceholder')}
-                                            />
-                                            <Input
-                                                value={item.a}
-                                                onChange={(e) => {
-                                                    const next = [...purchaseQuestions]
-                                                    next[idx] = { ...next[idx], a: e.target.value }
-                                                    setPurchaseQuestions(next)
-                                                }}
-                                                placeholder={t('admin.productForm.answerPlaceholder')}
-                                            />
-                                        </div>
-                                        <Button
-                                            type="button"
-                                            variant="ghost"
-                                            size="icon"
-                                            className="shrink-0 text-destructive hover:text-destructive"
-                                            onClick={() => setPurchaseQuestions(purchaseQuestions.filter((_, i) => i !== idx))}
-                                        >
-                                            ×
-                                        </Button>
-                                    </div>
-                                ))}
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setPurchaseQuestions([...purchaseQuestions, { q: '', a: '' }])}
-                                >
-                                    + {t('admin.productForm.addQuestion')}
-                                </Button>
-                                <p className="text-xs text-muted-foreground">{t('admin.productForm.purchaseQuestionsHint')}</p>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="grid gap-2">
-                        <Label htmlFor="image">{t('admin.productForm.imageLabel')}</Label>
-                        <input type="hidden" name="image" value={productImageValue} />
-                        <Input
-                            id="image"
-                            value={productImageInputValue}
-                            onChange={(e) => setProductImageValue(e.target.value)}
-                            placeholder={t('admin.productForm.imagePlaceholder')}
-                        />
-                        {usingUploadedProductImage && (
-                            <p className="text-xs text-muted-foreground">{t('admin.productForm.imageUploadedHint')}</p>
-                        )}
-                        <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border/60 bg-muted/20 p-3">
-                            <Label htmlFor="product-image-file" className="text-sm font-medium">{t('admin.productForm.imageUpload')}</Label>
-                            <input
-                                ref={productImageFileInputRef}
-                                id="product-image-file"
-                                type="file"
-                                className="hidden"
-                                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/x-icon,image/bmp,.png,.jpg,.jpeg,.webp,.gif,.svg,.ico,.bmp"
-                                onChange={handleSelectProductImageFile}
-                                disabled={processingProductImageFile}
-                            />
-                            <Button
-                                type="button"
-                                variant="outline"
-                                className="w-fit"
-                                onClick={() => productImageFileInputRef.current?.click()}
-                                disabled={loading || processingProductImageFile}
-                            >
-                                {processingProductImageFile ? t('common.processing') : t('admin.productForm.imageUpload')}
-                            </Button>
-                            <p className="text-xs text-muted-foreground">{t('admin.productForm.imageUploadHint')}</p>
-                        </div>
-                        {productImageValue && (
-                            <div className="flex items-center gap-4 rounded-md border bg-muted/50 p-2">
-                                <img src={productImageValue} alt={currentProduct?.name || 'Product preview'} className="h-14 w-14 rounded object-contain" />
-                                <span className="text-sm text-muted-foreground">{t('admin.productForm.imagePreview')}</span>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="grid gap-3">
-                        <Label htmlFor="galleryImageInput">{t('admin.productForm.galleryLabel')}</Label>
-                        <input type="hidden" name="productImages" value={JSON.stringify(productGalleryValues)} />
-                        <div className="flex gap-2">
-                            <Input
-                                id="galleryImageInput"
-                                value={galleryImageInputValue}
-                                onChange={(e) => setGalleryImageInputValue(e.target.value)}
-                                placeholder={t('admin.productForm.galleryPlaceholder')}
-                                disabled={!hasRoomForMoreGalleryImages}
-                            />
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={handleAddGalleryImage}
-                                disabled={loading || !galleryImageInputValue.trim() || !hasRoomForMoreGalleryImages}
-                            >
-                                {t('admin.productForm.galleryAdd')}
-                            </Button>
-                        </div>
-                        <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border/60 bg-muted/20 p-3">
-                            <Label htmlFor="product-gallery-file" className="text-sm font-medium">{t('admin.productForm.galleryUpload')}</Label>
-                            <input
-                                ref={productGalleryFileInputRef}
-                                id="product-gallery-file"
-                                type="file"
-                                className="hidden"
-                                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/x-icon,image/bmp,.png,.jpg,.jpeg,.webp,.gif,.svg,.ico,.bmp"
-                                multiple
-                                onChange={handleSelectProductGalleryFiles}
-                                disabled={processingProductGalleryFiles || !hasRoomForMoreGalleryImages}
-                            />
-                            <Button
-                                type="button"
-                                variant="outline"
-                                className="w-fit"
-                                onClick={() => productGalleryFileInputRef.current?.click()}
-                                disabled={loading || processingProductGalleryFiles || !hasRoomForMoreGalleryImages}
-                            >
-                                {processingProductGalleryFiles ? t('common.processing') : t('admin.productForm.galleryUpload')}
-                            </Button>
-                            <p className="text-xs text-muted-foreground">{t('admin.productForm.galleryUploadHint', { count: PRODUCT_GALLERY_MAX_ITEMS - 1 })}</p>
-                        </div>
-                        {productGalleryValues.length > 0 ? (
-                            <div className="grid gap-3 sm:grid-cols-2">
-                                {productGalleryValues.map((image, index) => (
-                                    <div key={`${image}-${index}`} className="rounded-lg border bg-muted/30 p-3">
-                                        <div className="mb-3 flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md bg-background">
-                                            <img src={image} alt={`${currentProduct?.name || 'Product'} gallery ${index + 1}`} className="h-full w-full object-contain" />
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <Button type="button" size="sm" variant="outline" onClick={() => handlePromoteGalleryImage(index)}>
-                                                {t('admin.productForm.gallerySetCover')}
-                                            </Button>
-                                            <Button type="button" size="sm" variant="ghost" onClick={() => handleRemoveGalleryImage(index)}>
-                                                {t('admin.productForm.galleryRemove')}
-                                            </Button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <p className="text-xs text-muted-foreground">{t('admin.productForm.galleryEmpty')}</p>
-                        )}
-                    </div>
-
-                    <div className="grid gap-2">
-                        <Label htmlFor="description">{t('admin.productForm.descLabel')}</Label>
-                        <Textarea
-                            id="description"
-                            name="description"
-                            defaultValue={currentProduct?.description}
-                            placeholder={t('admin.productForm.descPlaceholder')}
-                            className="min-h-[80px]"
-                        />
-                    </div>
-
-                    <div className="pt-4 flex justify-end gap-2">
-                        <Button variant="outline" type="button" onClick={() => router.back()} disabled={loading}>
-                            {t('common.cancel')}
-                        </Button>
-                        <Button type="submit" disabled={loading}>
-                            {loading ? (
-                                <>
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    {t('admin.productForm.saving')}
-                                </>
-                            ) : (
-                                t('admin.productForm.saveButton')
-                            )}
-                        </Button>
-                    </div>
                     </fieldset>
                 </form>
-            </CardContent>
-        </Card>
+            </div>
+        </div>
     )
 }

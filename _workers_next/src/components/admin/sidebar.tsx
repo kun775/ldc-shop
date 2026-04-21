@@ -170,8 +170,10 @@ export function AdminSidebar({ username }: { username: string }) {
             </div>
 
             {/* Desktop sidebar */}
-            <aside className="hidden md:flex md:flex-col md:w-64 bg-muted/40 border-r md:min-h-screen p-6 gap-4">
-                <SidebarContent username={username} t={t} />
+            <aside className="hidden border-r bg-muted/40 md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:w-64 md:flex-col">
+                <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
+                    <SidebarContent username={username} t={t} />
+                </div>
             </aside>
         </>
     )
