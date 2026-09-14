@@ -1,4 +1,4 @@
-import { getActiveProductCategories, getCategories, getActiveProducts, getVisitorCount, getUserPendingOrders, getSetting, getLiveCardStats } from "@/lib/db/queries";
+import { getActiveProductCategories, getCategories, getActiveProducts, getVisitorCount, getUserPendingOrders, getSetting } from "@/lib/db/queries";
 import { getActiveAnnouncement } from "@/actions/settings";
 import { auth } from "@/lib/auth";
 import { HomeContent } from "@/components/home-content";
@@ -13,6 +13,13 @@ function stripMarkdown(input: string): string {
     .replace(/[`*_>#+-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function resolveProductStockCount(product: any): number {
+  const stock = Number(product.stock || 0);
+  const locked = Number(product.locked || 0);
+  if (product.isShared) return stock > 0 ? INFINITE_STOCK : 0;
+  return stock >= INFINITE_STOCK ? INFINITE_STOCK : stock + locked;
 }
 
 export default async function Home({
@@ -50,34 +57,10 @@ export default async function Home({
 
   const total = products.length;
 
-  const liveStats = await getLiveCardStats(products.map((p: any) => p.id)).catch(() => new Map());
-
-  /* REMOVED: Separate ratings fetch - using pre-computed values in product table
-  const productIds = products.map((p: any) => p.id).filter(Boolean);
-  const sortedIds = [...productIds].sort();
-  let ratingsMap = new Map<string, { average: number; count: number }>();
-  try {
-    ratingsMap = await unstable_cache(
-      async () => getProductRatings(sortedIds),
-      ["product-ratings", ...sortedIds],
-      { revalidate: CACHE_TTL_SECONDS, tags: [TAG_RATINGS] }
-    )();
-  } catch {
-    // Reviews table might not exist yet
-  }
-  */
-
   const productsWithRatings = products.map((p: any) => {
-    const stat = liveStats.get(p.id) || { unused: 0, available: 0, locked: 0 };
-    const available = p.isShared
-      ? (stat.unused > 0 ? INFINITE_STOCK : 0)
-      : stat.available;
-    const locked = stat.locked;
-    const stockTotal = available >= INFINITE_STOCK ? INFINITE_STOCK : (available + locked);
-    // const rating = ratingsMap.get(p.id) || { average: 0, count: 0 };
     return {
       ...p,
-      stockCount: stockTotal,
+      stockCount: resolveProductStockCount(p),
       soldCount: p.sold || 0,
       descriptionPlain: stripMarkdown(p.description || ''),
       rating: Number(p.rating || 0),

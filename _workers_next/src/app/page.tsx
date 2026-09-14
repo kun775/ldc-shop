@@ -1,4 +1,4 @@
-import { getActiveProductCategories, getCategories, getActiveProducts, getVisitorCount, getUserPendingOrders, getSetting, getLiveCardStats } from "@/lib/db/queries";
+import { getActiveProductCategories, getCategories, getActiveProducts, getVisitorCount, getUserPendingOrders, getSetting } from "@/lib/db/queries";
 import { getActiveAnnouncement } from "@/actions/settings";
 import { auth } from "@/lib/auth";
 import { HomeContent } from "@/components/home-content";
@@ -13,6 +13,23 @@ function stripMarkdown(input: string): string {
     .replace(/[`*_>#+-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function resolveProductStockCount(product: any): number {
+  const isGroup = product.allVariantIds && product.allVariantIds.length > 1;
+  if (isGroup) {
+    const totalStock = Number(product.totalStock || 0);
+    const totalLocked = Number(product.totalLocked || 0);
+    if ((product.groupShared && totalStock > 0) || totalStock >= INFINITE_STOCK) {
+      return INFINITE_STOCK;
+    }
+    return totalStock + totalLocked;
+  }
+
+  const stock = Number(product.stock || 0);
+  const locked = Number(product.locked || 0);
+  if (product.isShared) return stock > 0 ? INFINITE_STOCK : 0;
+  return stock >= INFINITE_STOCK ? INFINITE_STOCK : stock + locked;
 }
 
 export default async function Home({
@@ -57,40 +74,14 @@ export default async function Home({
 
   const total = products.length;
 
-  const allProductIds = products.flatMap((p: any) => p.allVariantIds && p.allVariantIds.length > 1 ? p.allVariantIds : [p.id]);
-  const liveStats = await getLiveCardStats(allProductIds).catch(() => new Map());
-
   const productsWithRatings = products.map((p: any) => {
     const isGroup = p.allVariantIds && p.allVariantIds.length > 1;
-
-    let stockTotal: number;
-    if (isGroup) {
-      let groupAvailable = 0;
-      let groupLocked = 0;
-      let hasInfinite = false;
-      for (const vid of p.allVariantIds) {
-        const vStat = liveStats.get(vid) || { unused: 0, available: 0, locked: 0 };
-        if (vStat.available >= INFINITE_STOCK || (p.groupShared && vStat.unused > 0)) {
-          hasInfinite = true;
-        }
-        groupAvailable += vStat.available;
-        groupLocked += vStat.locked;
-      }
-      stockTotal = hasInfinite ? INFINITE_STOCK : (groupAvailable + groupLocked);
-    } else {
-      const stat = liveStats.get(p.id) || { unused: 0, available: 0, locked: 0 };
-      const available = p.isShared
-        ? (stat.unused > 0 ? INFINITE_STOCK : 0)
-        : stat.available;
-      const locked = stat.locked;
-      stockTotal = available >= INFINITE_STOCK ? INFINITE_STOCK : (available + locked);
-    }
 
     return {
       ...p,
       pointDiscountEnabled: Boolean(p.pointDiscountEnabled),
       pointDiscountPercent: Number(p.pointDiscountPercent || 0),
-      stockCount: stockTotal,
+      stockCount: resolveProductStockCount(p),
       soldCount: isGroup ? (p.totalSold || 0) : (p.sold || 0),
       isHot: isGroup ? (p.groupHot || false) : p.isHot,
       descriptionPlain: stripMarkdown(p.description || ''),

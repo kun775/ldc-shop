@@ -3,7 +3,7 @@ import cron from 'node-cron';
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || `http://localhost:${process.env.PORT || 3000}`;
 const CRON_TOKEN = process.env.CRON_CLEANUP_TOKEN || process.env.OAUTH_CLIENT_SECRET || '';
 
-cron.schedule('* * * * *', async () => {
+cron.schedule('*/5 * * * *', async () => {
     try {
         const res = await fetch(`${APP_URL}/api/internal/cron/cleanup`, {
             method: 'POST',
@@ -17,4 +17,4 @@ cron.schedule('* * * * *', async () => {
     }
 });
 
-console.log('[cron] Cleanup scheduler started (every minute)');
+console.log('[cron] Cleanup scheduler started (every 5 minutes)');

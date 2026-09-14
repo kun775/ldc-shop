@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded } from "@/lib/db/queries";
 
 const CRON_TOKEN_HEADER = "x-cron-cleanup-token";
-const CARD_CLEANUP_THROTTLE_MS = 60 * 1000;
+const CARD_CLEANUP_THROTTLE_MS = 5 * 60 * 1000;
 
 function getCronToken(): string | null {
     const token = process.env.CRON_CLEANUP_TOKEN?.trim();

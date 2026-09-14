@@ -1,6 +1,6 @@
 import { db, dbExecRaw } from "./index";
 import { products, cards, orders, settings, reviews, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes } from "./schema";
-import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants";
+import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/lib/constants";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -1019,10 +1019,8 @@ export async function getRecentOrders(limit: number = 10) {
 
 // Settings
 export const getSetting = cache(async (key: string): Promise<string | null> => {
-    const result = await db.select({ value: settings.value })
-        .from(settings)
-        .where(eq(settings.key, key));
-    return result[0]?.value ?? null;
+    const all = await getAllSettings();
+    return all[key] ?? null;
 });
 
 export const getAllSettings = cache(async (): Promise<Record<string, string>> => {
@@ -2004,18 +2002,25 @@ async function backfillLoginUsersFromOrdersAndReviews() {
     await markLoginUsersBackfilled();
 }
 
-export async function recordLoginUser(userId: string, username?: string | null, email?: string | null) {
-    if (!userId) return;
+async function persistLoginUser(userId: string, username?: string | null, email?: string | null) {
+    const nextUsername = username || null;
+    const now = new Date();
+    const existing = await db.select({
+        username: loginUsers.username,
+        email: loginUsers.email,
+        lastLoginAt: loginUsers.lastLoginAt,
+    })
+        .from(loginUsers)
+        .where(eq(loginUsers.userId, userId))
+        .limit(1);
 
-    try {
+    const current = existing[0];
+    if (!current) {
         const result = await db.insert(loginUsers).values({
             userId,
-            username: username || null,
+            username: nextUsername,
             email: email || null,
-            lastLoginAt: new Date()
-        }).onConflictDoUpdate({
-            target: loginUsers.userId,
-            set: { username: username || null, lastLoginAt: new Date() }
+            lastLoginAt: now,
         });
         if ((result as any)?.meta?.changes === 1) {
             try {
@@ -2024,39 +2029,47 @@ export async function recordLoginUser(userId: string, username?: string | null, 
                 // best effort
             }
         }
-        if (email) {
-            try {
-                await db.run(sql`UPDATE login_users SET email = ${email} WHERE user_id = ${userId} AND (email IS NULL OR email = '')`);
-            } catch {
-                // best effort
-            }
+        return;
+    }
+
+    const lastLoginAtMs = toEpochMs(current.lastLoginAt);
+    const heartbeatFresh = lastLoginAtMs !== null && (Date.now() - lastLoginAtMs) < LOGIN_HEARTBEAT_TTL_MS;
+    const usernameUnchanged = (current.username || null) === nextUsername;
+    const emailAlreadySet = !email || !!current.email;
+
+    if (heartbeatFresh && usernameUnchanged && emailAlreadySet) {
+        return;
+    }
+
+    const patch: { username?: string | null; lastLoginAt?: Date } = {};
+    if (!usernameUnchanged) patch.username = nextUsername;
+    if (!heartbeatFresh) patch.lastLoginAt = now;
+    if (Object.keys(patch).length > 0) {
+        await db.update(loginUsers)
+            .set(patch)
+            .where(eq(loginUsers.userId, userId));
+    }
+    if (email && !current.email) {
+        try {
+            await db.run(sql`UPDATE login_users SET email = ${email} WHERE user_id = ${userId} AND (email IS NULL OR email = '')`);
+        } catch {
+            // best effort
         }
+    }
+}
+
+export async function recordLoginUser(userId: string, username?: string | null, email?: string | null) {
+    if (!userId) return;
+
+    try {
+        await persistLoginUser(userId, username, email);
     } catch (error: any) {
         if (isMissingTable(error) || error?.code === '42703' || error?.message?.includes('column')) {
             await ensureLoginUsersSchema();
-
-            const result = await db.insert(loginUsers).values({
-                userId,
-                username: username || null,
-                email: email || null,
-                lastLoginAt: new Date()
-            }).onConflictDoUpdate({
-                target: loginUsers.userId,
-                set: { username: username || null, lastLoginAt: new Date() }
-            });
-            if ((result as any)?.meta?.changes === 1) {
-                try {
-                    updateTag('home:visitors');
-                } catch {
-                    // best effort
-                }
-            }
-            if (email) {
-                try {
-                    await db.run(sql`UPDATE login_users SET email = ${email} WHERE user_id = ${userId} AND (email IS NULL OR email = '')`);
-                } catch {
-                    // best effort
-                }
+            try {
+                await persistLoginUser(userId, username, email);
+            } catch (retryError) {
+                console.error('recordLoginUser error:', retryError);
             }
             return;
         }

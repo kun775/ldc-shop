@@ -1,4 +1,4 @@
-import { searchActiveProducts, getCategories, getLiveCardStats } from "@/lib/db/queries"
+import { searchActiveProducts, getCategories } from "@/lib/db/queries"
 import { SearchContent } from "@/components/search-content"
 import { unstable_noStore } from "next/cache"
 import { auth } from "@/lib/auth"
@@ -12,6 +12,13 @@ function firstParam(value: string | string[] | undefined): string | undefined {
 function parseIntParam(value: unknown, fallback: number) {
   const num = typeof value === 'string' ? Number.parseInt(value, 10) : NaN
   return Number.isFinite(num) && num > 0 ? num : fallback
+}
+
+function resolveProductStockCount(product: any): number {
+  const stock = Number(product.stock || 0)
+  const locked = Number(product.locked || 0)
+  if (product.isShared) return stock > 0 ? INFINITE_STOCK : 0
+  return stock >= INFINITE_STOCK ? INFINITE_STOCK : stock + locked
 }
 
 export default async function SearchPage(props: {
@@ -34,8 +41,6 @@ export default async function SearchPage(props: {
     getCategories(),
   ])
 
-  const liveStats = await getLiveCardStats(result.items.map((p: any) => p.id)).catch(() => new Map())
-
   return (
     <SearchContent
       q={q}
@@ -45,12 +50,6 @@ export default async function SearchPage(props: {
       pageSize={result.pageSize}
       total={result.total}
       products={result.items.map((p: any) => {
-        const stat = liveStats.get(p.id) || { unused: 0, available: 0, locked: 0 }
-        const available = p.isShared
-          ? (stat.unused > 0 ? INFINITE_STOCK : 0)
-          : stat.available
-        const locked = stat.locked
-        const stockCount = available >= INFINITE_STOCK ? INFINITE_STOCK : (available + locked)
         return {
         id: p.id,
         name: p.name,
@@ -60,7 +59,7 @@ export default async function SearchPage(props: {
         image: p.image,
         category: p.category,
         isHot: p.isHot ?? false,
-        stockCount,
+        stockCount: resolveProductStockCount(p),
         soldCount: p.sold || 0
       }})}
       categories={categories.map((c: any) => ({ name: c.name, icon: c.icon, sortOrder: c.sortOrder }))}
