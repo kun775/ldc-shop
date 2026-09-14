@@ -106,6 +106,7 @@ export async function importData(formData: FormData) {
             variantLabel: 'variant_label',
             purchaseQuestions: 'purchase_questions',
             checkoutFields: 'checkout_fields',
+            fulfillmentMode: 'fulfillment_mode',
             productImages: 'product_images',
             createdAt: 'created_at',
             // Cards
@@ -122,6 +123,7 @@ export async function importData(formData: FormData) {
             deliveredAt: 'delivered_at',
             pointsUsed: 'points_used',
             checkoutFieldValues: 'checkout_field_values',
+            deliveryNote: 'delivery_note',
             currentPaymentId: 'current_payment_id',
             cardIds: 'card_ids',
             // Login Users

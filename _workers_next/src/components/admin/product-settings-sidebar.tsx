@@ -102,6 +102,20 @@ export function ProductSettingsSidebar({
                     <CardDescription>{t('admin.productForm.attributesSectionHint')}</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                    <div className="grid gap-2 rounded-lg border bg-muted/20 p-4">
+                        <Label htmlFor="fulfillmentMode">{t('admin.productForm.fulfillmentModeLabel')}</Label>
+                        <select
+                            id="fulfillmentMode"
+                            name="fulfillmentMode"
+                            defaultValue={currentProduct?.fulfillmentMode === 'manual' ? 'manual' : 'auto'}
+                            className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-2"
+                        >
+                            <option value="auto">{t('admin.productForm.fulfillmentModeAuto')}</option>
+                            <option value="manual">{t('admin.productForm.fulfillmentModeManual')}</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground">{t('admin.productForm.fulfillmentModeHint')}</p>
+                    </div>
+
                     <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-4">
                         <Checkbox
                             id="isShared"

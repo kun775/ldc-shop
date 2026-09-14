@@ -4,6 +4,7 @@ import { orders } from "@/lib/db/schema"
 import { eq } from "drizzle-orm"
 import { AdminOrderDetailContent } from "@/components/admin/order-detail-content"
 import { ensureDatabaseInitialized, getProductVariantLabels } from "@/lib/db/queries"
+import { listDeliveryFiles } from "@/lib/delivery-files"
 import { unstable_noStore } from "next/cache"
 
 export default async function AdminOrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -15,6 +16,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
 
   const labels = order.productId ? await getProductVariantLabels([order.productId]) : {}
   const productVariantLabel = order.productId ? labels[order.productId] ?? null : null
+  const deliveryFiles = await listDeliveryFiles(order.orderId)
 
   return (
     <AdminOrderDetailContent
@@ -28,6 +30,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
         productVariantLabel,
         amount: order.amount,
         pointsUsed: Number(order.pointsUsed || 0),
+        quantity: Number(order.quantity || 1),
         status: order.status,
         tradeNo: order.tradeNo,
         cardKey: order.cardKey,
@@ -35,6 +38,9 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
         paidAt: order.paidAt,
         deliveredAt: order.deliveredAt,
         checkoutFieldValues: order.checkoutFieldValues,
+        fulfillmentMode: order.fulfillmentMode,
+        deliveryNote: order.deliveryNote,
+        deliveryFiles,
       }}
     />
   )

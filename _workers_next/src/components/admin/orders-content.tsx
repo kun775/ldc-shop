@@ -17,6 +17,7 @@ import { toast } from "sonner"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
 import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
+import { isManualFulfillment } from "@/lib/fulfillment"
 
 interface Order {
     orderId: string
@@ -32,6 +33,7 @@ interface Order {
     tradeNo: string | null
     createdAt: Date | null
     checkoutFieldValues?: string | null
+    fulfillmentMode?: string | null
 }
 
 function buildUrl(params: Record<string, string | number | undefined | null>) {
@@ -332,6 +334,14 @@ export function AdminOrdersContent({
                                         {order.productId && productVariantLabels[order.productId] && (
                                             <span className="ml-1.5 text-muted-foreground">· {productVariantLabels[order.productId]}</span>
                                         )}
+                                        <div className="mt-1 text-xs text-muted-foreground">
+                                            {isManualFulfillment(order.fulfillmentMode)
+                                                ? t('admin.orders.fulfillmentManual')
+                                                : t('admin.orders.fulfillmentAuto')}
+                                            {order.status === 'paid' && isManualFulfillment(order.fulfillmentMode)
+                                                ? ` · ${t('orders.awaitingDelivery')}`
+                                                : ''}
+                                        </div>
                                         {checkoutFieldValues.length > 0 && (
                                             <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
                                                 {checkoutFieldValues.map((field) => (

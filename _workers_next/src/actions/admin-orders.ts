@@ -5,9 +5,11 @@ import { cards, orders, refundRequests } from "@/lib/db/schema"
 import { and, eq, sql } from "drizzle-orm"
 import { revalidatePath, updateTag } from "next/cache"
 import { checkAdmin } from "@/actions/admin"
-import { recalcProductAggregates, recalcProductAggregatesForMany, createUserNotification } from "@/lib/db/queries"
+import { createUserNotification, ensureDatabaseInitialized, recalcProductAggregates, recalcProductAggregatesForMany } from "@/lib/db/queries"
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
+import { DELIVERY_FILE_LIMITS, deleteDeliveryFiles, saveDeliveryFiles } from "@/lib/delivery-files"
+import { isManualFulfillment } from "@/lib/fulfillment"
 
 export async function markOrderPaid(orderId: string) {
   await checkAdmin()
@@ -36,17 +38,35 @@ export async function markOrderPaid(orderId: string) {
   }
 }
 
-export async function markOrderDelivered(orderId: string) {
+export async function markOrderDelivered(orderId: string, formData?: FormData) {
   await checkAdmin()
+  await ensureDatabaseInitialized()
   if (!orderId) throw new Error("Missing order id")
 
   const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
   if (!order) throw new Error("Order not found")
-  if (!order.cardKey) throw new Error("Missing card key; cannot mark delivered")
+  const manual = isManualFulfillment(order.fulfillmentMode)
+  const deliveryNote = String(formData?.get('deliveryNote') || '').trim()
+  const files = formData ? formData.getAll('deliveryFiles').filter((item): item is File => item instanceof File && item.size > 0) : []
+  if (manual) {
+    if (deliveryNote.length > DELIVERY_FILE_LIMITS.maxNoteLength) {
+      throw new Error("admin.orders.deliveryNoteTooLong")
+    }
+    if (!deliveryNote && files.length === 0) {
+      throw new Error("admin.orders.deliveryContentRequired")
+    }
+  } else if (!order.cardKey) {
+    throw new Error("Missing card key; cannot mark delivered")
+  }
+
+  if (files.length) {
+    await saveDeliveryFiles(orderId, files)
+  }
 
   await db.update(orders).set({
     status: 'delivered',
     deliveredAt: new Date(),
+    ...(manual ? { deliveryNote: deliveryNote || order.deliveryNote || null } : {}),
   }).where(eq(orders.orderId, orderId))
 
   if (order.userId) {
@@ -211,6 +231,7 @@ async function deleteOneOrder(orderId: string) {
     // table may not exist yet
   }
 
+  await deleteDeliveryFiles(orderId)
   await db.delete(orders).where(eq(orders.orderId, orderId))
 }
 

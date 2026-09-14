@@ -15,7 +15,9 @@ function mergeLiveStockIntoVariants(
 ): (ProductVariantRow & { stockCount: number; lockedCount: number })[] {
     return variants.map((v) => {
         const stat = liveStats.get(v.id) ?? { unused: 0, available: 0, locked: 0 }
-        const stockCount = v.isShared
+        const stockCount = v.fulfillmentMode === 'manual'
+            ? INFINITE_STOCK
+            : v.isShared
             ? (stat.unused > 0 ? INFINITE_STOCK : 0)
             : stat.available
         return { ...v, stockCount, lockedCount: stat.locked }
@@ -60,7 +62,9 @@ export default async function BuyPage({ params }: BuyPageProps) {
 
     const liveStats = await getLiveCardStats([product.id]).catch(() => new Map())
     const stat = liveStats.get(product.id) ?? { unused: 0, available: 0, locked: 0 }
-    const liveAvailable = product.isShared
+    const liveAvailable = product.fulfillmentMode === 'manual'
+        ? INFINITE_STOCK
+        : product.isShared
         ? (stat.unused > 0 ? INFINITE_STOCK : 0)
         : stat.available
     const liveLocked = stat.locked

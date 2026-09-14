@@ -17,6 +17,8 @@ import { markOrderDelivered, markOrderPaid, cancelOrder, updateOrderEmail, delet
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
 import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
+import { isManualFulfillment } from "@/lib/fulfillment"
+import { Textarea } from "@/components/ui/textarea"
 
 function statusVariant(status: string | null) {
   switch (status) {
@@ -39,11 +41,15 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
   const [email, setEmail] = useState(order.email || '')
   const [savingEmail, setSavingEmail] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
+  const [deliveryNote, setDeliveryNote] = useState(order.deliveryNote || '')
   const actionLock = useRef(false)
+  const deliveryFormRef = useRef<HTMLFormElement | null>(null)
+  const isManual = isManualFulfillment(order.fulfillmentMode)
+  const deliveryFiles = Array.isArray(order.deliveryFiles) ? order.deliveryFiles : []
 
   const status = order.status || 'pending'
   const canMarkPaid = status === 'pending'
-  const canMarkDelivered = status === 'paid' && !!order.cardKey
+  const canMarkDelivered = status === 'paid' && (isManual || !!order.cardKey)
   const canCancel = status === 'pending'
   const canDelete = true
 
@@ -60,8 +66,11 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
       }
       if (action === 'delivered') {
         if (!confirm(t('admin.orders.confirmMarkDelivered'))) return
-        await markOrderDelivered(order.orderId)
+        const formData = isManual ? new FormData(deliveryFormRef.current || undefined) : undefined
+        if (isManual) formData?.set('deliveryNote', deliveryNote)
+        await markOrderDelivered(order.orderId, formData)
         toast.success(t('common.success'))
+        router.refresh()
         return
       }
       if (action === 'cancel') {
@@ -70,7 +79,10 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
         toast.success(t('common.success'))
       }
     } catch (e: any) {
-      toast.error(e.message)
+      const message = typeof e?.message === 'string' && e.message.startsWith('admin.orders.')
+        ? t(e.message)
+        : e.message
+      toast.error(message)
     } finally {
       setActionLoading(false)
       actionLock.current = false
@@ -111,7 +123,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
             {canMarkPaid && (
               <Button variant="outline" onClick={() => handleStatus('paid')} disabled={actionLoading}>{t('admin.orders.markPaid')}</Button>
             )}
-            {canMarkDelivered && (
+            {canMarkDelivered && !isManual && (
               <Button variant="outline" onClick={() => handleStatus('delivered')} disabled={actionLoading}>{t('admin.orders.markDelivered')}</Button>
             )}
             {canCancel && (
@@ -210,10 +222,12 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
               {order.tradeNo ? <CopyButton text={order.tradeNo} /> : <div className="text-muted-foreground">-</div>}
             </div>
 
+            {!isManual && (
             <div className="space-y-1">
               <div className="text-sm text-muted-foreground">{t('admin.orders.cardKey')}</div>
               {order.cardKey ? <CopyButton text={order.cardKey} /> : <div className="text-muted-foreground">-</div>}
             </div>
+            )}
 
             <div className="space-y-1">
               <div className="text-sm text-muted-foreground">{t('admin.orders.createdAt')}</div>
@@ -244,6 +258,50 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
               </div>
             </div>
           )}
+
+          <div className="space-y-3 rounded-md border bg-muted/30 p-4">
+            <div className="text-sm font-medium">{t('admin.orders.fulfillmentTitle')}</div>
+            <div className="text-sm text-muted-foreground">
+              {isManual ? t('admin.orders.fulfillmentManual') : t('admin.orders.fulfillmentAuto')}
+            </div>
+            {isManual && status === 'paid' && (
+              <form ref={deliveryFormRef} className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="deliveryNote">{t('admin.orders.deliveryNote')}</Label>
+                  <Textarea
+                    id="deliveryNote"
+                    name="deliveryNote"
+                    value={deliveryNote}
+                    onChange={(event) => setDeliveryNote(event.target.value)}
+                    placeholder={t('admin.orders.deliveryNotePlaceholder')}
+                    className="min-h-28"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="deliveryFiles">{t('admin.orders.deliveryFiles')}</Label>
+                  <Input id="deliveryFiles" name="deliveryFiles" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.zip,.7z" />
+                  <p className="text-xs text-muted-foreground">{t('admin.orders.deliveryFilesHint')}</p>
+                </div>
+                <Button type="button" onClick={() => handleStatus('delivered')} disabled={actionLoading}>
+                  {t('admin.orders.deliverNow')}
+                </Button>
+              </form>
+            )}
+            {(order.deliveryNote || deliveryFiles.length > 0) && (
+              <div className="space-y-2">
+                {order.deliveryNote && <p className="whitespace-pre-wrap text-sm">{order.deliveryNote}</p>}
+                {deliveryFiles.map((file: any) => (
+                  <a
+                    key={file.id}
+                    href={`/order/${order.orderId}/files/${file.id}`}
+                    className="block text-sm text-primary hover:underline"
+                  >
+                    {file.fileName}
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>

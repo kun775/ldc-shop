@@ -16,6 +16,7 @@ import { pullOneCardFromApi } from "@/lib/card-api"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
 import { resolveCheckoutPointUsage } from "@/lib/points/product-point-discount"
 import { parseCheckoutFieldConfigs, validateCheckoutFieldValues } from "@/lib/checkout-fields"
+import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
 
 const MAX_ORDER_QUANTITY = 10000
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -65,6 +66,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
             isShared: true,
             purchaseQuestions: true,
             checkoutFields: true,
+            fulfillmentMode: true,
             pointDiscountEnabled: true,
             pointDiscountPercent: true,
         }
@@ -144,12 +146,15 @@ export async function createOrder(productId: string, quantity: number = 1, email
     const finalAmount = pricing.finalAmount
 
     const isZeroPrice = finalAmount <= 0
+    const fulfillmentMode = parseFulfillmentMode(product.fulfillmentMode)
+    const manualFulfillment = isManualFulfillment(fulfillmentMode)
     const contactInfo = (email || '').trim()
     const resolvedContactInfo = contactInfo || null
     const resolvedDeliveryEmail = isValidEmail(contactInfo) ? contactInfo : null
 
     // 2. Check Stock
     const getAvailableStock = async () => {
+        if (manualFulfillment) return INFINITE_STOCK
         // For shared products, we just need ANY unused card to exist. Reservation status doesn't matter since we don't reserve.
         if (product.isShared) {
             const result = await db.select({ count: sql<number>`count(*)` })
@@ -226,6 +231,11 @@ export async function createOrder(productId: string, quantity: number = 1, email
         const { queryOrderStatus } = await import("@/lib/epay")
 
         const reservedCards: { id: number, key: string }[] = []
+
+        if (manualFulfillment) {
+            await createOrderRecord([], '', isZeroPrice, pointsToUse, finalAmount, user, session?.user?.username, resolvedContactInfo, product, orderId, quantity, checkoutFieldValuesPayload)
+            return
+        }
 
         // If shared product, SKIP reservation logic. We just confirm we have stock (already checked above)
         if (product.isShared) {
@@ -381,6 +391,26 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
         try {
             if (isZeroPrice) {
+                if (manualFulfillment) {
+                    await db.insert(orders).values({
+                        orderId,
+                        productId: product.id,
+                        productName: product.name,
+                        amount: finalAmount.toString(),
+                        email: resolvedContactInfo,
+                        userId: user?.id || null,
+                        username: normalizedUsername,
+                        status: 'paid',
+                        paidAt: new Date(),
+                        tradeNo: 'POINTS_REDEMPTION',
+                        pointsUsed: pointsToUse,
+                        quantity: qty,
+                        checkoutFieldValues: checkoutFieldValuesJson,
+                        fulfillmentMode,
+                        createdAt: new Date()
+                    });
+                    orderInserted = true
+                } else {
                 const cardIds = reservedCards.map(c => c.id)
                 if (cardIds.length > 0) {
                     if (product.isShared) {
@@ -415,9 +445,11 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     pointsUsed: pointsToUse,
                     quantity: qty,
                     checkoutFieldValues: checkoutFieldValuesJson,
+                    fulfillmentMode,
                     createdAt: new Date()
                 });
                 orderInserted = true
+                }
             }
 
             if (!isZeroPrice) {
@@ -435,6 +467,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     cardIds: cardIdsValue,
                     quantity: qty,
                     checkoutFieldValues: checkoutFieldValuesJson,
+                    fulfillmentMode,
                     createdAt: new Date()
                 });
                 orderInserted = true
@@ -463,9 +496,9 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     try {
                         await createUserNotification({
                             userId: user.id,
-                            type: 'order_delivered',
-                            titleKey: 'profile.notifications.orderDeliveredTitle',
-                            contentKey: 'profile.notifications.orderDeliveredBody',
+                            type: manualFulfillment ? 'order_paid' : 'order_delivered',
+                            titleKey: manualFulfillment ? 'profile.notifications.orderPaidManualTitle' : 'profile.notifications.orderDeliveredTitle',
+                            contentKey: manualFulfillment ? 'profile.notifications.orderPaidManualBody' : 'profile.notifications.orderDeliveredBody',
                             data: {
                                 params: {
                                     orderId,
@@ -479,7 +512,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     }
                 }
 
-                if (!product.isShared && !!cardIdsValue) {
+                if (!manualFulfillment && !product.isShared && !!cardIdsValue) {
                     await autoReplenishByApi(product.id, `order:${orderId}:zero_price`)
                 }
 

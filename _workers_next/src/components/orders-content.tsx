@@ -11,14 +11,18 @@ import { ClientDate } from "@/components/client-date"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { isPaymentOrder } from "@/lib/payment"
+import { isManualFulfillment } from "@/lib/fulfillment"
 
 interface Order {
     orderId: string
     productId?: string | null
     productName: string
     amount: string
+    quantity?: number | null
     status: string | null
     createdAt: Date | null
+    paidAt?: Date | null
+    fulfillmentMode?: string | null
     canReview?: boolean
 }
 
@@ -131,7 +135,14 @@ export function OrdersContent({ orders, productVariantLabels = {}, productImages
                                             <span className="font-mono truncate">{order.orderId}</span>
                                             <ClientDate value={order.createdAt} />
                                         </div>
+                                        <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                                            <span>{t('orders.quantity', { count: Number(order.quantity || 1) })}</span>
+                                            {isManualFulfillment(order.fulfillmentMode) && <span>{t('order.fulfillmentManual')}</span>}
+                                            {order.status === 'paid' && isManualFulfillment(order.fulfillmentMode) && <span>{t('orders.awaitingDelivery')}</span>}
+                                            {order.status === 'delivered' && isManualFulfillment(order.fulfillmentMode) && <span>{t('orders.downloadReady')}</span>}
+                                        </div>
                                         <div className="mt-2 flex flex-wrap items-center gap-2 sm:justify-end">
+                                            <Button size="sm" variant="outline">{t('orders.viewDetail')}</Button>
                                             {order.canReview && !isPaymentOrder(order.productId) && (
                                                 <Link
                                                     href={`/buy/${order.productId}#reviews`}

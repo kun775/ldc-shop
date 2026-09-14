@@ -44,6 +44,7 @@ interface Product {
     purchaseWarning?: string | null
     purchaseQuestions?: string | null
     checkoutFields?: string | null
+    fulfillmentMode?: string | null
     pointDiscountEnabled?: boolean | null
     pointDiscountPercent?: number | null
     isHot?: boolean | null
@@ -132,6 +133,7 @@ export function BuyContent({
                     purchaseWarning: v.purchaseWarning ?? null,
                     purchaseQuestions: v.purchaseQuestions ?? null,
                     checkoutFields: v.checkoutFields ?? null,
+                    fulfillmentMode: v.fulfillmentMode ?? null,
                     pointDiscountEnabled: v.pointDiscountEnabled ?? false,
                     pointDiscountPercent: v.pointDiscountPercent ?? 0,
                     isHot: v.isHot ?? false,
@@ -597,6 +599,11 @@ export function BuyContent({
                                         {typeof displayProduct.purchaseLimit === 'number' && displayProduct.purchaseLimit > 0 && (
                                             <Badge variant="secondary" className="rounded-lg border border-border/40 bg-muted/40 px-3 py-1.5 font-medium">
                                                 {t('buy.purchaseLimit', { limit: displayProduct.purchaseLimit })}
+                                            </Badge>
+                                        )}
+                                        {displayProduct.fulfillmentMode === 'manual' && (
+                                            <Badge variant="secondary" className="rounded-lg border border-border/40 bg-muted/40 px-3 py-1.5 font-medium">
+                                                {t('order.fulfillmentManual')}
                                             </Badge>
                                         )}
                                     </div>

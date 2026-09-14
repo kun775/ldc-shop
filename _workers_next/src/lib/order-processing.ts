@@ -9,6 +9,7 @@ import { pullOneCardFromApi } from "@/lib/card-api";
 import { RESERVATION_TTL_MS } from "@/lib/constants";
 import { updateTag } from "next/cache";
 import { after } from "next/server";
+import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -135,9 +136,67 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
             where: eq(products.id, order.productId),
             columns: {
                 isShared: true,
-                name: true
+                name: true,
+                fulfillmentMode: true
             }
         });
+
+        const fulfillmentMode = parseFulfillmentMode(order.fulfillmentMode || product?.fulfillmentMode);
+        if (isManualFulfillment(fulfillmentMode)) {
+            await db.update(orders)
+                .set({
+                    status: 'paid',
+                    paidAt: new Date(),
+                    tradeNo: tradeNo,
+                    fulfillmentMode,
+                    currentPaymentId: null
+                })
+                .where(eq(orders.orderId, orderId));
+
+            try {
+                if (order.userId) {
+                    await createUserNotification({
+                        userId: order.userId,
+                        type: 'order_paid',
+                        titleKey: 'profile.notifications.orderPaidManualTitle',
+                        contentKey: 'profile.notifications.orderPaidManualBody',
+                        data: {
+                            params: {
+                                orderId,
+                                productName: product?.name || order.productName || 'Product'
+                            },
+                            href: `/order/${orderId}`
+                        }
+                    })
+                }
+            } catch (err) {
+                console.error('[Notification] Manual fulfillment user notify failed:', err);
+            }
+
+            after(async () => {
+                try {
+                    const user = await db.query.loginUsers.findFirst({
+                        where: eq(users.userId, order.userId || ''),
+                        columns: { username: true }
+                    }).catch(() => null);
+
+                    await notifyAdminPaymentSuccess({
+                        orderId: orderId,
+                        productName: product?.name || order.productName,
+                        amount: order.amount,
+                        username: user?.username,
+                        email: order.email,
+                        tradeNo: tradeNo,
+                        checkoutFieldValues: order.checkoutFieldValues
+                    });
+                } catch (err) {
+                    console.error('[Notification] Manual fulfillment notify failed:', err);
+                }
+            })
+
+            await refreshAggregates();
+            return { success: true, status: 'processed' };
+        }
 
         const isShared = product?.isShared;
 

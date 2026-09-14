@@ -6,6 +6,7 @@ import { notFound } from "next/navigation"
 import { cookies } from "next/headers"
 import { OrderContent } from "@/components/order-content"
 import { ensureDatabaseInitialized, getProductVariantLabels } from "@/lib/db/queries"
+import { listDeliveryFiles } from "@/lib/delivery-files"
 
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params
@@ -44,6 +45,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
 
     const labels = order.productId ? await getProductVariantLabels([order.productId]) : {}
     const productVariantLabel = order.productId ? labels[order.productId] ?? null : null
+    const deliveryFiles = (isOwner || pending?.value === id) ? await listDeliveryFiles(order.orderId) : []
 
     return (
         <OrderContent
@@ -53,12 +55,18 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                 productName: order.productName,
                 productVariantLabel,
                 amount: order.amount,
+                pointsUsed: Number(order.pointsUsed || 0),
+                quantity: Number(order.quantity || 1),
                 status: order.status || 'pending',
                 cardKey: order.cardKey,
                 payee: order.payee,
                 createdAt: order.createdAt,
                 paidAt: order.paidAt,
-                checkoutFieldValues: order.checkoutFieldValues
+                deliveredAt: order.deliveredAt,
+                checkoutFieldValues: order.checkoutFieldValues,
+                fulfillmentMode: order.fulfillmentMode,
+                deliveryNote: order.deliveryNote,
+                deliveryFiles,
             }}
             canViewKey={canViewKey}
             isOwner={isOwner}

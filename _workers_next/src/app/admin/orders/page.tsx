@@ -119,6 +119,7 @@ export default async function AdminOrdersPage(props: {
                 tradeNo: o.tradeNo,
                 createdAt: o.createdAt,
                 checkoutFieldValues: o.checkoutFieldValues,
+                fulfillmentMode: o.fulfillmentMode,
             }))}
             productVariantLabels={productVariantLabels}
             total={total}

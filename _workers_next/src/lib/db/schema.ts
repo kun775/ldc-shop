@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, blob } from 'drizzle-orm/sqlite-core';
 
 // Products
 export const products = sqliteTable('products', {
@@ -29,6 +29,7 @@ export const products = sqliteTable('products', {
     variantLabel: text('variant_label'),
     purchaseQuestions: text('purchase_questions'),
     checkoutFields: text('checkout_fields'),
+    fulfillmentMode: text('fulfillment_mode').default('auto'),
 });
 
 // Cards (Stock)
@@ -64,6 +65,20 @@ export const orders = sqliteTable('orders', {
     quantity: integer('quantity').default(1).notNull(),
     currentPaymentId: text('current_payment_id'),
     checkoutFieldValues: text('checkout_field_values'),
+    fulfillmentMode: text('fulfillment_mode').default('auto'),
+    deliveryNote: text('delivery_note'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
+});
+
+export const orderDeliveryFiles = sqliteTable('order_delivery_files', {
+    id: integer('id', { mode: 'number' }).primaryKey({ autoIncrement: true }),
+    orderId: text('order_id').notNull(),
+    fileName: text('file_name').notNull(),
+    contentType: text('content_type').notNull(),
+    size: integer('size').notNull(),
+    storage: text('storage').notNull(),
+    objectKey: text('object_key'),
+    content: blob('content'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
 });
 

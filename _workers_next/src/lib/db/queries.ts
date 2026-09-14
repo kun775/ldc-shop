@@ -11,7 +11,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 22;
+const CURRENT_SCHEMA_VERSION = 23;
 const dbInitializationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
@@ -217,6 +217,7 @@ export async function ensureDatabaseInitialized() {
             // IMPORTANT: Even if table exists, ensure columns exist!
             await ensureProductsColumns();
             await ensureOrdersColumns();
+            await ensureOrderDeliveryFilesTable();
             await ensureCardsColumns();
             await ensureCardKeyDuplicatesAllowed();
             await ensureLoginUsersTable();
@@ -269,7 +270,8 @@ export async function ensureDatabaseInitialized() {
             variant_group_id TEXT,
             variant_label TEXT,
             purchase_questions TEXT,
-            checkout_fields TEXT
+            checkout_fields TEXT,
+            fulfillment_mode TEXT DEFAULT 'auto'
         );
         
         -- Cards (stock) table
@@ -305,8 +307,23 @@ export async function ensureDatabaseInitialized() {
             quantity INTEGER DEFAULT 1,
             current_payment_id TEXT,
             checkout_field_values TEXT,
+            fulfillment_mode TEXT DEFAULT 'auto',
+            delivery_note TEXT,
             created_at INTEGER DEFAULT (unixepoch() * 1000)
         );
+
+        CREATE TABLE IF NOT EXISTS order_delivery_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            storage TEXT NOT NULL,
+            object_key TEXT,
+            content BLOB,
+            created_at INTEGER DEFAULT (unixepoch() * 1000)
+        );
+        CREATE INDEX IF NOT EXISTS order_delivery_files_order_id_idx ON order_delivery_files(order_id);
         
         -- Login users table
         CREATE TABLE IF NOT EXISTS login_users (
@@ -456,6 +473,7 @@ export async function ensureDatabaseInitialized() {
         await migrateMalformedGitHubUserIds();
         await migrateGitHubUsersDedupAndCanonicalize();
         await ensureIndexes();
+        await ensureOrderDeliveryFilesTable();
         await backfillProductAggregates();
 
         // Set initial schema version
@@ -491,6 +509,7 @@ async function ensureProductsColumns() {
         await safeAddColumn('products', 'purchase_questions', 'TEXT');
         await safeAddColumn('products', 'product_images', 'TEXT');
         await safeAddColumn('products', 'checkout_fields', 'TEXT');
+        await safeAddColumn('products', 'fulfillment_mode', "TEXT DEFAULT 'auto'");
     });
 }
 
@@ -501,7 +520,26 @@ async function ensureOrdersColumns() {
         await safeAddColumn('orders', 'payee', 'TEXT');
         await safeAddColumn('orders', 'card_ids', 'TEXT');
         await safeAddColumn('orders', 'checkout_field_values', 'TEXT');
+        await safeAddColumn('orders', 'fulfillment_mode', "TEXT DEFAULT 'auto'");
+        await safeAddColumn('orders', 'delivery_note', 'TEXT');
     });
+}
+
+async function ensureOrderDeliveryFilesTable() {
+    await db.run(sql`
+        CREATE TABLE IF NOT EXISTS order_delivery_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            storage TEXT NOT NULL,
+            object_key TEXT,
+            content BLOB,
+            created_at INTEGER DEFAULT (unixepoch() * 1000)
+        )
+    `);
+    await db.run(sql`CREATE INDEX IF NOT EXISTS order_delivery_files_order_id_idx ON order_delivery_files(order_id)`);
 }
 
 async function ensureCardsColumns() {
@@ -572,7 +610,7 @@ export async function recalcProductAggregates(productId: string) {
 
     const product = await db.query.products.findFirst({
         where: eq(products.id, pid),
-        columns: { isShared: true }
+        columns: { isShared: true, fulfillmentMode: true }
     });
     if (!product) return;
 
@@ -626,7 +664,9 @@ export async function recalcProductAggregates(productId: string) {
         if (!isMissingTableOrColumn(error)) throw error;
     }
 
-    const stockCount = product.isShared ? (unusedCount > 0 ? INFINITE_STOCK : 0) : availableCount;
+    const stockCount = product.fulfillmentMode === 'manual'
+        ? INFINITE_STOCK
+        : (product.isShared ? (unusedCount > 0 ? INFINITE_STOCK : 0) : availableCount);
 
     await db.update(products)
         .set({
@@ -658,6 +698,7 @@ export async function recalcProductAggregatesForMany(productIds: string[]) {
 
     const aggregates = new Map<string, {
         isShared: boolean;
+        fulfillmentMode: string | null;
         unused: number;
         available: number;
         locked: number;
@@ -668,12 +709,13 @@ export async function recalcProductAggregatesForMany(productIds: string[]) {
 
     for (let i = 0; i < ids.length; i += QUERY_BATCH_SIZE) {
         const batch = ids.slice(i, i + QUERY_BATCH_SIZE);
-        const rows = await db.select({ id: products.id, isShared: products.isShared })
+        const rows = await db.select({ id: products.id, isShared: products.isShared, fulfillmentMode: products.fulfillmentMode })
             .from(products)
             .where(inArray(products.id, batch));
         for (const row of rows) {
             aggregates.set(row.id, {
                 isShared: !!row.isShared,
+                fulfillmentMode: row.fulfillmentMode || 'auto',
                 unused: 0,
                 available: 0,
                 locked: 0,
@@ -758,7 +800,9 @@ export async function recalcProductAggregatesForMany(productIds: string[]) {
 
     const updates = existingIds.map((id) => {
         const agg = aggregates.get(id)!;
-        const stockCount = agg.isShared ? (agg.unused > 0 ? INFINITE_STOCK : 0) : agg.available;
+        const stockCount = agg.fulfillmentMode === 'manual'
+            ? INFINITE_STOCK
+            : (agg.isShared ? (agg.unused > 0 ? INFINITE_STOCK : 0) : agg.available);
         return {
             id,
             stockCount,
@@ -953,6 +997,7 @@ export async function getActiveProducts(options?: { isLoggedIn?: boolean; trustL
             category: products.category,
             isHot: products.isHot,
             isShared: products.isShared,
+            fulfillmentMode: products.fulfillmentMode,
             purchaseLimit: products.purchaseLimit,
             pointDiscountEnabled: products.pointDiscountEnabled,
             pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
@@ -988,7 +1033,8 @@ function groupProductsAsVariants<T extends {
     reviewCount?: number;
     isHot?: boolean | null;
     isShared?: boolean | null;
-}>(rows: T[]): (T & { variantCount?: number; priceMin?: number; priceMax?: number; totalSold?: number; totalStock?: number; totalLocked?: number; totalReviewCount?: number; avgRating?: number; groupHot?: boolean; groupShared?: boolean; allVariantIds?: string[] })[] {
+    fulfillmentMode?: string | null;
+}>(rows: T[]): (T & { variantCount?: number; priceMin?: number; priceMax?: number; totalSold?: number; totalStock?: number; totalLocked?: number; totalReviewCount?: number; avgRating?: number; groupHot?: boolean; groupShared?: boolean; groupManual?: boolean; allVariantIds?: string[] })[] {
     const byGroup = new Map<string, T[]>();
     for (const row of rows) {
         const rawKey = (row.variantGroupId && row.variantGroupId.trim()) || null;
@@ -997,7 +1043,7 @@ function groupProductsAsVariants<T extends {
         list.push(row);
         byGroup.set(key, list);
     }
-    const result: (T & { variantCount?: number; priceMin?: number; priceMax?: number; totalSold?: number; totalStock?: number; totalLocked?: number; totalReviewCount?: number; avgRating?: number; groupHot?: boolean; groupShared?: boolean; allVariantIds?: string[] })[] = [];
+    const result: (T & { variantCount?: number; priceMin?: number; priceMax?: number; totalSold?: number; totalStock?: number; totalLocked?: number; totalReviewCount?: number; avgRating?: number; groupHot?: boolean; groupShared?: boolean; groupManual?: boolean; allVariantIds?: string[] })[] = [];
     for (const list of byGroup.values()) {
         const rep = list.slice().sort((a, b) => {
             const soA = a.sortOrder ?? 0;
@@ -1021,8 +1067,9 @@ function groupProductsAsVariants<T extends {
             const avgRating = totalReviewCount > 0 ? ratingSum / totalReviewCount : 0;
             const groupHot = list.some((p) => !!p.isHot);
             const groupShared = list.some((p) => !!p.isShared);
+            const groupManual = list.some((p) => p.fulfillmentMode === 'manual');
             const allVariantIds = list.map((p) => p.id);
-            result.push({ ...rep, variantCount, priceMin, priceMax, totalSold, totalStock, totalLocked, totalReviewCount, avgRating, groupHot, groupShared, allVariantIds });
+            result.push({ ...rep, variantCount, priceMin, priceMax, totalSold, totalStock, totalLocked, totalReviewCount, avgRating, groupHot, groupShared, groupManual, allVariantIds });
         } else {
             result.push({ ...rep });
         }
@@ -1135,7 +1182,8 @@ export async function getProduct(id: string, options?: { isLoggedIn?: boolean; t
             variantGroupId: products.variantGroupId,
             variantLabel: products.variantLabel,
             purchaseQuestions: products.purchaseQuestions,
-            checkoutFields: products.checkoutFields
+            checkoutFields: products.checkoutFields,
+            fulfillmentMode: products.fulfillmentMode
         })
             .from(products)
             .where(and(eq(products.id, id), visibilityCondition(options?.isLoggedIn, options?.trustLevel)))
@@ -1182,6 +1230,7 @@ export type ProductVariantRow = {
     purchaseWarning: string | null;
     purchaseQuestions: string | null;
     checkoutFields: string | null;
+    fulfillmentMode: string | null;
     pointDiscountEnabled: boolean | null;
     pointDiscountPercent: number;
 };
@@ -1209,6 +1258,7 @@ export async function getProductVariants(
             purchaseWarning: products.purchaseWarning,
             purchaseQuestions: products.purchaseQuestions,
             checkoutFields: products.checkoutFields,
+            fulfillmentMode: products.fulfillmentMode,
             pointDiscountEnabled: products.pointDiscountEnabled,
             pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
         })
@@ -1259,6 +1309,7 @@ export async function getProductForAdmin(id: string) {
             variantLabel: products.variantLabel,
             purchaseQuestions: products.purchaseQuestions,
             checkoutFields: products.checkoutFields,
+            fulfillmentMode: products.fulfillmentMode,
         })
             .from(products)
             .where(eq(products.id, id));
@@ -1624,6 +1675,7 @@ export async function searchActiveProducts(params: {
             category: products.category,
             isHot: products.isHot,
             isShared: products.isShared,
+            fulfillmentMode: products.fulfillmentMode,
             purchaseLimit: products.purchaseLimit,
             pointDiscountEnabled: products.pointDiscountEnabled,
             pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
@@ -1882,6 +1934,7 @@ async function migrateTimestampColumnsToMs() {
         { table: 'broadcast_reads', columns: ['created_at'] },
         { table: 'wishlist_items', columns: ['created_at'] },
         { table: 'wishlist_votes', columns: ['created_at'] },
+        { table: 'order_delivery_files', columns: ['created_at'] },
     ];
 
     for (const { table, columns } of tableColumns) {

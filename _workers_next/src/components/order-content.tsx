@@ -18,6 +18,8 @@ import { checkOrderStatus, cancelPendingOrder } from "@/actions/order"
 import { useRouter } from "next/navigation"
 import { isPaymentOrder } from "@/lib/payment"
 import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
+import { isManualFulfillment } from "@/lib/fulfillment"
+import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
 
 interface Order {
     orderId: string
@@ -25,12 +27,18 @@ interface Order {
     productName: string
     productVariantLabel?: string | null
     amount: string
+    pointsUsed?: number | null
+    quantity?: number | null
     status: string
     cardKey: string | null
     payee?: string | null
     createdAt: Date | null
     paidAt: Date | null
+    deliveredAt?: Date | null
     checkoutFieldValues?: string | null
+    fulfillmentMode?: string | null
+    deliveryNote?: string | null
+    deliveryFiles?: Array<{ id: number; fileName: string; size: number }>
 }
 
 interface OrderContentProps {
@@ -48,6 +56,12 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
     const submitLock = useRef(false)
     const isPayment = isPaymentOrder(order.productId)
     const checkoutFieldValues = parseCheckoutFieldValues(order.checkoutFieldValues)
+    const isManual = isManualFulfillment(order.fulfillmentMode)
+    const deliveryFiles = order.deliveryFiles || []
+    const paymentBreakdown = getOrderPaymentBreakdown({
+        amount: order.amount,
+        pointsUsed: order.pointsUsed
+    })
 
     const handleRefundConfirm = async () => {
         if (submitLock.current) return
@@ -81,7 +95,7 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
 
     const getStatusMessage = (status: string) => {
         switch (status) {
-            case 'paid': return isPayment ? t('payment.paidMessage') : t('order.stockDepleted')
+            case 'paid': return isPayment ? t('payment.paidMessage') : (isManual ? t('order.waitingManualDelivery') : t('order.stockDepleted'))
             case 'cancelled': return t('order.cancelledMessage')
             case 'refunded': return t('order.orderRefunded')
             default: return t('order.waitingPayment')
@@ -199,8 +213,11 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                             <div className="space-y-1">
                                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{t('order.amountPaid')}</p>
                                 <p className="font-semibold text-xl">
-                                    <span className="gradient-text">{Number(order.amount)}</span>
+                                    <span className="gradient-text">{paymentBreakdown.totalAmount}</span>
                                     <span className="text-xs font-normal text-muted-foreground ml-1.5">{t('common.credits')}</span>
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                    {t('admin.orders.ldcPaid')} {paymentBreakdown.ldcAmount} · {t('admin.orders.pointsDeduction')} {paymentBreakdown.pointsAmount} · {t('order.quantity')} {Number(order.quantity || 1)}
                                 </p>
                             </div>
                             <div className="h-12 w-12 bg-gradient-to-br from-primary/20 to-primary/5 rounded-xl flex items-center justify-center border border-primary/20">
@@ -220,6 +237,18 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                                 <p className="text-xs text-muted-foreground mb-1.5 uppercase tracking-wider">{t('order.paidAt')}</p>
                                 <p className="text-sm font-medium">
                                     <ClientDate value={order.paidAt} format="dateTime" placeholder="-" />
+                                </p>
+                            </div>
+                            <div className="p-4 bg-muted/20 rounded-xl border border-border/20">
+                                <p className="text-xs text-muted-foreground mb-1.5 uppercase tracking-wider">{t('order.fulfillment')}</p>
+                                <p className="text-sm font-medium">
+                                    {isManual ? t('order.fulfillmentManual') : t('order.fulfillmentAuto')}
+                                </p>
+                            </div>
+                            <div className="p-4 bg-muted/20 rounded-xl border border-border/20">
+                                <p className="text-xs text-muted-foreground mb-1.5 uppercase tracking-wider">{t('order.deliveredAt')}</p>
+                                <p className="text-sm font-medium">
+                                    <ClientDate value={order.deliveredAt} format="dateTime" placeholder="-" />
                                 </p>
                             </div>
                         </div>
@@ -249,9 +278,27 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                             <div className="space-y-4">
                                 <h3 className="font-semibold flex items-center gap-2">
                                     <CheckCircle2 className="h-4 w-4 text-green-500" />
-                                    {t('order.yourContent')}
+                                    {isManual ? t('order.deliveryContent') : t('order.yourContent')}
                                 </h3>
-                                {/* Terminal-style display */}
+                                {isManual ? (
+                                    <div className="space-y-3 rounded-xl border border-border/30 bg-muted/20 p-4">
+                                        {order.deliveryNote && <p className="whitespace-pre-wrap text-sm">{order.deliveryNote}</p>}
+                                        {deliveryFiles.length > 0 && (
+                                            <div className="space-y-2">
+                                                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('order.deliveryFiles')}</p>
+                                                {deliveryFiles.map((file) => (
+                                                    <a
+                                                        key={file.id}
+                                                        href={`/order/${order.orderId}/files/${file.id}`}
+                                                        className="block text-sm text-primary hover:underline"
+                                                    >
+                                                        {t('order.downloadFile', { name: file.fileName })}
+                                                    </a>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
                                 <div className="relative group">
                                     <div className="absolute -inset-0.5 bg-gradient-to-r from-primary/50 to-accent/50 rounded-xl blur opacity-20 group-hover:opacity-40 transition duration-300" />
                                     <div className="relative p-4 bg-slate-950 rounded-xl font-mono text-sm text-slate-100 break-all whitespace-pre-wrap pr-14 border border-slate-800">
@@ -268,12 +315,15 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                                         </div>
                                     </div>
                                 </div>
+                                )}
+                                {!isManual && (
                                 <p className="text-xs text-muted-foreground flex items-center gap-1.5">
                                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                     </svg>
                                     {t('order.saveKeySecurely')}
                                 </p>
+                                )}
                             </div>
                         ) : (
                             <div className="p-4 bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 rounded-xl flex gap-3 text-sm border border-yellow-500/20">
@@ -283,14 +333,14 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                         )
                     ) : (
                         <div className={`flex items-center justify-between gap-3 p-4 rounded-xl border ${order.status === 'paid'
-                            ? (isPayment
+                            ? (isPayment || isManual
                                 ? 'bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20'
                                 : 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20')
                             : 'bg-muted/20 text-muted-foreground border-border/30'
                             }`}>
                             <div className="flex items-center gap-3">
                                 {order.status === 'paid' ? (
-                                    isPayment ? <CheckCircle2 className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />
+                                    isPayment || isManual ? <CheckCircle2 className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />
                                 ) : (
                                     <Clock className="h-5 w-5" />
                                 )}

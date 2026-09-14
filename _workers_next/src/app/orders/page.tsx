@@ -58,8 +58,11 @@ export default async function OrdersPage() {
                 productId: o.productId,
                 productName: o.productName,
                 amount: o.amount,
+                quantity: Number(o.quantity || 1),
                 status: o.status,
                 createdAt: o.createdAt,
+                paidAt: o.paidAt,
+                fulfillmentMode: o.fulfillmentMode,
                 canReview: o.status === 'delivered' && !reviewedOrderIds.includes(o.orderId)
             }))}
             productVariantLabels={productVariantLabels}

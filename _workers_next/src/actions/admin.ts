@@ -13,6 +13,7 @@ import { unstable_noStore } from "next/cache"
 import { isThemeFont } from "@/lib/theme-fonts"
 import { normalizeCurrencyUnit } from "@/lib/currency-unit"
 import { serializeCheckoutFieldConfigs } from "@/lib/checkout-fields"
+import { parseFulfillmentMode } from "@/lib/fulfillment"
 import { normalizeProductPointDiscountConfig } from "@/lib/points/product-point-discount"
 import {
     PRODUCT_GALLERY_MAX_ITEMS,
@@ -83,6 +84,7 @@ export async function saveProduct(formData: FormData) {
         }
     }
     const checkoutFields = serializeCheckoutFieldConfigs(formData.get('checkoutFields'))
+    const fulfillmentMode = parseFulfillmentMode(formData.get('fulfillmentMode'))
     const parsedVisibility = Number.parseInt(visibilityLevelRaw, 10)
     const visibilityLevel = Number.isFinite(parsedVisibility) ? parsedVisibility : -1
     if (![ -1, 0, 1, 2, 3 ].includes(visibilityLevel)) {
@@ -139,7 +141,8 @@ export async function saveProduct(formData: FormData) {
             variantGroupId,
             variantLabel,
             purchaseQuestions,
-            checkoutFields
+            checkoutFields,
+            fulfillmentMode
         }).onConflictDoUpdate({
             target: products.id,
             set: {
@@ -160,7 +163,8 @@ export async function saveProduct(formData: FormData) {
                 variantGroupId,
                 variantLabel,
                 purchaseQuestions,
-                checkoutFields
+                checkoutFields,
+                fulfillmentMode
             }
         })
     }
@@ -193,6 +197,9 @@ export async function saveProduct(formData: FormData) {
         } catch { /* column exists */ }
         try {
             await db.run(sql.raw(`ALTER TABLE products ADD COLUMN checkout_fields TEXT`));
+        } catch { /* column exists */ }
+        try {
+            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN fulfillment_mode TEXT DEFAULT 'auto'`));
         } catch { /* column exists */ }
     }
 
