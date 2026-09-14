@@ -4,6 +4,7 @@ import { getProductForAdminAction, saveProduct } from "@/actions/admin"
 import { ProductContentSection } from "@/components/admin/product-content-section"
 import { ProductMediaSection } from "@/components/admin/product-media-section"
 import { ProductQuestionsSection } from "@/components/admin/product-questions-section"
+import { ProductCheckoutFieldsSection } from "@/components/admin/product-checkout-fields-section"
 import { ProductSettingsSidebar } from "@/components/admin/product-settings-sidebar"
 import { prepareUploadedImage } from "@/lib/client-image"
 import { Loader2 } from "lucide-react"
@@ -16,6 +17,7 @@ import {
     normalizeProductImageRefs,
     parseStoredProductImages,
 } from "@/lib/product-images"
+import { parseCheckoutFieldConfigs, type CheckoutFieldConfig } from "@/lib/checkout-fields"
 
 const PRODUCT_IMAGE_UPLOAD_MAX_BYTES = 500 * 1024
 
@@ -47,6 +49,8 @@ export default function ProductForm({ product, categories = [] }: { product?: an
         return []
     })
     const [showQuestions, setShowQuestions] = useState(purchaseQuestions.length > 0)
+    const [checkoutFields, setCheckoutFields] = useState<CheckoutFieldConfig[]>(() => parseCheckoutFieldConfigs(product?.checkoutFields))
+    const [showCheckoutFields, setShowCheckoutFields] = useState(() => parseCheckoutFieldConfigs(product?.checkoutFields).length > 0)
     const { t } = useI18n()
     const hasRoomForMoreGalleryImages = productGalleryValues.length < PRODUCT_GALLERY_MAX_ITEMS - 1
 
@@ -77,6 +81,9 @@ export default function ProductForm({ product, categories = [] }: { product?: an
             setPurchaseQuestions([])
             setShowQuestions(false)
         }
+        const nextCheckoutFields = parseCheckoutFieldConfigs(product?.checkoutFields)
+        setCheckoutFields(nextCheckoutFields)
+        setShowCheckoutFields(nextCheckoutFields.length > 0)
         setFormSeed((s) => s + 1)
     }, [product?.id])
 
@@ -104,6 +111,9 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                             }
                         }
                     } catch { /* ignore */ }
+                    const nextCheckoutFields = parseCheckoutFieldConfigs((latest as any)?.checkoutFields)
+                    setCheckoutFields(nextCheckoutFields)
+                    setShowCheckoutFields(nextCheckoutFields.length > 0)
                     setFormSeed((s) => s + 1)
                 } catch {
                     // ignore
@@ -296,6 +306,13 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                                 setShowQuestions={setShowQuestions}
                                 purchaseQuestions={purchaseQuestions}
                                 setPurchaseQuestions={setPurchaseQuestions}
+                                t={t}
+                            />
+                            <ProductCheckoutFieldsSection
+                                showCheckoutFields={showCheckoutFields}
+                                setShowCheckoutFields={setShowCheckoutFields}
+                                checkoutFields={checkoutFields}
+                                setCheckoutFields={setCheckoutFields}
                                 t={t}
                             />
                         </div>

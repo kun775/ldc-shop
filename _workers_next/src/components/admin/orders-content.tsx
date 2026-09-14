@@ -16,6 +16,7 @@ import { deleteOrders } from "@/actions/admin-orders"
 import { toast } from "sonner"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
+import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
 
 interface Order {
     orderId: string
@@ -30,6 +31,7 @@ interface Order {
     cardKey: string | null
     tradeNo: string | null
     createdAt: Date | null
+    checkoutFieldValues?: string | null
 }
 
 function buildUrl(params: Record<string, string | number | undefined | null>) {
@@ -286,6 +288,7 @@ export function AdminOrdersContent({
                                 amount: order.amount,
                                 pointsUsed: order.pointsUsed
                             })
+                            const checkoutFieldValues = parseCheckoutFieldValues(order.checkoutFieldValues)
 
                             return (
                                 <TableRow key={order.orderId}>
@@ -328,6 +331,15 @@ export function AdminOrdersContent({
                                         <span>{order.productName}</span>
                                         {order.productId && productVariantLabels[order.productId] && (
                                             <span className="ml-1.5 text-muted-foreground">· {productVariantLabels[order.productId]}</span>
+                                        )}
+                                        {checkoutFieldValues.length > 0 && (
+                                            <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                                                {checkoutFieldValues.map((field) => (
+                                                    <div key={field.id} className="truncate">
+                                                        {field.label}: {field.value}
+                                                    </div>
+                                                ))}
+                                            </div>
                                         )}
                                     </TableCell>
                                     <TableCell>

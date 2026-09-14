@@ -117,7 +117,8 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                         amount: order.amount,
                         username: user?.username,
                         email: order.email,
-                        tradeNo: tradeNo
+                        tradeNo: tradeNo,
+                        checkoutFieldValues: order.checkoutFieldValues
                     });
                 } catch (err) {
                     console.error('[Notification] Payment order notify failed:', err);
@@ -186,7 +187,8 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                             amount: order.amount,
                             username: user?.username,
                             email: order.email,
-                            tradeNo: tradeNo
+                            tradeNo: tradeNo,
+                            checkoutFieldValues: order.checkoutFieldValues
                         });
                     } catch (err) {
                         console.error('[Notification] Shared product notify failed:', err);
@@ -225,7 +227,8 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                             amount: order.amount,
                             username: user?.username,
                             email: order.email,
-                            tradeNo: tradeNo
+                            tradeNo: tradeNo,
+                            checkoutFieldValues: order.checkoutFieldValues
                         });
                     } catch (err) {
                         console.error('[Notification] Shared product notify failed:', err);
@@ -326,7 +329,8 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                         amount: order.amount,
                         username: user?.username,
                         email: order.email,
-                        tradeNo: tradeNo
+                        tradeNo: tradeNo,
+                        checkoutFieldValues: order.checkoutFieldValues
                     });
                 } catch (err) {
                     console.error('[Notification] Delivery notify failed:', err);
@@ -368,7 +372,8 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                         amount: order.amount,
                         username: user?.username,
                         email: order.email,
-                        tradeNo: tradeNo
+                        tradeNo: tradeNo,
+                        checkoutFieldValues: order.checkoutFieldValues
                     });
                 } catch (err) {
                     console.error('[Notification] No-stock notify failed:', err);

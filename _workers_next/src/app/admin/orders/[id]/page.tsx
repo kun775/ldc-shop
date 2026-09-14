@@ -3,12 +3,13 @@ import { db } from "@/lib/db"
 import { orders } from "@/lib/db/schema"
 import { eq } from "drizzle-orm"
 import { AdminOrderDetailContent } from "@/components/admin/order-detail-content"
-import { getProductVariantLabels } from "@/lib/db/queries"
+import { ensureDatabaseInitialized, getProductVariantLabels } from "@/lib/db/queries"
 import { unstable_noStore } from "next/cache"
 
 export default async function AdminOrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   unstable_noStore()
   const { id } = await params
+  await ensureDatabaseInitialized()
   const order = await db.query.orders.findFirst({ where: eq(orders.orderId, id) })
   if (!order) return notFound()
 
@@ -33,6 +34,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
         createdAt: order.createdAt,
         paidAt: order.paidAt,
         deliveredAt: order.deliveredAt,
+        checkoutFieldValues: order.checkoutFieldValues,
       }}
     />
   )

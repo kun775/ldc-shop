@@ -2,6 +2,7 @@ import { db } from "./db"
 import { settings } from "./db/schema"
 import { inArray } from "drizzle-orm"
 import { resolveEffectiveShopLogo } from "@/lib/shop-logo"
+import { parseCheckoutFieldValues, type CheckoutFieldValue } from "@/lib/checkout-fields"
 
 async function getSettingsUncached(keys: string[]): Promise<Record<string, string>> {
     try {
@@ -219,6 +220,7 @@ const messages = {
         tradeNo: '交易号',
         guest: '访客',
         noEmail: '无邮箱',
+        checkoutFields: '下单信息',
         refundTitle: '↩️ 收到退款申请',
         reason: '原因',
         noReason: '未提供原因',
@@ -237,6 +239,7 @@ const messages = {
         tradeNo: 'Trade No',
         guest: 'Guest',
         noEmail: 'No email',
+        checkoutFields: 'Checkout information',
         refundTitle: '↩️ Refund Requested',
         reason: 'Reason',
         noReason: 'No reason provided',
@@ -245,16 +248,30 @@ const messages = {
     }
 }
 
+function resolveCheckoutFieldLines(order: {
+    checkoutFieldValues?: string | CheckoutFieldValue[] | null
+}) {
+    const values = Array.isArray(order.checkoutFieldValues)
+        ? order.checkoutFieldValues
+        : parseCheckoutFieldValues(order.checkoutFieldValues)
+    return values.map((item) => `${item.label}: ${item.value}`)
+}
+
 export async function notifyAdminPaymentSuccess(order: {
     orderId: string,
     productName: string,
     amount: string,
     email?: string | null,
     username?: string | null,
-    tradeNo?: string | null
+    tradeNo?: string | null,
+    checkoutFieldValues?: string | CheckoutFieldValue[] | null
 }) {
     const { language } = await getNotificationSettings()
     const t = messages[language as keyof typeof messages] || messages.zh
+    const checkoutLines = resolveCheckoutFieldLines(order)
+    const checkoutTelegram = checkoutLines.length
+        ? `\n<b>${t.checkoutFields}:</b>\n${checkoutLines.map((line) => escapeHtml(line)).join('\n')}`
+        : ''
 
     const telegramText = `
 <b>${t.paymentTitle}</b>
@@ -263,7 +280,7 @@ export async function notifyAdminPaymentSuccess(order: {
 <b>${t.product}:</b> ${order.productName}
 <b>${t.amount}:</b> ${order.amount}
 <b>${t.user}:</b> ${order.username || t.guest} (${order.email || t.noEmail})
-<b>${t.tradeNo}:</b> <code>${order.tradeNo || 'N/A'}</code>
+<b>${t.tradeNo}:</b> <code>${order.tradeNo || 'N/A'}</code>${checkoutTelegram}
 `.trim()
 
     const barkBody = [
@@ -271,7 +288,8 @@ export async function notifyAdminPaymentSuccess(order: {
         `${t.product}: ${order.productName}`,
         `${t.amount}: ${order.amount}`,
         `${t.user}: ${order.username || t.guest} (${order.email || t.noEmail})`,
-        `${t.tradeNo}: ${order.tradeNo || 'N/A'}`
+        `${t.tradeNo}: ${order.tradeNo || 'N/A'}`,
+        ...(checkoutLines.length ? [`${t.checkoutFields}:`, ...checkoutLines] : [])
     ].join('\n')
 
     const [telegramResult, barkResult] = await Promise.allSettled([

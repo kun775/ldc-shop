@@ -17,6 +17,7 @@ import { useEffect } from "react"
 import { checkOrderStatus, cancelPendingOrder } from "@/actions/order"
 import { useRouter } from "next/navigation"
 import { isPaymentOrder } from "@/lib/payment"
+import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
 
 interface Order {
     orderId: string
@@ -29,6 +30,7 @@ interface Order {
     payee?: string | null
     createdAt: Date | null
     paidAt: Date | null
+    checkoutFieldValues?: string | null
 }
 
 interface OrderContentProps {
@@ -45,6 +47,7 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
     const [confirmOpen, setConfirmOpen] = useState(false)
     const submitLock = useRef(false)
     const isPayment = isPaymentOrder(order.productId)
+    const checkoutFieldValues = parseCheckoutFieldValues(order.checkoutFieldValues)
 
     const handleRefundConfirm = async () => {
         if (submitLock.current) return
@@ -221,6 +224,22 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                             </div>
                         </div>
                     </div>
+
+                    {checkoutFieldValues.length > 0 && (
+                        <div className="space-y-3 rounded-xl border border-border/30 bg-muted/20 p-4">
+                            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                                {t('order.checkoutFieldsTitle')}
+                            </p>
+                            <div className="space-y-2">
+                                {checkoutFieldValues.map((field) => (
+                                    <div key={field.id} className="flex items-start justify-between gap-4 text-sm">
+                                        <span className="text-muted-foreground">{field.label}</span>
+                                        <span className="font-medium text-right whitespace-pre-wrap">{field.value}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     <Separator className="bg-border/50" />
 

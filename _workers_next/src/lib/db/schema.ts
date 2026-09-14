@@ -28,6 +28,7 @@ export const products = sqliteTable('products', {
     variantGroupId: text('variant_group_id'),
     variantLabel: text('variant_label'),
     purchaseQuestions: text('purchase_questions'),
+    checkoutFields: text('checkout_fields'),
 });
 
 // Cards (Stock)
@@ -62,6 +63,7 @@ export const orders = sqliteTable('orders', {
     pointsUsed: integer('points_used').default(0),
     quantity: integer('quantity').default(1).notNull(),
     currentPaymentId: text('current_payment_id'),
+    checkoutFieldValues: text('checkout_field_values'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
 });
 

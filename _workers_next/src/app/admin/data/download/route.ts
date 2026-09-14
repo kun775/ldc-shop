@@ -340,6 +340,7 @@ export async function GET(req: Request) {
           variantGroupId: 'variant_group_id',
           variantLabel: 'variant_label',
           purchaseQuestions: 'purchase_questions',
+          checkoutFields: 'checkout_fields',
           productImages: 'product_images',
           createdAt: 'created_at',
           // Cards
@@ -355,6 +356,7 @@ export async function GET(req: Request) {
           paidAt: 'paid_at',
           deliveredAt: 'delivered_at',
           pointsUsed: 'points_used',
+          checkoutFieldValues: 'checkout_field_values',
           currentPaymentId: 'current_payment_id',
           cardIds: 'card_ids',
           // Reviews

@@ -49,7 +49,8 @@ export default async function AdminOrdersPage(props: {
             sql`COALESCE(${orders.username}, '') LIKE ${like}`,
             sql`COALESCE(${orders.email}, '') LIKE ${like}`,
             sql`COALESCE(${orders.tradeNo}, '') LIKE ${like}`,
-            sql`COALESCE(${orders.cardKey}, '') LIKE ${like}`
+            sql`COALESCE(${orders.cardKey}, '') LIKE ${like}`,
+            sql`COALESCE(${orders.checkoutFieldValues}, '') LIKE ${like}`
         ))
     }
     const whereExpr = whereParts.length ? and(...whereParts) : undefined
@@ -116,7 +117,8 @@ export default async function AdminOrdersPage(props: {
                 status: o.status,
                 cardKey: o.cardKey,
                 tradeNo: o.tradeNo,
-                createdAt: o.createdAt
+                createdAt: o.createdAt,
+                checkoutFieldValues: o.checkoutFieldValues,
             }))}
             productVariantLabels={productVariantLabels}
             total={total}

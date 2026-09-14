@@ -3,7 +3,7 @@
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { products, cards, orders, loginUsers } from "@/lib/db/schema"
-import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded, recalcProductAggregates, createUserNotification } from "@/lib/db/queries"
+import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded, createUserNotification, ensureDatabaseInitialized, recalcProductAggregates } from "@/lib/db/queries"
 import { generateOrderId, generateSign } from "@/lib/crypto"
 import { eq, sql, and, or, isNull, lt, gt, inArray } from "drizzle-orm"
 import { cookies } from "next/headers"
@@ -15,6 +15,7 @@ import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
 import { resolveCheckoutPointUsage } from "@/lib/points/product-point-discount"
+import { parseCheckoutFieldConfigs, validateCheckoutFieldValues } from "@/lib/checkout-fields"
 
 const MAX_ORDER_QUANTITY = 10000
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -41,7 +42,8 @@ async function autoReplenishByApi(productId: string, reason: string) {
     }
 }
 
-export async function createOrder(productId: string, quantity: number = 1, email?: string, usePoints: boolean = false, answers?: string[]) {
+export async function createOrder(productId: string, quantity: number = 1, email?: string, usePoints: boolean = false, answers?: string[], checkoutFieldValues?: Record<string, string>) {
+    await ensureDatabaseInitialized()
     const session = await auth()
     const user = session?.user
     const normalizedQuantity = Number(quantity)
@@ -62,6 +64,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
             purchaseLimit: true,
             isShared: true,
             purchaseQuestions: true,
+            checkoutFields: true,
             pointDiscountEnabled: true,
             pointDiscountPercent: true,
         }
@@ -85,6 +88,15 @@ export async function createOrder(productId: string, quantity: number = 1, email
             }
         } catch { /* malformed JSON, skip */ }
     }
+
+    const checkoutFieldValidation = validateCheckoutFieldValues(
+        parseCheckoutFieldConfigs(product.checkoutFields),
+        checkoutFieldValues
+    )
+    if (!checkoutFieldValidation.ok) {
+        return { success: false, error: checkoutFieldValidation.error }
+    }
+    const checkoutFieldValuesPayload = checkoutFieldValidation.payload
 
     const purchaseLimit = product.purchaseLimit && product.purchaseLimit > 0 ? product.purchaseLimit : null
     const maxQuantity = purchaseLimit ?? MAX_ORDER_QUANTITY
@@ -358,10 +370,10 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
         const joinedKeys = reservedCards.map(c => c.key).join('\n')
 
-        await createOrderRecord(reservedCards, joinedKeys, isZeroPrice, pointsToUse, finalAmount, user, session?.user?.username, resolvedContactInfo, product, orderId, quantity)
+        await createOrderRecord(reservedCards, joinedKeys, isZeroPrice, pointsToUse, finalAmount, user, session?.user?.username, resolvedContactInfo, product, orderId, quantity, checkoutFieldValuesPayload)
     };
 
-    const createOrderRecord = async (reservedCards: any[], joinedKeys: string, isZeroPrice: boolean, pointsToUse: number, finalAmount: number, user: any, canonicalUsername: any, contactInfo: any, product: any, orderId: string, qty: number) => {
+    const createOrderRecord = async (reservedCards: any[], joinedKeys: string, isZeroPrice: boolean, pointsToUse: number, finalAmount: number, user: any, canonicalUsername: any, contactInfo: any, product: any, orderId: string, qty: number, checkoutFieldValuesJson: string | null) => {
         let orderInserted = false
         const normalizedUsername = canonicalUsername || user?.username || user?.name || null
         const uniqueCardIds = Array.from(new Set(reservedCards.map(c => c.id).filter((id: any) => id !== null && id !== undefined)));
@@ -402,6 +414,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     tradeNo: 'POINTS_REDEMPTION',
                     pointsUsed: pointsToUse,
                     quantity: qty,
+                    checkoutFieldValues: checkoutFieldValuesJson,
                     createdAt: new Date()
                 });
                 orderInserted = true
@@ -421,6 +434,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     currentPaymentId: orderId, // Store current payment ID
                     cardIds: cardIdsValue,
                     quantity: qty,
+                    checkoutFieldValues: checkoutFieldValuesJson,
                     createdAt: new Date()
                 });
                 orderInserted = true
@@ -479,7 +493,8 @@ export async function createOrder(productId: string, quantity: number = 1, email
                             amount: pointsToUse.toString() + ' (积分)',
                             username: normalizedUsername,
                             email: contactInfo || user?.email,
-                            tradeNo: 'POINTS_REDEMPTION'
+                            tradeNo: 'POINTS_REDEMPTION',
+                            checkoutFieldValues: checkoutFieldValuesJson
                         });
                         console.log('[Checkout] Points payment notification sent successfully');
                     } catch (err) {

@@ -16,6 +16,7 @@ import { toast } from "sonner"
 import { markOrderDelivered, markOrderPaid, cancelOrder, updateOrderEmail, deleteOrder } from "@/actions/admin-orders"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
+import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
 
 function statusVariant(status: string | null) {
   switch (status) {
@@ -34,6 +35,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
     amount: order.amount,
     pointsUsed: order.pointsUsed
   })
+  const checkoutFieldValues = parseCheckoutFieldValues(order.checkoutFieldValues)
   const [email, setEmail] = useState(order.email || '')
   const [savingEmail, setSavingEmail] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
@@ -228,6 +230,20 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
               <div className="text-sm"><ClientDate value={order.deliveredAt} format="dateTime" /></div>
             </div>
           </div>
+
+          {checkoutFieldValues.length > 0 && (
+            <div className="space-y-3 rounded-md border bg-muted/30 p-4">
+              <div className="text-sm font-medium">{t('admin.orders.checkoutFieldsTitle')}</div>
+              <div className="space-y-2">
+                {checkoutFieldValues.map((field) => (
+                  <div key={field.id} className="flex items-start justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">{field.label}</span>
+                    <span className="font-medium text-right whitespace-pre-wrap">{field.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

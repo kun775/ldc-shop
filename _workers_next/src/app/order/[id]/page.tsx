@@ -5,10 +5,11 @@ import { and, desc, eq } from "drizzle-orm"
 import { notFound } from "next/navigation"
 import { cookies } from "next/headers"
 import { OrderContent } from "@/components/order-content"
-import { getProductVariantLabels } from "@/lib/db/queries"
+import { ensureDatabaseInitialized, getProductVariantLabels } from "@/lib/db/queries"
 
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params
+    await ensureDatabaseInitialized()
     const session = await auth()
     const user = session?.user
 
@@ -56,7 +57,8 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                 cardKey: order.cardKey,
                 payee: order.payee,
                 createdAt: order.createdAt,
-                paidAt: order.paidAt
+                paidAt: order.paidAt,
+                checkoutFieldValues: order.checkoutFieldValues
             }}
             canViewKey={canViewKey}
             isOwner={isOwner}

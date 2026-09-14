@@ -11,7 +11,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 21;
+const CURRENT_SCHEMA_VERSION = 22;
 const dbInitializationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
@@ -202,7 +202,7 @@ async function ensureReviewRepliesTable() {
 }
 
 // Auto-initialize database on first query
-async function ensureDatabaseInitialized() {
+export async function ensureDatabaseInitialized() {
     if (dbInitialized) return;
 
     await ensureOnce(dbInitializationState, async () => {
@@ -267,7 +267,9 @@ async function ensureDatabaseInitialized() {
             sold_count INTEGER DEFAULT 0,
             created_at INTEGER DEFAULT (unixepoch() * 1000),
             variant_group_id TEXT,
-            variant_label TEXT
+            variant_label TEXT,
+            purchase_questions TEXT,
+            checkout_fields TEXT
         );
         
         -- Cards (stock) table
@@ -302,6 +304,7 @@ async function ensureDatabaseInitialized() {
             points_used INTEGER DEFAULT 0,
             quantity INTEGER DEFAULT 1,
             current_payment_id TEXT,
+            checkout_field_values TEXT,
             created_at INTEGER DEFAULT (unixepoch() * 1000)
         );
         
@@ -487,6 +490,7 @@ async function ensureProductsColumns() {
         await safeAddColumn('products', 'variant_label', 'TEXT');
         await safeAddColumn('products', 'purchase_questions', 'TEXT');
         await safeAddColumn('products', 'product_images', 'TEXT');
+        await safeAddColumn('products', 'checkout_fields', 'TEXT');
     });
 }
 
@@ -496,6 +500,7 @@ async function ensureOrdersColumns() {
         await safeAddColumn('orders', 'current_payment_id', 'TEXT');
         await safeAddColumn('orders', 'payee', 'TEXT');
         await safeAddColumn('orders', 'card_ids', 'TEXT');
+        await safeAddColumn('orders', 'checkout_field_values', 'TEXT');
     });
 }
 
@@ -1129,7 +1134,8 @@ export async function getProduct(id: string, options?: { isLoggedIn?: boolean; t
             reviewCount: sql<number>`COALESCE(${products.reviewCount}, 0)`,
             variantGroupId: products.variantGroupId,
             variantLabel: products.variantLabel,
-            purchaseQuestions: products.purchaseQuestions
+            purchaseQuestions: products.purchaseQuestions,
+            checkoutFields: products.checkoutFields
         })
             .from(products)
             .where(and(eq(products.id, id), visibilityCondition(options?.isLoggedIn, options?.trustLevel)))
@@ -1175,6 +1181,7 @@ export type ProductVariantRow = {
     isHot: boolean | null;
     purchaseWarning: string | null;
     purchaseQuestions: string | null;
+    checkoutFields: string | null;
     pointDiscountEnabled: boolean | null;
     pointDiscountPercent: number;
 };
@@ -1201,6 +1208,7 @@ export async function getProductVariants(
             isHot: products.isHot,
             purchaseWarning: products.purchaseWarning,
             purchaseQuestions: products.purchaseQuestions,
+            checkoutFields: products.checkoutFields,
             pointDiscountEnabled: products.pointDiscountEnabled,
             pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
         })
@@ -1250,6 +1258,7 @@ export async function getProductForAdmin(id: string) {
             variantGroupId: products.variantGroupId,
             variantLabel: products.variantLabel,
             purchaseQuestions: products.purchaseQuestions,
+            checkoutFields: products.checkoutFields,
         })
             .from(products)
             .where(eq(products.id, id));

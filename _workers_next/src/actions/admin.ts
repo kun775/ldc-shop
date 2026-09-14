@@ -6,12 +6,13 @@ import { products, cards, reviews, reviewReplies, categories } from "@/lib/db/sc
 import { eq, sql, inArray, and, or, isNull, lte } from "drizzle-orm"
 import { sendBarkMessage, sendTelegramMessage } from "@/lib/notifications"
 import { revalidatePath, updateTag } from "next/cache"
-import { setSetting, getSetting, recalcProductAggregates, recalcProductAggregatesForMany, getProductForAdmin } from "@/lib/db/queries"
+import { ensureDatabaseInitialized, getProductForAdmin, getSetting, recalcProductAggregates, recalcProductAggregatesForMany, setSetting } from "@/lib/db/queries"
 import { isAdminUsername } from "@/lib/admin-auth"
 import { getProductCardApiConfig, pullOneCardFromApi, saveProductCardApiConfig } from "@/lib/card-api"
 import { unstable_noStore } from "next/cache"
 import { isThemeFont } from "@/lib/theme-fonts"
 import { normalizeCurrencyUnit } from "@/lib/currency-unit"
+import { serializeCheckoutFieldConfigs } from "@/lib/checkout-fields"
 import { normalizeProductPointDiscountConfig } from "@/lib/points/product-point-discount"
 import {
     PRODUCT_GALLERY_MAX_ITEMS,
@@ -32,6 +33,7 @@ export async function checkAdmin() {
 
 export async function saveProduct(formData: FormData) {
     await checkAdmin()
+    await ensureDatabaseInitialized()
 
     const existingId = formData.get('id') as string
     const customSlug = (formData.get('slug') as string)?.trim()
@@ -80,6 +82,7 @@ export async function saveProduct(formData: FormData) {
             // ignore invalid JSON
         }
     }
+    const checkoutFields = serializeCheckoutFieldConfigs(formData.get('checkoutFields'))
     const parsedVisibility = Number.parseInt(visibilityLevelRaw, 10)
     const visibilityLevel = Number.isFinite(parsedVisibility) ? parsedVisibility : -1
     if (![ -1, 0, 1, 2, 3 ].includes(visibilityLevel)) {
@@ -135,7 +138,8 @@ export async function saveProduct(formData: FormData) {
             visibilityLevel,
             variantGroupId,
             variantLabel,
-            purchaseQuestions
+            purchaseQuestions,
+            checkoutFields
         }).onConflictDoUpdate({
             target: products.id,
             set: {
@@ -155,7 +159,8 @@ export async function saveProduct(formData: FormData) {
                 visibilityLevel,
                 variantGroupId,
                 variantLabel,
-                purchaseQuestions
+                purchaseQuestions,
+                checkoutFields
             }
         })
     }
@@ -185,6 +190,9 @@ export async function saveProduct(formData: FormData) {
         } catch { /* column exists */ }
         try {
             await db.run(sql.raw(`ALTER TABLE products ADD COLUMN product_images TEXT`));
+        } catch { /* column exists */ }
+        try {
+            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN checkout_fields TEXT`));
         } catch { /* column exists */ }
     }
 

@@ -28,6 +28,8 @@ import { getBuyPageMeta } from "@/actions/buy"
 import type { ProductVariantRow } from "@/lib/db/queries"
 import { buildProductImageGallery } from "@/lib/product-images"
 import { getProductPointDiscountBadge } from "@/lib/points/product-point-discount"
+import { parseCheckoutFieldConfigs } from "@/lib/checkout-fields"
+import { Textarea } from "@/components/ui/textarea"
 
 interface Product {
     id: string
@@ -41,6 +43,7 @@ interface Product {
     purchaseLimit?: number | null
     purchaseWarning?: string | null
     purchaseQuestions?: string | null
+    checkoutFields?: string | null
     pointDiscountEnabled?: boolean | null
     pointDiscountPercent?: number | null
     isHot?: boolean | null
@@ -110,6 +113,7 @@ export function BuyContent({
     const [questionAnswers, setQuestionAnswers] = useState<string[]>([])
     const [questionsVerified, setQuestionsVerified] = useState(false)
     const [questionError, setQuestionError] = useState(false)
+    const [checkoutFieldValues, setCheckoutFieldValues] = useState<Record<string, string>>({})
 
     const displayProduct = useMemo(() => {
         if (variants.length > 1 && selectedVariantId) {
@@ -127,6 +131,7 @@ export function BuyContent({
                     purchaseLimit: v.purchaseLimit,
                     purchaseWarning: v.purchaseWarning ?? null,
                     purchaseQuestions: v.purchaseQuestions ?? null,
+                    checkoutFields: v.checkoutFields ?? null,
                     pointDiscountEnabled: v.pointDiscountEnabled ?? false,
                     pointDiscountPercent: v.pointDiscountPercent ?? 0,
                     isHot: v.isHot ?? false,
@@ -176,6 +181,11 @@ export function BuyContent({
         return []
     }, [displayProduct.purchaseQuestions])
 
+    const checkoutFields = useMemo(
+        () => parseCheckoutFieldConfigs(displayProduct.checkoutFields),
+        [displayProduct.checkoutFields]
+    )
+
     const galleryImages = useMemo(
         () => buildProductImageGallery(displayProduct.image, displayProduct.productImages ?? null),
         [displayProduct.image, displayProduct.productImages]
@@ -186,6 +196,15 @@ export function BuyContent({
         setQuestionsVerified(false)
         setQuestionError(false)
     }, [questions])
+
+    useEffect(() => {
+        const next: Record<string, string> = {}
+        for (const field of checkoutFields) {
+            next[field.id] = checkoutFieldValues[field.id] || ''
+        }
+        setCheckoutFieldValues(next)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [checkoutFields])
 
     const handleVerifyAnswers = () => {
         const allCorrect = questions.every((q, i) => {
@@ -203,6 +222,7 @@ export function BuyContent({
 
     const hasQuestions = questions.length > 0
     const needsQuestionVerification = hasQuestions && !questionsVerified
+    const checkoutFieldsIncomplete = checkoutFields.some((field) => field.required && !(checkoutFieldValues[field.id] || '').trim())
 
     useEffect(() => {
         if (typeof window !== 'undefined') {
@@ -582,6 +602,51 @@ export function BuyContent({
                                     </div>
                                 </div>
 
+                                {isLoggedIn && hasStock && checkoutFields.length > 0 && (
+                                    <div className="rounded-2xl border border-border/25 bg-muted/20 p-4 space-y-3">
+                                        <div className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                                            {t('buy.checkoutFieldsTitle')}
+                                        </div>
+                                        {checkoutFields.map((field) => (
+                                            <div key={field.id} className="space-y-1.5">
+                                                <label className="text-sm font-medium text-foreground">
+                                                    {field.label}
+                                                    {field.required && <span className="ml-1 text-destructive">*</span>}
+                                                </label>
+                                                {field.type === 'textarea' ? (
+                                                    <Textarea
+                                                        value={checkoutFieldValues[field.id] || ''}
+                                                        maxLength={field.maxLength}
+                                                        placeholder={field.placeholder || undefined}
+                                                        onChange={(event) => setCheckoutFieldValues((current) => ({ ...current, [field.id]: event.target.value }))}
+                                                        className="min-h-24 rounded-xl"
+                                                    />
+                                                ) : field.type === 'select' ? (
+                                                    <select
+                                                        value={checkoutFieldValues[field.id] || ''}
+                                                        onChange={(event) => setCheckoutFieldValues((current) => ({ ...current, [field.id]: event.target.value }))}
+                                                        className="flex h-10 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm"
+                                                    >
+                                                        <option value="">{field.placeholder || t('buy.checkoutFieldSelectPlaceholder')}</option>
+                                                        {field.options.map((option) => (
+                                                            <option key={option} value={option}>{option}</option>
+                                                        ))}
+                                                    </select>
+                                                ) : (
+                                                    <Input
+                                                        value={checkoutFieldValues[field.id] || ''}
+                                                        maxLength={field.maxLength}
+                                                        placeholder={field.placeholder || undefined}
+                                                        onChange={(event) => setCheckoutFieldValues((current) => ({ ...current, [field.id]: event.target.value }))}
+                                                        className="rounded-xl"
+                                                    />
+                                                )}
+                                                {field.hint && <p className="text-xs text-muted-foreground">{field.hint}</p>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
                                 {isLoggedIn && hasStock && needsQuestionVerification && (
                                     <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
                                         <div className="text-[11px] font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
@@ -738,6 +803,8 @@ export function BuyContent({
                                                         autoOpen={warningConfirmed && !!displayProduct.purchaseWarning}
                                                         emailConfigured={emailConfiguredState}
                                                         answers={hasQuestions ? questionAnswers : undefined}
+                                                        checkoutFieldValues={checkoutFieldValues}
+                                                        checkoutFieldsIncomplete={checkoutFieldsIncomplete}
                                                         pointDiscountEnabled={Boolean(displayProduct.pointDiscountEnabled)}
                                                         pointDiscountPercent={Number(displayProduct.pointDiscountPercent || 0)}
                                                         className="h-11 flex-1 rounded-full bg-primary px-5 font-medium text-primary-foreground shadow-[0_16px_34px_-20px_rgba(15,23,42,0.55)] transition-all hover:bg-primary/90 hover:shadow-[0_18px_40px_-22px_rgba(15,23,42,0.6)]"

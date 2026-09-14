@@ -22,6 +22,8 @@ interface BuyButtonProps {
     autoOpen?: boolean
     emailConfigured?: boolean
     answers?: string[]
+    checkoutFieldValues?: Record<string, string>
+    checkoutFieldsIncomplete?: boolean
     pointDiscountEnabled?: boolean
     pointDiscountPercent?: number
     className?: string
@@ -36,6 +38,8 @@ export function BuyButton({
     autoOpen = false,
     emailConfigured = false,
     answers,
+    checkoutFieldValues,
+    checkoutFieldsIncomplete = false,
     pointDiscountEnabled = false,
     pointDiscountPercent = 0,
     className,
@@ -94,7 +98,12 @@ export function BuyButton({
 
         try {
             setLoading(true)
-            const result = await createOrder(productId, quantity, email, usePoints, answers)
+            if (checkoutFieldsIncomplete) {
+                toast.error(t('buy.checkoutFieldsRequired'))
+                setLoading(false)
+                return
+            }
+            const result = await createOrder(productId, quantity, email, usePoints, answers, checkoutFieldValues)
 
             if (!result?.success) {
                 const message = result?.error ? t(result.error) : t('common.error')
@@ -160,7 +169,7 @@ export function BuyButton({
                     className
                 )}
                 onClick={handleInitialClick}
-                disabled={disabled}
+                disabled={disabled || checkoutFieldsIncomplete}
             >
                 {t('common.buyNow')}
             </Button>
