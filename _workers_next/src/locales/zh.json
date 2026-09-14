@@ -923,7 +923,7 @@
         "currentVersion": "当前版本：{{current}}",
         "viewRelease": "查看发布页",
         "versionInfo": "当前: {{current}} → 最新: {{latest}}",
-        "syncNow": "去 GitHub 同步更新"
+        "syncNow": "查看仓库更新"
     },
     "registry": {
         "title": "LDC 导航",

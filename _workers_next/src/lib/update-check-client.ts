@@ -1,3 +1,5 @@
+import { SOURCE_REPO, SOURCE_REPO_URL } from "@/lib/version"
+
 export interface ClientUpdateCheckResult {
     hasUpdate: boolean
     currentVersion: string
@@ -5,8 +7,6 @@ export interface ClientUpdateCheckResult {
     releaseUrl: string | null
     error?: string
 }
-
-const UPSTREAM_REPO = "chatgptuk/ldc-shop"
 
 function compareVersions(a: string, b: string): number {
     const partsA = a.split(".").map(Number)
@@ -25,7 +25,7 @@ function compareVersions(a: string, b: string): number {
 export async function checkForUpdatesClient(currentVersion: string): Promise<ClientUpdateCheckResult> {
     try {
         const releaseResponse = await fetch(
-            `https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest`,
+            `https://api.github.com/repos/${SOURCE_REPO}/releases/latest`,
             {
                 headers: {
                     Accept: "application/vnd.github.v3+json",
@@ -41,14 +41,13 @@ export async function checkForUpdatesClient(currentVersion: string): Promise<Cli
                 hasUpdate: !!latestVersion && compareVersions(latestVersion, currentVersion) > 0,
                 currentVersion,
                 latestVersion: latestVersion || null,
-                releaseUrl: release?.html_url || `https://github.com/${UPSTREAM_REPO}/releases`,
+                releaseUrl: release?.html_url || `${SOURCE_REPO_URL}/releases`,
             }
         }
 
-        // No release: fallback to tags.
         if (releaseResponse.status === 404) {
             const tagsResponse = await fetch(
-                `https://api.github.com/repos/${UPSTREAM_REPO}/tags`,
+                `https://api.github.com/repos/${SOURCE_REPO}/tags`,
                 {
                     headers: {
                         Accept: "application/vnd.github.v3+json",
@@ -65,7 +64,7 @@ export async function checkForUpdatesClient(currentVersion: string): Promise<Cli
                         hasUpdate: false,
                         currentVersion,
                         latestVersion: null,
-                        releaseUrl: `https://github.com/${UPSTREAM_REPO}`,
+                        releaseUrl: SOURCE_REPO_URL,
                     }
                 }
 
@@ -73,7 +72,7 @@ export async function checkForUpdatesClient(currentVersion: string): Promise<Cli
                     hasUpdate: compareVersions(latestTag, currentVersion) > 0,
                     currentVersion,
                     latestVersion: latestTag,
-                    releaseUrl: `https://github.com/${UPSTREAM_REPO}`,
+                    releaseUrl: SOURCE_REPO_URL,
                 }
             }
         }

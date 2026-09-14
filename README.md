@@ -63,7 +63,7 @@
 
 ### 备选：Vercel 部署（已停止更新）
 
-Vercel 版本已停止维护，仅建议作为历史参考。新部署请使用 Workers 或 Docker。若需 Vercel 自动同步上游，可参考仓库内 `.github/workflows/sync.yml` 并开启 Actions 写入权限。
+Vercel 版本已停止维护，仅建议作为历史参考。新部署请使用 Workers 或 Docker。本仓库已独立维护，不再同步上游。
 
 ## 💡 建议：绑定自定义域名
 

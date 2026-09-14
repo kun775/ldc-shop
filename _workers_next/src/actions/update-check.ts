@@ -1,9 +1,6 @@
 "use server"
 
-import { APP_VERSION } from "@/lib/version"
-
-// Upstream repository to check for updates
-const UPSTREAM_REPO = "chatgptuk/ldc-shop"
+import { APP_VERSION, SOURCE_REPO, SOURCE_REPO_URL } from "@/lib/version"
 
 interface UpdateCheckResult {
     hasUpdate: boolean
@@ -17,7 +14,7 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     try {
         // Fetch latest release from GitHub API
         const response = await fetch(
-            `https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest`,
+            `https://api.github.com/repos/${SOURCE_REPO}/releases/latest`,
             {
                 headers: {
                     'Accept': 'application/vnd.github.v3+json',
@@ -33,7 +30,7 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
             if (response.status === 404) {
                 // Try fetching tags instead
                 const tagsResponse = await fetch(
-                    `https://api.github.com/repos/${UPSTREAM_REPO}/tags`,
+                    `https://api.github.com/repos/${SOURCE_REPO}/tags`,
                     {
                         headers: {
                             'Accept': 'application/vnd.github.v3+json',
@@ -51,7 +48,7 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
                             hasUpdate: compareVersions(latestTag, APP_VERSION) > 0,
                             currentVersion: APP_VERSION,
                             latestVersion: latestTag,
-                            releaseUrl: `https://github.com/${UPSTREAM_REPO}`
+                            releaseUrl: SOURCE_REPO_URL
                         }
                     }
                 }

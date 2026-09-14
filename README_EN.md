@@ -63,7 +63,7 @@ For VPS or your own server; local SQLite, no third-party DB.
 
 ### Alternative: Vercel (no longer maintained)
 
-The Vercel edition is no longer maintained; use Workers or Docker for new deployments. For Vercel upstream sync, see `.github/workflows/sync.yml` and enable Actions write permission.
+The Vercel edition is no longer maintained; use Workers or Docker for new deployments. This repository is independently maintained and no longer syncs from upstream.
 
 ## 💡 Custom domain
 

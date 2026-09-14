@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '@/lib/i18n/context'
 import { checkForUpdatesClient, type ClientUpdateCheckResult } from '@/lib/update-check-client'
+import { SOURCE_REPO_URL } from '@/lib/version'
 import { AlertTriangle, ExternalLink, X } from 'lucide-react'
 
 export function UpdateNotification({ currentVersion }: { currentVersion: string }) {
@@ -48,7 +49,7 @@ export function UpdateNotification({ currentVersion }: { currentVersion: string 
             </div>
             <div className="flex items-center gap-3">
                 <a
-                    href={updateInfo.releaseUrl || "https://github.com/chatgptuk/ldc-shop"}
+                    href={updateInfo.releaseUrl || SOURCE_REPO_URL}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-sm underline underline-offset-2 hover:no-underline flex items-center gap-1"

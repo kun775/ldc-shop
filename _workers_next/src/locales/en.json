@@ -923,7 +923,7 @@
         "currentVersion": "Current version: {{current}}",
         "viewRelease": "View release",
         "versionInfo": "Current: {{current}} → Latest: {{latest}}",
-        "syncNow": "Sync on GitHub"
+        "syncNow": "View repository"
     },
     "registry": {
         "title": "LDC Navigator",

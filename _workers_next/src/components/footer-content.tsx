@@ -77,7 +77,7 @@ export function FooterContent({ customFooter, version }: FooterContentProps) {
                         dangerouslySetInnerHTML={{ __html: footerText }}
                     />
                 </div>
-                <a href="https://github.com/chatgptuk/ldc-shop" target="_blank" rel="noreferrer" className="text-center text-xs text-muted-foreground/40 hover:text-primary transition-colors duration-300">
+                <a href="https://github.com/kun775/ldc-shop" target="_blank" rel="noreferrer" className="text-center text-xs text-muted-foreground/40 hover:text-primary transition-colors duration-300">
                     v{version}
                 </a>
             </div>

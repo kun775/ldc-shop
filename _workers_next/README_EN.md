@@ -79,7 +79,7 @@ This architecture aims to combine the development efficiency of Next.js with the
 - **I18n & Theme**:
     - 🌐 **English/Chinese switcher**.
     - 🌓 **Light/Dark/System themes**.
-    - ⏱️ **Auto Update**: GitHub Actions workflow for upstream sync.
+    - 📦 **Independent maintenance**: This repository no longer auto-syncs from upstream.
 - **Notifications**:
     - 📧 **Delivery Email**: Send order delivery notifications via Resend (configurable sender, language); users can set default email in profile.
     - 📢 **Telegram Notifications**: New order push notifications via Telegram Bot.

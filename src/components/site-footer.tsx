@@ -16,7 +16,7 @@ export function SiteFooter() {
                 <a href="https://chatgpt.org.uk" target="_blank" rel="noreferrer" className="text-center text-xs md:text-left text-muted-foreground/60 hover:text-primary transition-colors duration-300">
                     {t('footer.poweredBy')}
                 </a>
-                <a href="https://github.com/chatgptuk/ldc-shop" target="_blank" rel="noreferrer" className="text-center text-xs text-muted-foreground/40 hover:text-primary transition-colors duration-300">
+                <a href="https://github.com/kun775/ldc-shop" target="_blank" rel="noreferrer" className="text-center text-xs text-muted-foreground/40 hover:text-primary transition-colors duration-300">
                     v0.2.3
                 </a>
             </div>

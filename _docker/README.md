@@ -23,7 +23,7 @@
 
 ```bash
 mkdir ldc-shop && cd ldc-shop
-curl -fsSL https://raw.githubusercontent.com/chatgptuk/ldc-shop/main/_docker/pull-setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/kun775/ldc-shop/main/_docker/pull-setup.sh -o setup.sh
 chmod +x setup.sh
 ./setup.sh
 ```
@@ -45,7 +45,7 @@ docker compose pull && docker compose up -d
 ### 方法 A：一键脚本（交互式）
 
 ```bash
-git clone https://github.com/chatgptuk/ldc-shop.git
+git clone https://github.com/kun775/ldc-shop.git
 cd ldc-shop/_docker
 chmod +x setup.sh
 ./setup.sh
@@ -56,7 +56,7 @@ chmod +x setup.sh
 ### 方法 B：手动构建
 
 ```bash
-git clone https://github.com/chatgptuk/ldc-shop.git
+git clone https://github.com/kun775/ldc-shop.git
 cd ldc-shop/_docker
 ```
 
