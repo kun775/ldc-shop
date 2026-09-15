@@ -10,6 +10,7 @@ import { Package, CreditCard, Megaphone, Star, Download, Tags, RotateCcw, Users,
 import { useI18n } from "@/lib/i18n/context"
 import { getPendingRefundRequestCount } from "@/actions/refund-requests"
 import { getUnreadUserMessageCount } from "@/actions/user-messages"
+import { cn } from "@/lib/utils"
 
 interface NavLinkProps {
     href: string
@@ -20,26 +21,39 @@ interface NavLinkProps {
 }
 
 function NavLink({ href, icon, label, badge, closeOnNavigate }: NavLinkProps) {
+    const pathname = usePathname()
+    const isActive = pathname === href || (href !== '/admin/settings' && pathname.startsWith(href))
+
     const content = (
         <span className="flex w-full items-center justify-between">
-            <span className="flex items-center">
-                {icon}
-                {label}
+            <span className="flex items-center gap-2.5 min-w-0">
+                <span className={cn(
+                    "transition-colors shrink-0",
+                    isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
+                )}>
+                    {icon}
+                </span>
+                <span className="truncate">{label}</span>
             </span>
             {badge}
         </span>
     )
-    const link = closeOnNavigate ? (
-        <SheetClose asChild>
-            <Link href={href} className="flex w-full items-center justify-between">{content}</Link>
-        </SheetClose>
-    ) : (
-        <Link href={href} className="flex w-full items-center justify-between">{content}</Link>
+    const linkClass = cn(
+        "group flex h-9 w-full items-center justify-between rounded-xl px-3 text-xs font-medium transition-all select-none",
+        isActive
+            ? "bg-primary/10 text-primary font-semibold shadow-2xs border border-primary/20"
+            : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
     )
+
+    if (closeOnNavigate) {
+        return (
+            <SheetClose asChild>
+                <Link href={href} className={linkClass}>{content}</Link>
+            </SheetClose>
+        )
+    }
     return (
-        <Button variant="ghost" asChild className="justify-start">
-            {link}
-        </Button>
+        <Link href={href} className={linkClass}>{content}</Link>
     )
 }
 
@@ -119,28 +133,46 @@ function SidebarContent({ closeOnNavigate = false, showTitle = true, username, t
     ) : null
 
     return (
-        <>
+        <div className="space-y-4">
             {showTitle && (
-                <div className="flex items-center gap-2 font-bold text-xl px-2 mb-6">
-                    <span>{t('common.adminTitle')}</span>
+                <div className="flex items-center justify-between px-2 mb-4">
+                    <span className="font-bold text-base tracking-tight text-foreground">{t('common.adminTitle')}</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground">Admin</span>
                 </div>
             )}
-            <nav className="flex flex-col gap-2">
-                <NavLink href="/admin/settings" icon={<Settings className="mr-2 h-4 w-4" />} label={t('common.storeSettings')} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/products" icon={<Package className="mr-2 h-4 w-4" />} label={t('common.productManagement')} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/orders" icon={<CreditCard className="mr-2 h-4 w-4" />} label={t('common.ordersRefunds')} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/refunds" icon={<RotateCcw className="mr-2 h-4 w-4" />} label={t('common.refundRequests')} badge={refundBadge} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/messages" icon={<MessageSquare className="mr-2 h-4 w-4" />} label={t('common.adminMessages')} badge={messageBadge} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/categories" icon={<Tags className="mr-2 h-4 w-4" />} label={t('common.categoriesManage')} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/users" icon={<Users className="mr-2 h-4 w-4" />} label={t('common.customers')} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/reviews" icon={<Star className="mr-2 h-4 w-4" />} label={t('common.reviews')} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/announcement" icon={<Megaphone className="mr-2 h-4 w-4" />} label={t('announcement.title')} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/data" icon={<Download className="mr-2 h-4 w-4" />} label={t('common.dataExport')} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/collect" icon={<QrCode className="mr-2 h-4 w-4" />} label={t('payment.adminMenu')} closeOnNavigate={closeOnNavigate} />
-                <NavLink href="/admin/notifications" icon={<Bell className="mr-2 h-4 w-4" />} label={t('admin.settings.notifications.title')} closeOnNavigate={closeOnNavigate} />
+            
+            <nav className="space-y-4">
+                <div className="space-y-1">
+                    <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground/60">
+                        店铺运营
+                    </div>
+                    <NavLink href="/admin/settings" icon={<Settings className="h-4 w-4" />} label={t('common.storeSettings')} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/products" icon={<Package className="h-4 w-4" />} label={t('common.productManagement')} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/orders" icon={<CreditCard className="h-4 w-4" />} label={t('common.ordersRefunds')} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/categories" icon={<Tags className="h-4 w-4" />} label={t('common.categoriesManage')} closeOnNavigate={closeOnNavigate} />
+                </div>
+
+                <div className="space-y-1">
+                    <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground/60">
+                        客户与售后
+                    </div>
+                    <NavLink href="/admin/refunds" icon={<RotateCcw className="h-4 w-4" />} label={t('common.refundRequests')} badge={refundBadge} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/messages" icon={<MessageSquare className="h-4 w-4" />} label={t('common.adminMessages')} badge={messageBadge} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/users" icon={<Users className="h-4 w-4" />} label={t('common.customers')} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/reviews" icon={<Star className="h-4 w-4" />} label={t('common.reviews')} closeOnNavigate={closeOnNavigate} />
+                </div>
+
+                <div className="space-y-1">
+                    <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground/60">
+                        系统与工具
+                    </div>
+                    <NavLink href="/admin/announcement" icon={<Megaphone className="h-4 w-4" />} label={t('announcement.title')} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/data" icon={<Download className="h-4 w-4" />} label={t('common.dataExport')} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/collect" icon={<QrCode className="h-4 w-4" />} label={t('payment.adminMenu')} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/notifications" icon={<Bell className="h-4 w-4" />} label={t('admin.settings.notifications.title')} closeOnNavigate={closeOnNavigate} />
+                </div>
             </nav>
-            {/* Removed footer logout block to avoid duplicate exit entry */}
-        </>
+        </div>
     )
 }
 

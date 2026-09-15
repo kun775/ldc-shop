@@ -3,7 +3,7 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import Image from "next/image"
-import { ArrowRight, Heart, Search, Sparkles, Users } from "lucide-react"
+import { ArrowRight, Heart, Search, Sparkles, Users, Zap, PackageOpen, X, Check } from "lucide-react"
 import { ProductImagePlaceholder } from "@/components/product-image-placeholder"
 import { AnnouncementPopup } from "@/components/announcement-popup"
 import { CardContent } from "@/components/ui/card"
@@ -38,6 +38,8 @@ interface Product {
     variantCount?: number
     priceMin?: number
     priceMax?: number
+    fulfillmentMode?: string | null
+    groupManual?: boolean | null
 }
 
 interface HomeContentProps {
@@ -78,23 +80,28 @@ export function HomeContent({
     const [selectedCategory, setSelectedCategory] = useState<string | null>(filters.category || null)
     const [searchTerm, setSearchTerm] = useState(filters.q || "")
     const [sortKey, setSortKey] = useState(filters.sort || "default")
+    const [fulfillmentFilter, setFulfillmentFilter] = useState<'all' | 'auto' | 'manual' | 'inStock'>('all')
     const [page, setPage] = useState(pagination.page || 1)
     const deferredSearch = useDeferredValue(searchTerm)
 
     useEffect(() => {
         setPage(1)
-    }, [selectedCategory, sortKey, deferredSearch])
+    }, [selectedCategory, sortKey, deferredSearch, fulfillmentFilter])
 
     const filteredProducts = useMemo(() => {
         const keyword = deferredSearch.trim().toLowerCase()
         return products.filter((product) => {
             if (selectedCategory && product.category !== selectedCategory) return false
+            const isManual = product.fulfillmentMode === 'manual' || product.groupManual
+            if (fulfillmentFilter === 'auto' && isManual) return false
+            if (fulfillmentFilter === 'manual' && !isManual) return false
+            if (fulfillmentFilter === 'inStock' && product.stockCount <= 0) return false
             if (!keyword) return true
             const name = (product.name || "").toLowerCase()
             const desc = (product.descriptionPlain || product.description || "").toLowerCase()
             return name.includes(keyword) || desc.includes(keyword)
         })
-    }, [products, selectedCategory, deferredSearch])
+    }, [products, selectedCategory, deferredSearch, fulfillmentFilter])
 
     const sortedProducts = useMemo(() => {
         const list = [...filteredProducts]
@@ -231,20 +238,29 @@ export function HomeContent({
                 </div>
             </section>
 
-            <section className="mb-10 space-y-4">
-                <div className="flex flex-col gap-4 rounded-[1.8rem] border border-border/40 bg-card/70 p-4 shadow-[0_20px_50px_-36px_rgba(15,23,42,0.3)] backdrop-blur-md">
-                    <div className="grid gap-4 xl:grid-cols-[minmax(0,17rem)_minmax(0,1fr)_auto] xl:items-center">
+            <section className="mb-8 space-y-3">
+                <div className="flex flex-col gap-3 rounded-[1.8rem] border border-border/40 bg-card/70 p-4 shadow-[0_20px_50px_-36px_rgba(15,23,42,0.3)] backdrop-blur-md">
+                    <div className="grid gap-3 xl:grid-cols-[minmax(0,18rem)_minmax(0,1fr)_auto] xl:items-center">
                         <div className="relative w-full">
-                            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                             <Input
                                 placeholder={t("common.searchPlaceholder")}
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
-                                className="h-11 rounded-2xl border-border/50 bg-background/90 pl-10 shadow-none"
+                                className="h-11 rounded-2xl border-border/50 bg-background/90 pl-10 pr-9 shadow-none text-sm"
                             />
+                            {searchTerm && (
+                                <button
+                                    type="button"
+                                    onClick={() => setSearchTerm("")}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                                >
+                                    <X className="h-3.5 w-3.5" />
+                                </button>
+                            )}
                         </div>
 
-                        <div className="w-full overflow-x-auto no-scrollbar pb-2 xl:pb-0">
+                        <div className="w-full overflow-x-auto no-scrollbar pb-1 xl:pb-0">
                             <NavigationPill
                                 items={[
                                     { key: "", label: t("common.all") },
@@ -261,7 +277,7 @@ export function HomeContent({
                             />
                         </div>
 
-                        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2 xl:pb-0">
+                        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 xl:pb-0">
                             {sortOptions.map((opt) => (
                                 <Button
                                     key={opt.key}
@@ -269,9 +285,9 @@ export function HomeContent({
                                     variant={sortKey === opt.key ? "secondary" : "ghost"}
                                     size="sm"
                                     className={cn(
-                                        "h-10 rounded-2xl px-4 whitespace-nowrap text-xs",
+                                        "h-9 rounded-xl px-3 whitespace-nowrap text-xs transition-all",
                                         sortKey === opt.key
-                                            ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                                            ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-2xs font-medium"
                                             : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
                                     )}
                                     onClick={() => setSortKey(opt.key)}
@@ -280,6 +296,62 @@ export function HomeContent({
                                 </Button>
                             ))}
                         </div>
+                    </div>
+
+                    {/* Quick Delivery Mode & In-Stock Quick Filters */}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-border/40">
+                        <span className="text-[11px] font-medium text-muted-foreground mr-1">履约与现货筛选:</span>
+                        <button
+                            type="button"
+                            onClick={() => setFulfillmentFilter('all')}
+                            className={cn(
+                                "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
+                                fulfillmentFilter === 'all'
+                                    ? "bg-foreground text-background shadow-2xs"
+                                    : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            )}
+                        >
+                            全部商品
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setFulfillmentFilter('auto')}
+                            className={cn(
+                                "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
+                                fulfillmentFilter === 'auto'
+                                    ? "bg-primary text-primary-foreground shadow-2xs"
+                                    : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            )}
+                        >
+                            <Zap className="h-3 w-3" />
+                            ⚡ 自动秒发
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setFulfillmentFilter('manual')}
+                            className={cn(
+                                "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
+                                fulfillmentFilter === 'manual'
+                                    ? "bg-blue-600 text-white shadow-2xs dark:bg-blue-500"
+                                    : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            )}
+                        >
+                            <PackageOpen className="h-3 w-3" />
+                            📦 手工交付
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setFulfillmentFilter(f => f === 'inStock' ? 'all' : 'inStock')}
+                            className={cn(
+                                "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
+                                fulfillmentFilter === 'inStock'
+                                    ? "bg-emerald-600 text-white shadow-2xs dark:bg-emerald-500"
+                                    : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            )}
+                        >
+                            <Check className="h-3 w-3" />
+                            仅看现货
+                        </button>
                     </div>
                 </div>
             </section>
@@ -319,6 +391,7 @@ export function HomeContent({
                                 pointDiscountEnabled: product.pointDiscountEnabled,
                                 pointDiscountPercent: product.pointDiscountPercent,
                             })
+                            const isManual = product.fulfillmentMode === 'manual' || product.groupManual
 
                             return <Link
                                 key={product.id}
@@ -326,7 +399,7 @@ export function HomeContent({
                                 prefetch={false}
                                 aria-label={t("common.viewDetails")}
                                 className={cn(
-                                    "group tech-card relative flex h-full flex-col overflow-hidden rounded-[1.8rem] border border-border/35 bg-card/85 shadow-[0_20px_50px_-38px_rgba(15,23,42,0.28)] transition-all duration-300 animate-in fade-in slide-in-from-bottom-2 motion-reduce:animate-none",
+                                    "group tech-card relative flex h-full flex-col overflow-hidden rounded-[1.8rem] border border-border/40 bg-card/90 shadow-[0_20px_50px_-38px_rgba(15,23,42,0.28)] transition-all duration-300 hover:border-primary/40 hover:shadow-md animate-in fade-in slide-in-from-bottom-2 motion-reduce:animate-none",
                                     product.stockCount <= 0 && "opacity-90"
                                 )}
                                 style={{ animationDelay: `${index * 60}ms` }}
@@ -350,16 +423,27 @@ export function HomeContent({
                                         </div>
                                     )}
                                     <div className="absolute left-3 right-3 top-3 flex items-start justify-between gap-2">
-                                        {product.category && product.category !== "general" ? (
-                                            <Badge className="h-7 rounded-full border border-border/40 bg-background/86 px-3 text-[10px] font-medium capitalize text-foreground shadow-sm">
-                                                {product.category}
-                                            </Badge>
-                                        ) : (
-                                            <span />
-                                        )}
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                            {isManual ? (
+                                                <Badge className="h-6.5 rounded-md border-0 bg-blue-600/90 px-2 text-[10px] font-medium text-white shadow-xs backdrop-blur-xs dark:bg-blue-500/90">
+                                                    <PackageOpen className="mr-1 h-3 w-3" />
+                                                    手工交付
+                                                </Badge>
+                                            ) : (
+                                                <Badge className="h-6.5 rounded-md border-0 bg-primary/90 px-2 text-[10px] font-medium text-primary-foreground shadow-xs backdrop-blur-xs">
+                                                    <Zap className="mr-1 h-3 w-3" />
+                                                    自动秒发
+                                                </Badge>
+                                            )}
+                                            {product.category && product.category !== "general" && (
+                                                <Badge className="h-6.5 rounded-md border border-border/40 bg-background/90 px-2 text-[10px] font-medium capitalize text-foreground shadow-xs">
+                                                    {product.category}
+                                                </Badge>
+                                            )}
+                                        </div>
                                         <Badge
                                             className={cn(
-                                                "h-7 rounded-full border px-3 text-[10px] font-medium shadow-sm",
+                                                "h-6.5 rounded-md border px-2 text-[10px] font-medium shadow-xs",
                                                 product.stockCount > 0
                                                     ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
                                                     : "border-rose-500/20 bg-rose-500/10 text-rose-700 dark:text-rose-300"
@@ -369,79 +453,73 @@ export function HomeContent({
                                         </Badge>
                                     </div>
                                     {product.isHot && (
-                                        <Badge className="absolute bottom-3 left-3 h-7 rounded-full border-0 bg-orange-500 px-3 text-[10px] font-semibold text-white shadow-lg shadow-orange-500/20">
+                                        <Badge className="absolute bottom-3 left-3 h-6.5 rounded-md border-0 bg-orange-500 px-2.5 text-[10px] font-semibold text-white shadow-md shadow-orange-500/20">
                                             🔥 {t("buy.hot")}
                                         </Badge>
                                     )}
                                 </div>
 
                                 <CardContent className="relative z-20 flex flex-1 flex-col px-5 pb-5 pt-1">
-                                    <div className="mb-3 flex items-start justify-between gap-3">
-                                        <div className="space-y-2">
+                                    <div className="mb-2 flex items-start justify-between gap-3">
+                                        <div className="space-y-1.5">
                                             <h3
-                                                className="line-clamp-1 text-lg font-semibold tracking-tight text-foreground transition-colors duration-300 group-hover:text-primary"
+                                                className="line-clamp-1 text-base font-semibold tracking-tight text-foreground transition-colors duration-300 group-hover:text-primary"
                                                 title={product.name}
                                             >
                                                 {product.name}
                                             </h3>
                                             {product.reviewCount !== undefined && product.reviewCount > 0 && (
-                                                <div className="flex items-center gap-2">
+                                                <div className="flex items-center gap-1.5">
                                                     <StarRatingStatic rating={Math.round(product.rating || 0)} size="xs" />
                                                     <span className="text-[11px] font-medium text-muted-foreground">
-                                                        {product.reviewCount}
+                                                        ({product.reviewCount})
                                                     </span>
                                                 </div>
                                             )}
                                         </div>
                                     </div>
 
-                                    <div className="mb-5 line-clamp-3 min-h-[3.9rem] text-sm leading-6 text-muted-foreground/90">
+                                    <div className="mb-4 line-clamp-2 min-h-[2.6rem] text-xs leading-5 text-muted-foreground">
                                         {product.descriptionPlain || product.description || t("buy.noDescription")}
                                     </div>
 
-                                    <div className="mt-auto rounded-[1.3rem] border border-border/30 bg-muted/30 px-4 py-3">
-                                        <div className="flex flex-wrap items-center gap-2">
+                                    <div className="mt-auto rounded-xl border border-border/40 bg-muted/20 px-3.5 py-2.5">
+                                        <div className="flex flex-wrap items-center gap-1.5 pb-1">
                                             {product.variantCount != null && product.variantCount > 1 && (
-                                                <Badge variant="secondary" className="rounded-full text-[10px] font-medium">
+                                                <Badge variant="secondary" className="rounded-md text-[10px] font-medium h-5 px-1.5">
                                                     {t("home.variantCount", { count: product.variantCount })}
                                                 </Badge>
                                             )}
                                         </div>
-                                        <div className="flex items-end justify-between gap-4">
+                                        <div className="flex items-end justify-between gap-3">
                                             <div className="min-w-0">
-                                                <div className="flex flex-wrap items-baseline gap-2">
+                                                <div className="flex flex-wrap items-baseline gap-1.5">
                                                     {product.variantCount != null && product.variantCount > 1 && product.priceMin != null && product.priceMax != null ? (
                                                         <>
-                                                            <span className="whitespace-nowrap text-2xl font-semibold tracking-tight text-primary tabular-nums">
+                                                            <span className="text-xs font-semibold text-primary">¥</span>
+                                                            <span className="whitespace-nowrap text-xl font-bold tracking-tight text-primary tabular-nums">
                                                                 {product.priceMin} - {product.priceMax}
-                                                            </span>
-                                                            <span className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                                                                {t("common.credits")}
                                                             </span>
                                                         </>
                                                     ) : product.variantCount != null && product.variantCount > 1 && product.priceMin != null ? (
                                                         <>
-                                                            <span className="whitespace-nowrap text-2xl font-semibold tracking-tight text-primary tabular-nums">
-                                                                {t("home.priceFrom", { price: product.priceMin })}
-                                                            </span>
-                                                            <span className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                                                                {t("common.credits")}
+                                                            <span className="text-xs font-semibold text-primary">¥</span>
+                                                            <span className="whitespace-nowrap text-xl font-bold tracking-tight text-primary tabular-nums">
+                                                                {product.priceMin} 起
                                                             </span>
                                                         </>
                                                     ) : (
                                                         <>
-                                                            <span className="whitespace-nowrap text-2xl font-semibold tracking-tight text-primary tabular-nums">
-                                                                {Number(product.price)}
-                                                            </span>
-                                                            <span className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                                                                {t("common.credits")}
+                                                            <span className="text-xs font-semibold text-primary">¥</span>
+                                                            <span className="whitespace-nowrap text-xl font-bold tracking-tight text-primary tabular-nums">
+                                                                {Number(product.price).toFixed(2)}
                                                             </span>
                                                             {product.compareAtPrice && Number(product.compareAtPrice) > Number(product.price) && (
                                                                 <>
-                                                                    <span className="text-sm tabular-nums text-muted-foreground/50 line-through">
-                                                                        {Number(product.compareAtPrice)}
+                                                                    <span className="text-xs tabular-nums text-muted-foreground/60 line-through ml-1">
+                                                                        ¥{Number(product.compareAtPrice).toFixed(2)}
                                                                     </span>
-                                                                    <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-600 dark:bg-red-500/15 dark:text-red-400">
+                                                                    <span className="rounded bg-rose-500/10 px-1 py-0.2 text-[9px] font-semibold text-rose-600 dark:text-rose-400">
                                                                         -{Math.round((1 - Number(product.price) / Number(product.compareAtPrice)) * 100)}%
                                                                     </span>
                                                                 </>
@@ -449,19 +527,19 @@ export function HomeContent({
                                                         </>
                                                     )}
                                                     {pointDiscountBadge && (
-                                                        <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                                                            {t("common.pointDiscountBadge", { percent: pointDiscountBadge.percent })}
+                                                        <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                                                            抵{pointDiscountBadge.percent}%
                                                         </span>
                                                     )}
                                                 </div>
-                                                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                                                    <span>{t("common.stock")}: {product.stockCount >= INFINITE_STOCK ? "∞" : product.stockCount}</span>
-                                                    <span>{t("common.sold")}: {product.soldCount}</span>
+                                                <div className="mt-1 flex flex-wrap items-center gap-x-2.5 text-[11px] text-muted-foreground">
+                                                    <span>{t("common.stock")}: <strong className="font-medium text-foreground/80">{product.stockCount >= INFINITE_STOCK ? "充足" : product.stockCount}</strong></span>
+                                                    <span>{t("common.sold")}: <strong className="font-medium text-foreground/80">{product.soldCount}</strong></span>
                                                 </div>
                                             </div>
 
-                                            <div className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-border/40 bg-background/80 text-muted-foreground transition-transform duration-300 group-hover:border-primary/30 group-hover:text-primary group-hover:-translate-y-0.5 group-hover:translate-x-0.5">
-                                                <ArrowRight className="h-4.5 w-4.5" />
+                                            <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border/50 bg-background text-muted-foreground transition-all duration-200 group-hover:border-primary/40 group-hover:bg-primary group-hover:text-primary-foreground group-hover:scale-105 shadow-2xs">
+                                                <ArrowRight className="h-4 w-4" />
                                             </div>
                                         </div>
                                     </div>

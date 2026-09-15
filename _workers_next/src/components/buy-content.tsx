@@ -19,7 +19,7 @@ import {
     DialogTrigger
 } from "@/components/ui/dialog"
 import ReactMarkdown from 'react-markdown'
-import { ChevronLeft, ChevronRight, Expand, Loader2, Minus, Plus, Share2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, Expand, Loader2, Minus, Plus, Share2, Zap, PackageOpen, Check, ShieldCheck, Clock } from "lucide-react"
 import { ProductImagePlaceholder } from "@/components/product-image-placeholder"
 import { toast } from "sonner"
 import Image from "next/image"
@@ -30,6 +30,7 @@ import { buildProductImageGallery } from "@/lib/product-images"
 import { getProductPointDiscountBadge } from "@/lib/points/product-point-discount"
 import { parseCheckoutFieldConfigs } from "@/lib/checkout-fields"
 import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
 
 interface Product {
     id: string
@@ -481,6 +482,17 @@ export function BuyContent({
 
                                 <div className="space-y-5">
                                     <div className="flex flex-wrap items-center gap-2">
+                                        {displayProduct.fulfillmentMode === 'manual' ? (
+                                            <Badge variant="outline" className="rounded-full border-blue-500/30 bg-blue-500/10 px-3 py-1 font-medium text-xs text-blue-700 dark:text-blue-300 gap-1.5 shadow-2xs">
+                                                <PackageOpen className="h-3.5 w-3.5" />
+                                                <span>{t('order.fulfillmentManual')}</span>
+                                            </Badge>
+                                        ) : (
+                                            <Badge variant="outline" className="rounded-full border-primary/30 bg-primary/10 px-3 py-1 font-medium text-xs text-primary gap-1.5 shadow-2xs">
+                                                <Zap className="h-3.5 w-3.5" />
+                                                <span>{t('order.fulfillmentAuto')}</span>
+                                            </Badge>
+                                        )}
                                         {displayProduct.category && displayProduct.category !== 'general' && (
                                             <Badge variant="secondary" className="rounded-full border border-border/45 bg-background/70 px-3 py-1 capitalize">
                                                 {displayProduct.category}
@@ -531,24 +543,59 @@ export function BuyContent({
                             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(59,130,246,0.12),_transparent_36%)] dark:bg-[radial-gradient(circle_at_top_right,_rgba(96,165,250,0.14),_transparent_40%)]" />
                             <CardContent className="relative space-y-6 p-6">
                                 {variants.length > 1 && (
-                                    <div className="space-y-2">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                                            {t('buy.selectVariant')}
+                                    <div className="space-y-2.5">
+                                        <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                                            <span>{t('buy.selectVariant')}</span>
+                                            <span className="text-xs normal-case tracking-normal font-normal text-muted-foreground/80">
+                                                {variants.length} 款规格可选
+                                            </span>
                                         </div>
-                                        <div className="flex flex-wrap gap-2">
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                             {variants.map((v) => {
                                                 const isSelected = v.id === selectedVariantId
+                                                const isVariantManual = v.fulfillmentMode === 'manual'
+                                                const hasVariantStock = isVariantManual || v.stockCount > 0
                                                 return (
-                                                    <Button
+                                                    <button
                                                         key={v.id}
                                                         type="button"
-                                                        variant={isSelected ? "default" : "outline"}
-                                                        size="sm"
-                                                        className="rounded-xl font-medium"
                                                         onClick={() => setSelectedVariantId(v.id)}
+                                                        className={cn(
+                                                            "group relative flex flex-col justify-between rounded-xl border p-3 text-left transition-all",
+                                                            isSelected
+                                                                ? "border-primary bg-primary/5 ring-2 ring-primary/20 shadow-xs text-foreground"
+                                                                : "border-border/60 bg-card/60 hover:border-border hover:bg-muted/30 text-foreground/80"
+                                                        )}
                                                     >
-                                                        {v.variantLabel || v.id}
-                                                    </Button>
+                                                        <div className="flex items-start justify-between gap-2">
+                                                            <span className={cn(
+                                                                "text-xs font-semibold line-clamp-1",
+                                                                isSelected ? "text-primary font-bold" : "text-foreground"
+                                                            )}>
+                                                                {v.variantLabel || v.name || v.id}
+                                                            </span>
+                                                            {isSelected && (
+                                                                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                                                                    <Check className="h-2.5 w-2.5" />
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div className="mt-2 flex items-baseline justify-between gap-2">
+                                                            <span className="text-sm font-bold tabular-nums text-foreground">
+                                                                ¥{Number(v.price).toFixed(2)}
+                                                            </span>
+                                                            <span className={cn(
+                                                                "text-[10px] font-medium px-1.5 py-0.5 rounded-md",
+                                                                isVariantManual
+                                                                    ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                                                                    : hasVariantStock
+                                                                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                                                    : "bg-destructive/10 text-destructive"
+                                                            )}>
+                                                                {isVariantManual ? "手工交付" : hasVariantStock ? `现货 ${v.stockCount > 99 ? '99+' : v.stockCount}` : "已售罄"}
+                                                            </span>
+                                                        </div>
+                                                    </button>
                                                 )
                                             })}
                                         </div>
@@ -560,8 +607,9 @@ export function BuyContent({
                                             {t('buy.title')}
                                         </div>
                                         <div className="flex flex-wrap items-baseline gap-2">
-                                            <span className="text-3xl font-semibold tracking-tight text-primary tabular-nums">
-                                                {priceValue}
+                                            <span className="text-base font-semibold text-primary">¥</span>
+                                            <span className="text-3xl font-extrabold tracking-tight text-primary tabular-nums">
+                                                {priceValue.toFixed(2)}
                                             </span>
                                             <span className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
                                                 {t('common.credits')}
@@ -569,7 +617,7 @@ export function BuyContent({
                                             {compareAtPriceValue && compareAtPriceValue > priceValue && (
                                                 <>
                                                     <span className="text-sm tabular-nums text-muted-foreground/50 line-through">
-                                                        {compareAtPriceValue}
+                                                        ¥{compareAtPriceValue.toFixed(2)}
                                                     </span>
                                                     <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-600 dark:bg-red-500/15 dark:text-red-400">
                                                         -{Math.round((1 - priceValue / compareAtPriceValue) * 100)}%
@@ -584,33 +632,39 @@ export function BuyContent({
                                         </div>
                                     </div>
 
-                                    <div className="flex flex-wrap gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        {displayProduct.fulfillmentMode === 'manual' ? (
+                                            <Badge variant="outline" className="rounded-lg border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300 font-medium gap-1 px-2.5 py-1">
+                                                <PackageOpen className="h-3.5 w-3.5" />
+                                                {t('order.fulfillmentManual')}
+                                            </Badge>
+                                        ) : (
+                                            <Badge variant="outline" className="rounded-lg border-primary/30 bg-primary/10 text-primary font-medium gap-1 px-2.5 py-1">
+                                                <Zap className="h-3.5 w-3.5" />
+                                                {t('order.fulfillmentAuto')}
+                                            </Badge>
+                                        )}
                                         <Badge
                                             variant={displayStock > 0 ? "outline" : "destructive"}
-                                            className={displayStock > 0 ? "rounded-lg border-primary/25 bg-primary/5 px-3 py-1.5 text-primary font-medium" : "rounded-lg px-3 py-1.5 font-medium"}
+                                            className={displayStock > 0 ? "rounded-lg border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-700 dark:text-emerald-300 font-medium" : "rounded-lg px-2.5 py-1 font-medium"}
                                         >
                                             {stockLabel}
                                         </Badge>
                                         {displaySold > 0 && (
-                                            <Badge variant="secondary" className="rounded-lg border border-border/40 bg-muted/40 px-3 py-1.5 font-medium">
+                                            <Badge variant="secondary" className="rounded-lg border border-border/40 bg-muted/40 px-2.5 py-1 font-medium text-xs">
                                                 {t('common.sold')}: {displaySold}
                                             </Badge>
                                         )}
                                         {typeof displayProduct.purchaseLimit === 'number' && displayProduct.purchaseLimit > 0 && (
-                                            <Badge variant="secondary" className="rounded-lg border border-border/40 bg-muted/40 px-3 py-1.5 font-medium">
+                                            <Badge variant="secondary" className="rounded-lg border border-border/40 bg-muted/40 px-2.5 py-1 font-medium text-xs">
                                                 {t('buy.purchaseLimit', { limit: displayProduct.purchaseLimit })}
-                                            </Badge>
-                                        )}
-                                        {displayProduct.fulfillmentMode === 'manual' && (
-                                            <Badge variant="secondary" className="rounded-lg border border-border/40 bg-muted/40 px-3 py-1.5 font-medium">
-                                                {t('order.fulfillmentManual')}
                                             </Badge>
                                         )}
                                     </div>
                                 </div>
 
                                 {isLoggedIn && hasStock && checkoutFields.length > 0 && (
-                                    <div className="rounded-2xl border border-border/25 bg-muted/20 p-4 space-y-3">
+                                    <div id="checkout-fields-container" className="rounded-2xl border border-border/25 bg-muted/20 p-4 space-y-3 transition-all scroll-mt-28">
                                         <div className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
                                             {t('buy.checkoutFieldsTitle')}
                                         </div>
@@ -855,6 +909,57 @@ export function BuyContent({
                                 {!showInlineShareAction && (
                                     <div className="flex justify-end">
                                         {renderShareButton(false)}
+                                    </div>
+                                )}
+
+                                {/* Stripe 风格履约与保障看板 */}
+                                {displayProduct.fulfillmentMode === 'manual' ? (
+                                    <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-2.5">
+                                        <div className="flex items-center gap-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                                            <PackageOpen className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
+                                            <span>人工专人履约 · 交付附件查验</span>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground leading-relaxed">
+                                            付款后商家专人接单交付。订单详情页支持交付附件下载与进度追踪，售后全天候保障。
+                                        </p>
+                                        <div className="grid grid-cols-3 gap-1 pt-2 border-t border-blue-500/15 text-[11px] text-muted-foreground">
+                                            <div className="flex items-center gap-1 font-medium">
+                                                <Check className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                                                <span>专人交付</span>
+                                            </div>
+                                            <div className="flex items-center gap-1 font-medium">
+                                                <ShieldCheck className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                                                <span>平台质保</span>
+                                            </div>
+                                            <div className="flex items-center gap-1 font-medium">
+                                                <Clock className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                                                <span>永久存底</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4 space-y-2.5">
+                                        <div className="flex items-center gap-2 text-xs font-semibold text-primary">
+                                            <Zap className="h-4 w-4 shrink-0 text-primary" />
+                                            <span>自动秒级发货 · 付款即出密</span>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground leading-relaxed">
+                                            系统全天候自动提取卡密，支付完成后立即在订单页展示，并同步备份至账户与邮箱。
+                                        </p>
+                                        <div className="grid grid-cols-3 gap-1 pt-2 border-t border-primary/15 text-[11px] text-muted-foreground">
+                                            <div className="flex items-center gap-1 font-medium">
+                                                <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                                                <span>7×24h 自动</span>
+                                            </div>
+                                            <div className="flex items-center gap-1 font-medium">
+                                                <ShieldCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                                                <span>资金安全</span>
+                                            </div>
+                                            <div className="flex items-center gap-1 font-medium">
+                                                <Clock className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                                                <span>即买即用</span>
+                                            </div>
+                                        </div>
                                     </div>
                                 )}
 

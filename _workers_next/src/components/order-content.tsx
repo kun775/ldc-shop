@@ -1,11 +1,31 @@
 'use client'
 
-import { useRef, useState } from "react"
+import { useRef, useState, useEffect } from "react"
 import { useI18n } from "@/lib/i18n/context"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { CreditCard, Package, Clock, AlertCircle, CheckCircle2, Loader2, User } from "lucide-react"
+import { 
+    CreditCard, 
+    Package, 
+    Clock, 
+    AlertCircle, 
+    CheckCircle2, 
+    Loader2, 
+    User,
+    Eye,
+    EyeOff,
+    Copy,
+    Check,
+    Download,
+    FileArchive,
+    FileText,
+    File,
+    Zap,
+    PackageOpen,
+    ShieldCheck,
+    ChevronRight
+} from "lucide-react"
 import { CopyButton } from "@/components/copy-button"
 import { ClientDate } from "@/components/client-date"
 import { Textarea } from "@/components/ui/textarea"
@@ -13,13 +33,31 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { requestRefund } from "@/actions/refund-requests"
 import { toast } from "sonner"
-import { useEffect } from "react"
 import { checkOrderStatus, cancelPendingOrder } from "@/actions/order"
 import { useRouter } from "next/navigation"
 import { isPaymentOrder } from "@/lib/payment"
 import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
 import { isManualFulfillment } from "@/lib/fulfillment"
 import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
+import { cn } from "@/lib/utils"
+
+function formatFileSize(bytes: number) {
+    if (!bytes || bytes <= 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(1024))
+    return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+function getFileIcon(fileName: string) {
+    const ext = fileName.split('.').pop()?.toLowerCase() || ''
+    if (['zip', '7z', 'rar', 'tar', 'gz'].includes(ext)) {
+        return <FileArchive className="h-5 w-5 text-indigo-500" />
+    }
+    if (['pdf', 'doc', 'docx', 'txt', 'md'].includes(ext)) {
+        return <FileText className="h-5 w-5 text-blue-500" />
+    }
+    return <File className="h-5 w-5 text-muted-foreground" />
+}
 
 interface Order {
     orderId: string
@@ -53,6 +91,8 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
     const [reason, setReason] = useState("")
     const [submitting, setSubmitting] = useState(false)
     const [confirmOpen, setConfirmOpen] = useState(false)
+    const [showKey, setShowKey] = useState(true)
+    const [copiedLineIndex, setCopiedLineIndex] = useState<number | null>(null)
     const submitLock = useRef(false)
     const isPayment = isPaymentOrder(order.productId)
     const checkoutFieldValues = parseCheckoutFieldValues(order.checkoutFieldValues)
@@ -62,6 +102,18 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
         amount: order.amount,
         pointsUsed: order.pointsUsed
     })
+
+    const cardLines = (order.cardKey || '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
+
+    const currentStep = (() => {
+        if (order.status === 'delivered') return 4
+        if (order.status === 'paid') return 3
+        if (order.status === 'pending') return 2
+        return 1
+    })()
 
     const handleRefundConfirm = async () => {
         if (submitLock.current) return
@@ -170,6 +222,55 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                 </CardHeader>
 
                 <CardContent className="space-y-6">
+                    {/* 4 阶履约状态步进器 */}
+                    <div className="rounded-2xl border border-border/50 bg-muted/20 p-4 space-y-3">
+                        <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                            <span>履约流转进度</span>
+                            <span className={cn(
+                                "font-medium normal-case tracking-normal",
+                                order.status === 'delivered' ? "text-emerald-600 dark:text-emerald-400" :
+                                order.status === 'paid' ? "text-blue-600 dark:text-blue-400" :
+                                order.status === 'pending' ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
+                            )}>
+                                {order.status === 'delivered' ? "全部流程已完成" :
+                                 order.status === 'paid' ? (isManual ? "等待商家人工交付" : "自动秒发交付中") :
+                                 order.status === 'pending' ? "等待买家完成支付" : getStatusText(order.status)}
+                            </span>
+                        </div>
+                        <div className="grid grid-cols-4 gap-2 pt-1">
+                            {[
+                                { step: 1, label: "提交订单", desc: "已生成" },
+                                { step: 2, label: "支付核验", desc: order.status === 'pending' ? "待支付" : "已支付" },
+                                { step: 3, label: isManual ? "人工交付" : "自动秒提", desc: order.status === 'delivered' ? "已完成" : order.status === 'paid' ? "履约中" : "待处理" },
+                                { step: 4, label: "交付查验", desc: order.status === 'delivered' ? "已交付" : "待查验" }
+                            ].map((s) => {
+                                const isDone = currentStep > s.step || (currentStep === 4 && s.step === 4)
+                                const isCurrent = currentStep === s.step && order.status !== 'delivered'
+                                return (
+                                    <div key={s.step} className="flex flex-col items-center text-center space-y-1.5">
+                                        <div className={cn(
+                                            "flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-all",
+                                            isDone ? "bg-emerald-500 text-white shadow-xs" :
+                                            isCurrent ? "bg-primary text-primary-foreground ring-4 ring-primary/20 animate-pulse" :
+                                            "bg-muted border border-border/60 text-muted-foreground"
+                                        )}>
+                                            {isDone ? <Check className="h-3.5 w-3.5" /> : s.step}
+                                        </div>
+                                        <span className={cn(
+                                            "text-xs font-semibold",
+                                            isDone || isCurrent ? "text-foreground" : "text-muted-foreground/70"
+                                        )}>
+                                            {s.label}
+                                        </span>
+                                        <span className="text-[10px] text-muted-foreground hidden sm:block">
+                                            {s.desc}
+                                        </span>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    </div>
+
                     {/* Info Cards */}
                     <div className="grid gap-4">
                         {/* Product Info */}
@@ -276,53 +377,148 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                     {order.status === 'delivered' && !isPayment ? (
                         canViewKey ? (
                             <div className="space-y-4">
-                                <h3 className="font-semibold flex items-center gap-2">
-                                    <CheckCircle2 className="h-4 w-4 text-green-500" />
-                                    {isManual ? t('order.deliveryContent') : t('order.yourContent')}
-                                </h3>
                                 {isManual ? (
-                                    <div className="space-y-3 rounded-xl border border-border/30 bg-muted/20 p-4">
-                                        {order.deliveryNote && <p className="whitespace-pre-wrap text-sm">{order.deliveryNote}</p>}
+                                    <div className="space-y-4">
+                                        <h3 className="font-semibold text-sm flex items-center gap-2 text-foreground">
+                                            <PackageOpen className="h-4 w-4 text-blue-500" />
+                                            <span>{t('order.deliveryContent')}</span>
+                                        </h3>
+
+                                        {order.deliveryNote && (
+                                            <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-2">
+                                                <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400">
+                                                    <PackageOpen className="h-3.5 w-3.5" />
+                                                    <span>商家交付说明</span>
+                                                </div>
+                                                <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-relaxed pl-1">
+                                                    {order.deliveryNote}
+                                                </p>
+                                            </div>
+                                        )}
+
                                         {deliveryFiles.length > 0 && (
-                                            <div className="space-y-2">
-                                                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('order.deliveryFiles')}</p>
-                                                {deliveryFiles.map((file) => (
-                                                    <a
-                                                        key={file.id}
-                                                        href={`/order/${order.orderId}/files/${file.id}`}
-                                                        className="block text-sm text-primary hover:underline"
-                                                    >
-                                                        {t('order.downloadFile', { name: file.fileName })}
-                                                    </a>
-                                                ))}
+                                            <div className="space-y-2.5">
+                                                <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                                    <span>{t('order.deliveryFiles')}</span>
+                                                    <span>共 {deliveryFiles.length} 个附件</span>
+                                                </div>
+                                                <div className="grid gap-2">
+                                                    {deliveryFiles.map((file) => (
+                                                        <div
+                                                            key={file.id}
+                                                            className="flex items-center justify-between p-3.5 rounded-xl border border-border/60 bg-muted/20 hover:bg-muted/40 transition-colors"
+                                                        >
+                                                            <div className="flex items-center gap-3 min-w-0 pr-3">
+                                                                <div className="p-2.5 rounded-xl bg-background border border-border/40 shrink-0 shadow-2xs">
+                                                                    {getFileIcon(file.fileName)}
+                                                                </div>
+                                                                <div className="min-w-0">
+                                                                    <p className="text-sm font-semibold text-foreground truncate">{file.fileName}</p>
+                                                                    <p className="text-xs text-muted-foreground font-mono">{formatFileSize(file.size)}</p>
+                                                                </div>
+                                                            </div>
+                                                            <Button asChild size="sm" variant="outline" className="rounded-xl gap-1.5 text-xs shrink-0 font-medium hover:bg-primary hover:text-primary-foreground transition-all">
+                                                                <a href={`/order/${order.orderId}/files/${file.id}`} download>
+                                                                    <Download className="h-3.5 w-3.5" />
+                                                                    <span>下载</span>
+                                                                </a>
+                                                            </Button>
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
                                         )}
                                     </div>
                                 ) : (
-                                <div className="relative group">
-                                    <div className="absolute -inset-0.5 bg-gradient-to-r from-primary/50 to-accent/50 rounded-xl blur opacity-20 group-hover:opacity-40 transition duration-300" />
-                                    <div className="relative p-4 bg-slate-950 rounded-xl font-mono text-sm text-slate-100 break-all whitespace-pre-wrap pr-14 border border-slate-800">
-                                        <div className="absolute top-2 left-4 flex gap-1.5">
-                                            <div className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
-                                            <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
-                                            <div className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <h3 className="font-semibold text-sm flex items-center gap-2 text-foreground">
+                                                <ShieldCheck className="h-4 w-4 text-emerald-500" />
+                                                <span>{t('order.yourContent')}</span>
+                                                <span className="text-[11px] font-normal text-muted-foreground">
+                                                    ({cardLines.length > 1 ? `共 ${cardLines.length} 行卡密` : "单行卡密"})
+                                                </span>
+                                            </h3>
+                                            <div className="flex items-center gap-2">
+                                                <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => setShowKey(!showKey)}
+                                                    className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground gap-1"
+                                                >
+                                                    {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                                                    <span>{showKey ? "隐藏" : "显示"}</span>
+                                                </Button>
+                                                <CopyButton text={order.cardKey || ''} />
+                                            </div>
                                         </div>
-                                        <div className="mt-4">
-                                            {order.cardKey}
+
+                                        <div className="relative overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl text-slate-100">
+                                            {/* Terminal header */}
+                                            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5 mb-3 text-xs">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="flex gap-1.5">
+                                                        <div className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
+                                                        <div className="h-2.5 w-2.5 rounded-full bg-yellow-500/80" />
+                                                        <div className="h-2.5 w-2.5 rounded-full bg-green-500/80" />
+                                                    </div>
+                                                    <span className="font-mono text-[11px] text-slate-400 pl-1">
+                                                        secret-terminal · {order.orderId.slice(0, 8)}
+                                                    </span>
+                                                </div>
+                                                <span className="font-mono text-[10px] text-slate-500">
+                                                    ENCRYPTED PAYLOAD
+                                                </span>
+                                            </div>
+
+                                            {/* Terminal body */}
+                                            {cardLines.length > 1 ? (
+                                                <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                                                    {cardLines.map((line, idx) => (
+                                                        <div
+                                                            key={idx}
+                                                            className="flex items-center justify-between gap-3 rounded-lg border border-slate-800/60 bg-slate-900/60 px-3 py-2 font-mono text-xs hover:border-slate-700/80 hover:bg-slate-900/90 transition-colors"
+                                                        >
+                                                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                                                <span className="text-[11px] font-bold text-slate-500 select-none">
+                                                                    #{String(idx + 1).padStart(2, '0')}
+                                                                </span>
+                                                                <span className="text-slate-200 select-all break-all">
+                                                                    {showKey ? line : '••••••••••••••••••••••••'}
+                                                                </span>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    navigator.clipboard.writeText(line)
+                                                                    setCopiedLineIndex(idx)
+                                                                    toast.success(`第 ${idx + 1} 行已复制`)
+                                                                    setTimeout(() => setCopiedLineIndex(null), 2000)
+                                                                }}
+                                                                className="shrink-0 p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
+                                                                title="复制本行卡密"
+                                                            >
+                                                                {copiedLineIndex === idx ? (
+                                                                    <Check className="h-3.5 w-3.5 text-emerald-400" />
+                                                                ) : (
+                                                                    <Copy className="h-3.5 w-3.5" />
+                                                                )}
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="p-3 font-mono text-sm break-all select-all text-slate-200 leading-relaxed bg-slate-900/50 rounded-xl border border-slate-800/60">
+                                                    {showKey ? (order.cardKey || '-') : '••••••••••••••••••••••••••••••••••••••••'}
+                                                </div>
+                                            )}
                                         </div>
-                                        <div className="absolute top-3 right-3">
-                                            <CopyButton text={order.cardKey || ''} iconOnly />
-                                        </div>
+                                        <p className="text-xs text-muted-foreground flex items-center gap-1.5 pt-1">
+                                            <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                                            <span>{t('order.saveKeySecurely')}</span>
+                                        </p>
                                     </div>
-                                </div>
-                                )}
-                                {!isManual && (
-                                <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
-                                    {t('order.saveKeySecurely')}
-                                </p>
                                 )}
                             </div>
                         ) : (

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Trash2, Plus, GripVertical } from "lucide-react"
 import {
     CHECKOUT_FIELD_LIMITS,
     createEmptyCheckoutField,
@@ -68,7 +69,35 @@ export function ProductCheckoutFieldsSection({
                     <div className="space-y-3">
                         <input type="hidden" name="checkoutFields" value={JSON.stringify(checkoutFields)} />
                         {checkoutFields.map((field, index) => (
-                            <div key={field.id} className="space-y-3 rounded-lg border bg-background/80 p-3">
+                            <div key={field.id} className="space-y-3 rounded-xl border border-border/70 bg-background/90 p-3.5 shadow-2xs transition-all">
+                                <div className="flex items-center justify-between pb-1 border-b border-border/50">
+                                    <div className="flex items-center gap-2">
+                                        <span className="flex h-5 w-5 items-center justify-center rounded-md bg-muted text-[11px] font-semibold text-muted-foreground">
+                                            #{index + 1}
+                                        </span>
+                                        <span className="text-xs font-medium text-foreground">
+                                            {field.label || t('admin.productForm.checkoutFieldLabelPlaceholder')}
+                                        </span>
+                                        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                                            {field.type === 'textarea' ? '多行文本' : field.type === 'select' ? '下拉单选' : '单行输入'}
+                                        </span>
+                                        {field.required && (
+                                            <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                                必填
+                                            </span>
+                                        )}
+                                    </div>
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                        onClick={() => setCheckoutFields(checkoutFields.filter((_, fieldIndex) => fieldIndex !== index))}
+                                        title="删除此采集项"
+                                    >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                </div>
                                 <div className="flex items-start gap-2">
                                     <div className="grid flex-1 gap-3 sm:grid-cols-2">
                                         <div className="space-y-1.5">
@@ -123,15 +152,6 @@ export function ProductCheckoutFieldsSection({
                                             />
                                         </div>
                                     </div>
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        className="shrink-0 text-destructive hover:text-destructive"
-                                        onClick={() => setCheckoutFields(checkoutFields.filter((_, fieldIndex) => fieldIndex !== index))}
-                                    >
-                                        ×
-                                    </Button>
                                 </div>
                                 <div className="space-y-1.5">
                                     <Label>{t('admin.productForm.checkoutFieldHint')}</Label>
@@ -156,14 +176,14 @@ export function ProductCheckoutFieldsSection({
                                         <p className="text-xs text-muted-foreground">{t('admin.productForm.checkoutFieldOptionsHint')}</p>
                                     </div>
                                 )}
-                                <label className="flex items-center gap-2 text-sm">
+                                <label className="flex items-center gap-2 text-sm cursor-pointer">
                                     <input
                                         type="checkbox"
                                         checked={field.required}
                                         onChange={(event) => setCheckoutFields(updateField(checkoutFields, index, { required: event.target.checked }))}
-                                        className="h-4 w-4 accent-primary"
+                                        className="h-4 w-4 rounded accent-primary"
                                     />
-                                    {t('admin.productForm.checkoutFieldRequired')}
+                                    <span className="font-medium text-foreground">{t('admin.productForm.checkoutFieldRequired')}</span>
                                 </label>
                             </div>
                         ))}
@@ -173,8 +193,10 @@ export function ProductCheckoutFieldsSection({
                             size="sm"
                             disabled={!canAddMore}
                             onClick={() => setCheckoutFields([...checkoutFields, createEmptyCheckoutField()])}
+                            className="gap-1.5 text-xs"
                         >
-                            + {t('admin.productForm.addCheckoutField')}
+                            <Plus className="h-3.5 w-3.5" />
+                            {t('admin.productForm.addCheckoutField')}
                         </Button>
                     </div>
                 )}

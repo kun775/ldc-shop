@@ -1,11 +1,13 @@
 'use client'
 
-import { Loader2 } from "lucide-react"
+import { Loader2, Zap, PackageOpen, Check } from "lucide-react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { cn } from "@/lib/utils"
 
 type ProductSettingsSidebarProps = {
     currentProduct: any
@@ -30,6 +32,9 @@ export function ProductSettingsSidebar({
     onCancel,
     t,
 }: ProductSettingsSidebarProps) {
+    const [fulfillmentMode, setFulfillmentMode] = useState<string>(
+        currentProduct?.fulfillmentMode === 'manual' ? 'manual' : 'auto'
+    )
     return (
         <div className="space-y-4 lg:sticky lg:top-6">
             <Card className="border-primary/20 bg-primary/[0.03]">
@@ -102,18 +107,73 @@ export function ProductSettingsSidebar({
                     <CardDescription>{t('admin.productForm.attributesSectionHint')}</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                    <div className="grid gap-2 rounded-lg border bg-muted/20 p-4">
-                        <Label htmlFor="fulfillmentMode">{t('admin.productForm.fulfillmentModeLabel')}</Label>
-                        <select
-                            id="fulfillmentMode"
-                            name="fulfillmentMode"
-                            defaultValue={currentProduct?.fulfillmentMode === 'manual' ? 'manual' : 'auto'}
-                            className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-2"
-                        >
-                            <option value="auto">{t('admin.productForm.fulfillmentModeAuto')}</option>
-                            <option value="manual">{t('admin.productForm.fulfillmentModeManual')}</option>
-                        </select>
-                        <p className="text-xs text-muted-foreground">{t('admin.productForm.fulfillmentModeHint')}</p>
+                    <div className="grid gap-2.5 rounded-xl border border-border/70 bg-muted/20 p-3.5">
+                        <div className="flex items-center justify-between">
+                            <Label className="text-xs font-semibold tracking-tight text-foreground">
+                                {t('admin.productForm.fulfillmentModeLabel')}
+                            </Label>
+                            <span className="text-[11px] font-medium text-muted-foreground">
+                                {fulfillmentMode === 'manual' ? '📦 手工履约' : '⚡ 自动发卡'}
+                            </span>
+                        </div>
+
+                        {/* Hidden input preserves standard FormData submission */}
+                        <input type="hidden" name="fulfillmentMode" value={fulfillmentMode} />
+
+                        {/* Linear Style Segmented Mode Cards */}
+                        <div className="grid grid-cols-2 gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setFulfillmentMode('auto')}
+                                className={cn(
+                                    "flex flex-col items-start gap-1.5 rounded-lg border p-2.5 text-left transition-all",
+                                    fulfillmentMode === 'auto'
+                                        ? "border-primary/80 bg-primary/5 shadow-xs ring-1 ring-primary/40 dark:bg-primary/10"
+                                        : "border-border/60 bg-background/50 hover:border-border hover:bg-muted/40"
+                                )}
+                            >
+                                <div className="flex w-full items-center justify-between">
+                                    <div className="flex items-center gap-1.5 font-medium text-xs text-foreground">
+                                        <Zap className={cn("h-3.5 w-3.5", fulfillmentMode === 'auto' ? "text-primary" : "text-muted-foreground")} />
+                                        <span>{t('admin.productForm.fulfillmentModeAuto')}</span>
+                                    </div>
+                                    {fulfillmentMode === 'auto' && (
+                                        <Check className="h-3 w-3 text-primary" />
+                                    )}
+                                </div>
+                                <span className="text-[10px] text-muted-foreground leading-tight">
+                                    绑定库存自动出密
+                                </span>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => setFulfillmentMode('manual')}
+                                className={cn(
+                                    "flex flex-col items-start gap-1.5 rounded-lg border p-2.5 text-left transition-all",
+                                    fulfillmentMode === 'manual'
+                                        ? "border-primary/80 bg-primary/5 shadow-xs ring-1 ring-primary/40 dark:bg-primary/10"
+                                        : "border-border/60 bg-background/50 hover:border-border hover:bg-muted/40"
+                                )}
+                            >
+                                <div className="flex w-full items-center justify-between">
+                                    <div className="flex items-center gap-1.5 font-medium text-xs text-foreground">
+                                        <PackageOpen className={cn("h-3.5 w-3.5", fulfillmentMode === 'manual' ? "text-primary" : "text-muted-foreground")} />
+                                        <span>{t('admin.productForm.fulfillmentModeManual')}</span>
+                                    </div>
+                                    {fulfillmentMode === 'manual' && (
+                                        <Check className="h-3 w-3 text-primary" />
+                                    )}
+                                </div>
+                                <span className="text-[10px] text-muted-foreground leading-tight">
+                                    人工交付/文件附件
+                                </span>
+                            </button>
+                        </div>
+
+                        <p className="text-[11px] text-muted-foreground leading-relaxed">
+                            {t('admin.productForm.fulfillmentModeHint')}
+                        </p>
                     </div>
 
                     <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-4">

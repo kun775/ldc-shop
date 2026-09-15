@@ -19,6 +19,45 @@ import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
 import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
 import { isManualFulfillment } from "@/lib/fulfillment"
 import { Textarea } from "@/components/ui/textarea"
+import { 
+  Zap, 
+  PackageOpen, 
+  Download, 
+  FileArchive, 
+  FileText, 
+  File, 
+  CheckCircle2, 
+  AlertCircle, 
+  Clock, 
+  Trash2, 
+  Check, 
+  ArrowLeft, 
+  Send,
+  Loader2,
+  ShieldCheck,
+  User,
+  CreditCard,
+  Package
+} from "lucide-react"
+import { cn } from "@/lib/utils"
+
+function formatFileSize(bytes: number) {
+  if (!bytes || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+function getFileIcon(fileName: string) {
+  const ext = fileName.split('.').pop()?.toLowerCase() || ''
+  if (['zip', '7z', 'rar', 'tar', 'gz'].includes(ext)) {
+    return <FileArchive className="h-4 w-4 text-indigo-500" />
+  }
+  if (['pdf', 'doc', 'docx', 'txt', 'md'].includes(ext)) {
+    return <FileText className="h-4 w-4 text-blue-500" />
+  }
+  return <File className="h-4 w-4 text-muted-foreground" />
+}
 
 function statusVariant(status: string | null) {
   switch (status) {
@@ -105,33 +144,70 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
     <div className="space-y-6 max-w-4xl">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">{t('admin.orders.detailTitle')}</h1>
-          <div className="mt-2 flex items-center gap-2">
-            <span className="font-mono text-xs text-muted-foreground">{order.orderId}</span>
-            <Badge variant={statusVariant(order.status)} className="uppercase text-xs">{t(`order.status.${status}`)}</Badge>
+          <h1 className="text-2xl font-bold tracking-tight">{t('admin.orders.detailTitle')}</h1>
+          <div className="mt-1.5 flex items-center gap-2">
+            <span className="font-mono text-xs text-muted-foreground bg-muted/60 px-2 py-0.5 rounded-md">{order.orderId}</span>
+            <Badge variant={statusVariant(order.status)} className="uppercase text-xs font-semibold gap-1">
+              {order.status === 'delivered' ? <CheckCircle2 className="h-3 w-3 text-emerald-500" /> :
+               order.status === 'paid' ? <Clock className="h-3 w-3 text-blue-500" /> :
+               <AlertCircle className="h-3 w-3" />}
+              <span>{t(`order.status.${status}`)}</span>
+            </Badge>
           </div>
         </div>
-        <Button asChild variant="outline">
-          <Link href="/admin/orders">{t('common.back')}</Link>
+        <Button asChild variant="outline" className="rounded-xl gap-1.5 text-xs">
+          <Link href="/admin/orders">
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>{t('common.back')}</span>
+          </Link>
         </Button>
       </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>{t('admin.orders.detail')}</CardTitle>
+      <Card className="tech-card border-border/50">
+        <CardHeader className="flex flex-row items-center justify-between border-b border-border/40 pb-4">
+          <CardTitle className="text-base font-semibold">{t('admin.orders.detail')}</CardTitle>
           <div className="flex items-center gap-2">
             {canMarkPaid && (
-              <Button variant="outline" onClick={() => handleStatus('paid')} disabled={actionLoading}>{t('admin.orders.markPaid')}</Button>
+              <Button 
+                variant="default" 
+                size="sm" 
+                className="rounded-xl gap-1.5 text-xs font-medium" 
+                onClick={() => handleStatus('paid')} 
+                disabled={actionLoading}
+              >
+                <Check className="h-3.5 w-3.5" />
+                <span>{t('admin.orders.markPaid')}</span>
+              </Button>
             )}
             {canMarkDelivered && !isManual && (
-              <Button variant="outline" onClick={() => handleStatus('delivered')} disabled={actionLoading}>{t('admin.orders.markDelivered')}</Button>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="rounded-xl gap-1.5 text-xs font-medium" 
+                onClick={() => handleStatus('delivered')} 
+                disabled={actionLoading}
+              >
+                <Zap className="h-3.5 w-3.5 text-primary" />
+                <span>{t('admin.orders.markDelivered')}</span>
+              </Button>
             )}
             {canCancel && (
-              <Button variant="destructive" onClick={() => handleStatus('cancel')} disabled={actionLoading}>{t('admin.orders.cancel')}</Button>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="rounded-xl text-destructive hover:bg-destructive/10 text-xs font-medium" 
+                onClick={() => handleStatus('cancel')} 
+                disabled={actionLoading}
+              >
+                {t('admin.orders.cancel')}
+              </Button>
             )}
+            <RefundButton order={order} />
             {canDelete && (
               <Button
-                variant="destructive"
+                variant="ghost"
+                size="sm"
+                className="rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 text-xs"
                 onClick={async () => {
                   if (actionLock.current) return
                   if (!confirm(t('admin.orders.confirmDelete'))) return
@@ -149,11 +225,11 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                   }
                 }}
                 disabled={actionLoading}
+                title={t('admin.orders.delete')}
               >
-                {t('admin.orders.delete')}
+                <Trash2 className="h-3.5 w-3.5" />
               </Button>
             )}
-            <RefundButton order={order} />
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -259,46 +335,107 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
             </div>
           )}
 
-          <div className="space-y-3 rounded-md border bg-muted/30 p-4">
-            <div className="text-sm font-medium">{t('admin.orders.fulfillmentTitle')}</div>
-            <div className="text-sm text-muted-foreground">
-              {isManual ? t('admin.orders.fulfillmentManual') : t('admin.orders.fulfillmentAuto')}
+          <div className="space-y-4 rounded-xl border border-border/50 bg-muted/20 p-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {isManual ? (
+                  <PackageOpen className="h-4 w-4 text-blue-500" />
+                ) : (
+                  <Zap className="h-4 w-4 text-primary" />
+                )}
+                <span className="font-semibold text-sm text-foreground">{t('admin.orders.fulfillmentTitle')}</span>
+              </div>
+              <Badge variant="outline" className={cn(
+                "rounded-md text-xs font-medium",
+                isManual ? "border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400" : "border-primary/30 bg-primary/10 text-primary"
+              )}>
+                {isManual ? t('admin.orders.fulfillmentManual') : t('admin.orders.fulfillmentAuto')}
+              </Badge>
             </div>
+
             {isManual && status === 'paid' && (
-              <form ref={deliveryFormRef} className="space-y-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="deliveryNote">{t('admin.orders.deliveryNote')}</Label>
-                  <Textarea
-                    id="deliveryNote"
-                    name="deliveryNote"
-                    value={deliveryNote}
-                    onChange={(event) => setDeliveryNote(event.target.value)}
-                    placeholder={t('admin.orders.deliveryNotePlaceholder')}
-                    className="min-h-28"
-                  />
+              <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-4">
+                <div className="flex items-center gap-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                  <PackageOpen className="h-4 w-4" />
+                  <span>手动发货履约工作台 · 待商家交付</span>
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="deliveryFiles">{t('admin.orders.deliveryFiles')}</Label>
-                  <Input id="deliveryFiles" name="deliveryFiles" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.zip,.7z" />
-                  <p className="text-xs text-muted-foreground">{t('admin.orders.deliveryFilesHint')}</p>
-                </div>
-                <Button type="button" onClick={() => handleStatus('delivered')} disabled={actionLoading}>
-                  {t('admin.orders.deliverNow')}
-                </Button>
-              </form>
-            )}
-            {(order.deliveryNote || deliveryFiles.length > 0) && (
-              <div className="space-y-2">
-                {order.deliveryNote && <p className="whitespace-pre-wrap text-sm">{order.deliveryNote}</p>}
-                {deliveryFiles.map((file: any) => (
-                  <a
-                    key={file.id}
-                    href={`/order/${order.orderId}/files/${file.id}`}
-                    className="block text-sm text-primary hover:underline"
+                <form ref={deliveryFormRef} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="deliveryNote" className="text-xs font-medium text-foreground">
+                      {t('admin.orders.deliveryNote')}
+                    </Label>
+                    <Textarea
+                      id="deliveryNote"
+                      name="deliveryNote"
+                      value={deliveryNote}
+                      onChange={(event) => setDeliveryNote(event.target.value)}
+                      placeholder={t('admin.orders.deliveryNotePlaceholder')}
+                      className="min-h-24 rounded-xl text-sm"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="deliveryFiles" className="text-xs font-medium text-foreground">
+                      {t('admin.orders.deliveryFiles')}
+                    </Label>
+                    <div className="rounded-xl border border-dashed border-border/80 bg-background/50 p-4 text-center space-y-2">
+                      <Input 
+                        id="deliveryFiles" 
+                        name="deliveryFiles" 
+                        type="file" 
+                        multiple 
+                        accept=".pdf,.png,.jpg,.jpeg,.webp,.zip,.7z" 
+                        className="cursor-pointer file:cursor-pointer rounded-lg text-xs"
+                      />
+                      <p className="text-xs text-muted-foreground">{t('admin.orders.deliveryFilesHint')}</p>
+                    </div>
+                  </div>
+                  <Button 
+                    type="button" 
+                    onClick={() => handleStatus('delivered')} 
+                    disabled={actionLoading}
+                    className="rounded-xl bg-primary font-semibold text-primary-foreground hover:bg-primary/90 gap-1.5"
                   >
-                    {file.fileName}
-                  </a>
-                ))}
+                    {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    <span>{t('admin.orders.deliverNow')}</span>
+                  </Button>
+                </form>
+              </div>
+            )}
+
+            {(order.deliveryNote || deliveryFiles.length > 0) && (
+              <div className="space-y-3 pt-1">
+                {order.deliveryNote && (
+                  <div className="rounded-xl border border-border/60 bg-background/60 p-3.5 space-y-1">
+                    <span className="text-xs font-medium text-muted-foreground">已发说明：</span>
+                    <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-relaxed pl-1">{order.deliveryNote}</p>
+                  </div>
+                )}
+                {deliveryFiles.length > 0 && (
+                  <div className="space-y-2">
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">交付附件清单 ({deliveryFiles.length})：</span>
+                    <div className="grid gap-2">
+                      {deliveryFiles.map((file: any) => (
+                        <div key={file.id} className="flex items-center justify-between p-3 rounded-xl border border-border/60 bg-background/60">
+                          <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                            <div className="p-2 rounded-lg bg-muted border border-border/40 shrink-0">
+                              {getFileIcon(file.fileName)}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-foreground truncate">{file.fileName}</p>
+                              {file.size && <p className="text-xs text-muted-foreground font-mono">{formatFileSize(file.size)}</p>}
+                            </div>
+                          </div>
+                          <Button asChild size="sm" variant="outline" className="rounded-xl gap-1.5 text-xs shrink-0 font-medium">
+                            <a href={`/order/${order.orderId}/files/${file.id}`} download>
+                              <Download className="h-3.5 w-3.5" />
+                              <span>下载</span>
+                            </a>
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
