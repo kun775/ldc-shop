@@ -118,6 +118,8 @@ export default async function AdminOrdersPage(props: {
                 cardKey: o.cardKey,
                 tradeNo: o.tradeNo,
                 createdAt: o.createdAt,
+                paidAt: o.paidAt,
+                deliveredAt: o.deliveredAt,
                 checkoutFieldValues: o.checkoutFieldValues,
                 fulfillmentMode: o.fulfillmentMode,
             }))}

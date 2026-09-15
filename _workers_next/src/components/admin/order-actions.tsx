@@ -49,27 +49,27 @@ export function AdminOrderActions({ order }: { order: any }) {
   }
 
   return (
-    <>
-      <Button asChild variant="outline" size="sm" title={t('admin.orders.view')}>
+    <div className="flex items-center gap-1">
+      <Button asChild variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground hover:bg-muted/80" title={t('admin.orders.view')}>
         <Link href={`/admin/orders/${order.orderId}`}>
           <ExternalLink className="h-3.5 w-3.5" />
         </Link>
       </Button>
       {canMarkPaid && (
-        <Button variant="outline" size="sm" onClick={() => handle('paid')} title={t('admin.orders.markPaid')} disabled={loading}>
+        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/40" onClick={() => handle('paid')} title={t('admin.orders.markPaid')} disabled={loading}>
           <CheckCircle className="h-3.5 w-3.5" />
         </Button>
       )}
       {canMarkDelivered && (
-        <Button variant="outline" size="sm" onClick={() => handle('delivered')} title={t('admin.orders.markDelivered')} disabled={loading}>
+        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/40" onClick={() => handle('delivered')} title={t('admin.orders.markDelivered')} disabled={loading}>
           <Truck className="h-3.5 w-3.5" />
         </Button>
       )}
       {canCancel && (
-        <Button variant="destructive" size="sm" onClick={() => handle('cancel')} title={t('admin.orders.cancel')} disabled={loading}>
+        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive/80 hover:text-destructive hover:bg-destructive/10" onClick={() => handle('cancel')} title={t('admin.orders.cancel')} disabled={loading}>
           <XCircle className="h-3.5 w-3.5" />
         </Button>
       )}
-    </>
+    </div>
   )
 }

@@ -5,8 +5,9 @@ import { markOrderRefunded, proxyRefund } from "@/actions/refund"
 import { verifyOrderRefundStatus } from "@/actions/admin-orders"
 import { useState } from "react"
 import { toast } from "sonner"
-import { Loader2, ExternalLink, CheckCircle, RefreshCcw } from "lucide-react"
+import { Loader2, ExternalLink, CheckCircle, RefreshCcw, AlertTriangle } from "lucide-react"
 import { useI18n } from "@/lib/i18n/context"
+import { cn } from "@/lib/utils"
 
 export function RefundButton({ order }: { order: any }) {
     const [loading, setLoading] = useState(false)
@@ -17,8 +18,14 @@ export function RefundButton({ order }: { order: any }) {
     if (!order.tradeNo) return null
     if (Number(order.amount) <= 0) return null // No refund for orders paid entirely with points
 
+    const completionTime = order.deliveredAt || order.paidAt || order.createdAt
+    const isOver30Days = completionTime ? (Date.now() - new Date(completionTime).getTime() > 30 * 24 * 60 * 60 * 1000) : false
+
     const handleRefund = async () => {
-        if (!confirm(t('admin.orders.refundProxyConfirm'))) return
+        const confirmMsg = isOver30Days
+            ? `${t('admin.orders.refundProxyConfirm')}\n\n⚠️ 提示：该订单交易成功已超过 30 天售后窗口，确认仍要执行退款吗？`
+            : t('admin.orders.refundProxyConfirm')
+        if (!confirm(confirmMsg)) return
         setLoading(true)
         try {
             const result = await proxyRefund(order.orderId)
@@ -75,16 +82,48 @@ export function RefundButton({ order }: { order: any }) {
     }
 
     return (
-        <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={handleVerify} disabled={loading} title={t('admin.orders.checkStatus')}>
-                {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <><RefreshCcw className="h-3 w-3" /></>}
+        <div className="flex items-center gap-1">
+            <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground hover:bg-muted/80"
+                onClick={handleVerify}
+                disabled={loading}
+                title={t('admin.orders.checkStatus')}
+            >
+                {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
             </Button>
-            <Button variant="outline" size="sm" onClick={handleRefund} disabled={loading || showMarkDone}>
-                {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <><ExternalLink className="h-3 w-3 mr-1" />{t('admin.orders.refund')}</>}
+            <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                    "h-7 px-2 text-xs gap-1 transition-colors",
+                    isOver30Days
+                        ? "text-muted-foreground/70 hover:text-foreground hover:bg-muted/60"
+                        : "text-destructive/90 hover:text-destructive hover:bg-destructive/10 border-border/80"
+                )}
+                onClick={handleRefund}
+                disabled={loading || showMarkDone}
+                title={isOver30Days ? "⚠️ 交易成功已超 30 天售后时效" : undefined}
+            >
+                {loading ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                    <>
+                        {isOver30Days ? <AlertTriangle className="h-3 w-3 text-amber-500" /> : <ExternalLink className="h-3 w-3" />}
+                        <span>{t('admin.orders.refund')}</span>
+                    </>
+                )}
             </Button>
             {showMarkDone && (
-                <Button variant="default" size="sm" onClick={handleMarkDone} disabled={loading}>
-                    {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <><CheckCircle className="h-3 w-3 mr-1" />{t('admin.orders.markRefunded')}</>}
+                <Button
+                    variant="default"
+                    size="sm"
+                    className="h-7 px-2 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                    onClick={handleMarkDone}
+                    disabled={loading}
+                >
+                    {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <><CheckCircle className="h-3 w-3" /><span>{t('admin.orders.markRefunded')}</span></>}
                 </Button>
             )}
         </div>

@@ -115,7 +115,17 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
         return 1
     })()
 
+    const transactionSuccessTime = order.deliveredAt || order.paidAt || order.createdAt
+    const isRefundExpired = transactionSuccessTime
+        ? (Date.now() - new Date(transactionSuccessTime).getTime() > 30 * 24 * 60 * 60 * 1000)
+        : false
+
     const handleRefundConfirm = async () => {
+        if (isRefundExpired) {
+            toast.error(t('refund.refundExpired'))
+            setConfirmOpen(false)
+            return
+        }
         if (submitLock.current) return
         submitLock.current = true
         setSubmitting(true)
@@ -642,14 +652,24 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                                     </Button>
                                 )}
                                 {Number(order.amount) > 0 && !refundRequest?.status && (
-                                    <Button
-                                        variant="destructive"
-                                        className={order.productId && !isPayment ? "flex-1" : "w-full"}
-                                        onClick={() => setConfirmOpen(true)}
-                                        disabled={submitting}
-                                    >
-                                        {t('refund.requestTitle')}
-                                    </Button>
+                                    isRefundExpired ? (
+                                        <div className={cn(
+                                            "flex items-center justify-center gap-2 rounded-xl border border-border/60 bg-muted/40 px-3.5 py-2.5 text-xs text-muted-foreground",
+                                            order.productId && !isPayment ? "flex-1" : "w-full"
+                                        )}>
+                                            <Clock className="h-4 w-4 shrink-0 text-muted-foreground/70" />
+                                            <span>{t('refund.refundExpiredHint')}</span>
+                                        </div>
+                                    ) : (
+                                        <Button
+                                            variant="destructive"
+                                            className={order.productId && !isPayment ? "flex-1" : "w-full"}
+                                            onClick={() => setConfirmOpen(true)}
+                                            disabled={submitting}
+                                        >
+                                            {t('refund.requestTitle')}
+                                        </Button>
+                                    )
                                 )}
                             </div>
                         </>

@@ -44,6 +44,16 @@ export async function requestRefund(orderId: string, reason: string) {
   const status = order.status || 'pending'
   if (status !== 'paid' && status !== 'delivered') throw new Error("Order is not refundable")
 
+  // Check 30-day limit after transaction completion (paid/delivered)
+  const completionTime = order.deliveredAt || order.paidAt || order.createdAt
+  if (completionTime) {
+    const elapsed = Date.now() - new Date(completionTime).getTime()
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000
+    if (elapsed > thirtyDaysMs) {
+      throw new Error("订单交易成功已超过 30 天，无法再发起退款申请")
+    }
+  }
+
   const existing = await db.query.refundRequests.findFirst({
     where: and(eq(refundRequests.orderId, orderId), eq(refundRequests.userId, user.id)),
     orderBy: [desc(refundRequests.createdAt)],
