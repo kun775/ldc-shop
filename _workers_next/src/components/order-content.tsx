@@ -33,6 +33,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { requestRefund } from "@/actions/refund-requests"
 import { toast } from "sonner"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 import { checkOrderStatus, cancelPendingOrder } from "@/actions/order"
 import { useRouter } from "next/navigation"
 import { isPaymentOrder } from "@/lib/payment"
@@ -88,6 +89,7 @@ interface OrderContentProps {
 
 export function OrderContent({ order, canViewKey, isOwner, refundRequest }: OrderContentProps) {
     const { t } = useI18n()
+    const { confirm } = useConfirm()
     const [reason, setReason] = useState("")
     const [submitting, setSubmitting] = useState(false)
     const [confirmOpen, setConfirmOpen] = useState(false)
@@ -559,7 +561,14 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                                         size="sm"
                                         variant="outline"
                                         onClick={async () => {
-                                            if (!confirm(t('order.confirmCancel'))) return
+                                            const ok = await confirm({
+                                                title: t('order.cancelOrder'),
+                                                description: t('order.confirmCancel'),
+                                                variant: 'destructive',
+                                                confirmText: t('order.cancelOrder'),
+                                                cancelText: t('common.cancel'),
+                                            })
+                                            if (!ok) return
                                             if (submitLock.current) return
                                             submitLock.current = true
                                             setSubmitting(true)
@@ -678,33 +687,37 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
             </Card>
 
             <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-                <DialogContent className="sm:max-w-[420px]">
-                    <DialogHeader>
-                        <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-destructive/10 text-destructive">
-                                <AlertCircle className="h-5 w-5" />
+                <DialogContent className="overflow-hidden border-border/80 bg-background/95 p-0 shadow-2xl backdrop-blur-xl sm:max-w-[440px] rounded-2xl">
+                    <div className="bg-gradient-to-r from-destructive/15 via-destructive/5 to-transparent px-6 py-5 border-b border-border/40">
+                        <DialogHeader className="gap-3 text-left">
+                            <div className="flex items-center gap-3.5">
+                                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-destructive/15 text-destructive ring-1 ring-destructive/20 shadow-xs">
+                                    <AlertCircle className="h-5 w-5" />
+                                </div>
+                                <div className="min-w-0 flex-1 space-y-0.5">
+                                    <DialogTitle className="text-base font-bold tracking-tight text-foreground sm:text-lg">{t('refund.requestConfirmTitle')}</DialogTitle>
+                                    <DialogDescription className="text-xs text-muted-foreground">
+                                        {t('refund.requestConfirmMessage')}
+                                    </DialogDescription>
+                                </div>
                             </div>
-                            <div>
-                                <DialogTitle className="text-base">{t('refund.requestConfirmTitle')}</DialogTitle>
-                                <DialogDescription className="text-sm">
-                                    {t('refund.requestConfirmMessage')}
-                                </DialogDescription>
-                            </div>
-                        </div>
-                    </DialogHeader>
-                    <Textarea
-                        value={reason}
-                        onChange={(e) => setReason(e.target.value)}
-                        placeholder={t('refund.reasonPlaceholder')}
-                        rows={3}
-                        className="resize-none"
-                        disabled={submitting}
-                    />
-                    <DialogFooter className="sm:justify-end">
-                        <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={submitting}>
+                        </DialogHeader>
+                    </div>
+                    <div className="px-6 py-5 space-y-3">
+                        <Textarea
+                            value={reason}
+                            onChange={(e) => setReason(e.target.value)}
+                            placeholder={t('refund.reasonPlaceholder')}
+                            rows={3}
+                            className="rounded-xl border-border/80 bg-background/80 text-sm focus-visible:ring-primary/40 resize-none"
+                            disabled={submitting}
+                        />
+                    </div>
+                    <DialogFooter className="px-6 py-4 bg-muted/20 border-t border-border/40 flex items-center justify-end gap-2 sm:gap-2">
+                        <Button variant="outline" className="h-9 rounded-xl px-4 text-xs font-medium border-border/60 hover:bg-muted/60" onClick={() => setConfirmOpen(false)} disabled={submitting}>
                             {t('common.cancel')}
                         </Button>
-                        <Button variant="destructive" onClick={handleRefundConfirm} disabled={submitting}>
+                        <Button variant="destructive" className="h-9 rounded-xl px-4 text-xs font-medium shadow-xs" onClick={handleRefundConfirm} disabled={submitting}>
                             {submitting ? t('common.processing') : t('common.confirm')}
                         </Button>
                     </DialogFooter>

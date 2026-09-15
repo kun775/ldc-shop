@@ -26,6 +26,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 import {
     Search,
     RotateCcw,
@@ -108,6 +109,7 @@ export function AdminOrdersContent({
     productVariantLabels?: Record<string, string | null>
 }) {
     const { t } = useI18n()
+    const { confirm } = useConfirm()
     const router = useRouter()
     const [queryValue, setQueryValue] = useState(query || "")
     const [statusValue, setStatusValue] = useState<string>(status || "all")
@@ -203,7 +205,15 @@ export function AdminOrdersContent({
 
     const handleBatchDelete = async () => {
         if (deleteLock.current || !selectedIds.length) return
-        if (!confirm(t('admin.orders.confirmDeleteSelected'))) return
+        const ok = await confirm({
+            title: t('admin.orders.batchDelete') || "批量删除订单",
+            description: t('admin.orders.confirmDeleteSelected'),
+            variant: "destructive",
+            icon: "trash",
+            confirmText: t('common.delete'),
+            cancelText: t('common.cancel'),
+        })
+        if (!ok) return
         deleteLock.current = true
         setDeleting(true)
         try {

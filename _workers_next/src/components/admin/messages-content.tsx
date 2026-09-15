@@ -12,11 +12,13 @@ import { toast } from "sonner"
 import { clearAdminMessages, deleteAdminMessage, sendAdminMessage } from "@/actions/admin-messages"
 import { clearUserMessages, deleteUserMessage, markUserMessageRead } from "@/actions/user-messages"
 import { useRouter } from "next/navigation"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 type TargetType = "all" | "username" | "userId"
 
 export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox: any[] }) {
     const { t } = useI18n()
+    const { confirm } = useConfirm()
     const router = useRouter()
     const [targetType, setTargetType] = useState<TargetType>("all")
     const [targetValue, setTargetValue] = useState("")
@@ -188,7 +190,15 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                             disabled={clearingHistory || historyItems.length === 0}
                             onClick={async () => {
                                 if (clearingHistory || historyItems.length === 0) return
-                                if (!confirm(t('admin.messages.clearConfirm'))) return
+                                const ok = await confirm({
+                                    title: t('admin.messages.clearHistory'),
+                                    description: t('admin.messages.clearConfirm'),
+                                    variant: "destructive",
+                                    icon: "trash",
+                                    confirmText: t('common.confirm'),
+                                    cancelText: t('common.cancel'),
+                                })
+                                if (!ok) return
                                 setClearingHistory(true)
                                 try {
                                     await clearAdminMessages()
@@ -274,7 +284,15 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                             disabled={clearingInbox || inboxItems.length === 0}
                             onClick={async () => {
                                 if (clearingInbox || inboxItems.length === 0) return
-                                if (!confirm(t('admin.messages.clearConfirm'))) return
+                                const ok = await confirm({
+                                    title: t('admin.messages.clearInbox'),
+                                    description: t('admin.messages.clearConfirm'),
+                                    variant: "destructive",
+                                    icon: "trash",
+                                    confirmText: t('common.confirm'),
+                                    cancelText: t('common.cancel'),
+                                })
+                                if (!ok) return
                                 setClearingInbox(true)
                                 try {
                                     await clearUserMessages()

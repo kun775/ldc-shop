@@ -12,6 +12,7 @@ import { Plus, Eye, EyeOff, ArrowUp, ArrowDown } from "lucide-react"
 import { deleteProduct, toggleProductStatus, reorderProduct } from "@/actions/admin"
 import { INFINITE_STOCK } from "@/lib/constants"
 import { toast } from "sonner"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 interface Product {
     id: string
@@ -36,6 +37,7 @@ interface AdminProductsContentProps {
 
 export function AdminProductsContent({ products, lowStockThreshold }: AdminProductsContentProps) {
     const { t } = useI18n()
+    const { confirm } = useConfirm()
     const router = useRouter()
     const [busy, setBusy] = useState(false)
     const busyRef = useRef(false)
@@ -44,7 +46,15 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
 
     const handleDelete = async (id: string) => {
         if (busyRef.current) return
-        if (!confirm(t('admin.products.confirmDelete'))) return
+        const ok = await confirm({
+            title: t('admin.products.confirmDelete'),
+            description: "删除后商品及其关联数据将无法恢复，确认要删除此商品吗？",
+            variant: "destructive",
+            icon: "trash",
+            confirmText: t('common.delete'),
+            cancelText: t('common.cancel'),
+        })
+        if (!ok) return
         busyRef.current = true
         setBusy(true)
         try {

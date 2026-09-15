@@ -9,11 +9,13 @@ import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { saveCategory, deleteCategory } from "@/actions/admin"
 import { toast } from "sonner"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 type CategoryRow = { id: number; name: string; icon: string | null; sortOrder: number }
 
 export function AdminCategoriesContent({ categories }: { categories: CategoryRow[] }) {
   const { t } = useI18n()
+  const { confirm } = useConfirm()
   const [name, setName] = useState("")
   const [icon, setIcon] = useState("")
   const [sortOrder, setSortOrder] = useState("0")
@@ -135,7 +137,15 @@ export function AdminCategoriesContent({ categories }: { categories: CategoryRow
                     size="sm"
                     onClick={async () => {
                       if (deleteLock.current === c.id) return
-                      if (!confirm(t('common.confirm') + '?')) return
+                      const ok = await confirm({
+                        title: t('common.confirmDelete'),
+                        description: `确定要删除分类“${c.name}”吗？`,
+                        variant: "destructive",
+                        icon: "trash",
+                        confirmText: t('common.delete'),
+                        cancelText: t('common.cancel'),
+                      })
+                      if (!ok) return
                       deleteLock.current = c.id
                       setDeletingId(c.id)
                       try {

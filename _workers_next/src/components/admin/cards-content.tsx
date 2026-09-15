@@ -11,9 +11,10 @@ import { useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
 import { CopyButton } from "@/components/copy-button"
-import { Trash2 } from "lucide-react"
+import { Trash2, PlusCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 interface CardData {
     id: number
@@ -33,6 +34,7 @@ interface CardsContentProps {
 
 export function CardsContent({ productId, productName, unusedCards, apiConfig }: CardsContentProps) {
     const { t } = useI18n()
+    const { confirm } = useConfirm()
     const router = useRouter()
     const [selectedIds, setSelectedIds] = useState<number[]>([])
     const [submitting, setSubmitting] = useState(false)
@@ -72,20 +74,28 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
     const handleBatchDelete = async () => {
         if (!selectedIds.length || batchDeleteLock.current) return
 
-        if (confirm(t('admin.cards.confirmBatchDelete', { count: selectedIds.length }))) {
-            batchDeleteLock.current = true
-            setBatchDeleting(true)
-            try {
-                await deleteCards(selectedIds)
-                toast.success(t('common.success'))
-                setSelectedIds([])
-                router.refresh()
-            } catch (e: any) {
-                toast.error(e.message)
-            } finally {
-                setBatchDeleting(false)
-                batchDeleteLock.current = false
-            }
+        const ok = await confirm({
+            title: t('admin.cards.batchDelete') || "批量删除卡密",
+            description: t('admin.cards.confirmBatchDelete', { count: selectedIds.length }),
+            variant: "destructive",
+            icon: "trash",
+            confirmText: t('common.delete'),
+            cancelText: t('common.cancel'),
+        })
+        if (!ok) return
+
+        batchDeleteLock.current = true
+        setBatchDeleting(true)
+        try {
+            await deleteCards(selectedIds)
+            toast.success(t('common.success'))
+            setSelectedIds([])
+            router.refresh()
+        } catch (e: any) {
+            toast.error(e.message)
+        } finally {
+            setBatchDeleting(false)
+            batchDeleteLock.current = false
         }
     }
 
@@ -368,19 +378,26 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
                                         className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
                                         onClick={async () => {
                                             if (deleteLock.current === c.id) return
-                                            if (confirm(t('common.confirm') + '?')) {
-                                                deleteLock.current = c.id
-                                                setDeletingId(c.id)
-                                                try {
-                                                    await deleteCard(c.id)
-                                                    toast.success(t('common.success'))
-                                                    router.refresh()
-                                                } catch (e: any) {
-                                                    toast.error(e.message)
-                                                } finally {
-                                                    setDeletingId(null)
-                                                    deleteLock.current = null
-                                                }
+                                            const ok = await confirm({
+                                                title: t('common.confirmDelete'),
+                                                description: "确定要删除这条卡密吗？",
+                                                variant: "destructive",
+                                                icon: "trash",
+                                                confirmText: t('common.delete'),
+                                                cancelText: t('common.cancel'),
+                                            })
+                                            if (!ok) return
+                                            deleteLock.current = c.id
+                                            setDeletingId(c.id)
+                                            try {
+                                                await deleteCard(c.id)
+                                                toast.success(t('common.success'))
+                                                router.refresh()
+                                            } catch (e: any) {
+                                                toast.error(e.message)
+                                            } finally {
+                                                setDeletingId(null)
+                                                deleteLock.current = null
                                             }
                                         }}
                                         disabled={deletingId === c.id}
@@ -404,23 +421,34 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
                     }
                 }}
             >
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>{t('admin.cards.confirmAddTitle')}</DialogTitle>
-                        <DialogDescription>
-                            {t('admin.cards.confirmAddDescription', { count: pendingCount })}
-                        </DialogDescription>
+                <DialogContent className="overflow-hidden border-border/80 bg-background/95 p-0 shadow-2xl backdrop-blur-xl sm:max-w-md rounded-2xl">
+                    <div className="bg-gradient-to-r from-primary/15 via-primary/5 to-transparent px-6 py-5 border-b border-border/40">
+                        <DialogHeader className="gap-3 text-left">
+                            <div className="flex items-center gap-3.5">
+                                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-primary/20 shadow-xs">
+                                    <PlusCircle className="h-5 w-5" />
+                                </div>
+                                <div className="min-w-0 flex-1 space-y-0.5">
+                                    <DialogTitle className="text-base font-bold tracking-tight text-foreground sm:text-lg">
+                                        {t('admin.cards.confirmAddTitle')}
+                                    </DialogTitle>
+                                </div>
+                            </div>
+                        </DialogHeader>
+                    </div>
+                    <div className="px-6 py-5 space-y-3 text-sm leading-relaxed text-muted-foreground">
+                        <p>{t('admin.cards.confirmAddDescription', { count: pendingCount })}</p>
                         {pendingHasExpiry ? (
-                            <p className="text-sm text-amber-600 dark:text-amber-400">
+                            <p className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
                                 {t('admin.cards.confirmAddExpiryNotice')}
                             </p>
                         ) : null}
-                    </DialogHeader>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+                    </div>
+                    <DialogFooter className="px-6 py-4 bg-muted/20 border-t border-border/40 flex items-center justify-end gap-2 sm:gap-2">
+                        <Button variant="outline" className="h-9 rounded-xl px-4 text-xs font-medium border-border/60 hover:bg-muted/60" onClick={() => setConfirmOpen(false)}>
                             {t('common.cancel')}
                         </Button>
-                        <Button onClick={handleConfirmSubmit} disabled={submitting}>
+                        <Button className="h-9 rounded-xl px-4 text-xs font-medium shadow-xs" onClick={handleConfirmSubmit} disabled={submitting}>
                             {t('common.confirm')}
                         </Button>
                     </DialogFooter>

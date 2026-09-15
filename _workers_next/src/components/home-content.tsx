@@ -3,18 +3,16 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import Image from "next/image"
-import { ArrowRight, Heart, Search, Sparkles, Users, Zap, PackageOpen, X, Check } from "lucide-react"
+import { ArrowRight, Search, Zap, PackageOpen, X, Check, Clock, ChevronRight, Inbox } from "lucide-react"
 import { ProductImagePlaceholder } from "@/components/product-image-placeholder"
-import { AnnouncementPopup } from "@/components/announcement-popup"
+import { AnnouncementPopup, type AnnouncementPopupData } from "@/components/announcement-popup"
 import { CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import ReactMarkdown from "react-markdown"
 import { StarRatingStatic } from "@/components/star-rating-static"
 import { NavigationPill } from "@/components/navigation-pill"
-import { CheckInButton } from "@/components/checkin-button"
 import { useI18n } from "@/lib/i18n/context"
 import { INFINITE_STOCK } from "@/lib/constants"
 import { getProductPointDiscountBadge } from "@/lib/points/product-point-discount"
@@ -66,13 +64,9 @@ interface HomeContentProps {
 export function HomeContent({
     products,
     announcement,
-    visitorCount,
     categories = [],
     categoryConfig,
     pendingOrders,
-    wishlistEnabled = false,
-    isLoggedIn = false,
-    checkinEnabled = true,
     filters,
     pagination,
 }: HomeContentProps) {
@@ -87,6 +81,21 @@ export function HomeContent({
     useEffect(() => {
         setPage(1)
     }, [selectedCategory, sortKey, deferredSearch, fulfillmentFilter])
+
+    // Convert any active announcement (popup or banner) into modal popup
+    const popupData = useMemo<AnnouncementPopupData>(() => {
+        if (announcement?.popup?.content?.trim()) {
+            return announcement.popup
+        }
+        if (announcement?.banner?.trim()) {
+            return {
+                title: t("announcement.popupDefaultTitle") || "站点公告",
+                content: announcement.banner,
+                signature: announcement.banner,
+            }
+        }
+        return null
+    }, [announcement, t])
 
     const filteredProducts = useMemo(() => {
         const keyword = deferredSearch.trim().toLowerCase()
@@ -126,8 +135,8 @@ export function HomeContent({
     const startIndex = (currentPage - 1) * pagination.pageSize
     const pageItems = sortedProducts.slice(startIndex, startIndex + pagination.pageSize)
     const hasMore = currentPage < totalPages
-    const hasAnnouncement = Boolean(announcement?.banner)
     const hasPendingOrders = Boolean(pendingOrders && pendingOrders.length > 0)
+
     const sortOptions = [
         { key: "default", label: t("home.sort.default") },
         { key: "stockDesc", label: t("home.sort.stock") },
@@ -135,132 +144,66 @@ export function HomeContent({
         { key: "priceAsc", label: t("home.sort.priceAsc") },
         { key: "priceDesc", label: t("home.sort.priceDesc") },
     ] as const
-    return (
-        <main className="container relative overflow-hidden py-8 md:py-14">
-            <AnnouncementPopup popup={announcement?.popup ?? null} />
 
+    return (
+        <main className="container relative overflow-hidden py-4 md:py-6">
+            {/* Announcement Modal (shown on load with 1-day/forever suppress options) */}
+            <AnnouncementPopup popup={popupData} />
+
+            {/* Subtle background gradient glow */}
             <div className="pointer-events-none absolute inset-0 -z-10">
-                <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(59,130,246,0.12),transparent)] dark:bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(96,165,250,0.14),transparent)]" />
+                <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(59,130,246,0.08),transparent)] dark:bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(96,165,250,0.1),transparent)]" />
             </div>
 
-            {(hasAnnouncement || hasPendingOrders) && (
-                <section className="mb-5 grid gap-3 xl:grid-cols-[minmax(0,1.45fr)_minmax(22rem,0.9fr)]">
-                    {hasAnnouncement && (
-                        <div
-                            className={cn(
-                                "relative overflow-hidden rounded-[1.75rem] border border-primary/15 bg-background/72 px-5 py-4 shadow-[0_18px_45px_-34px_rgba(15,23,42,0.28)] backdrop-blur-xl",
-                                !hasPendingOrders && "xl:col-span-2"
-                            )}
-                        >
-                            <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-primary via-primary/80 to-cyan-400/70" />
-                            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(59,130,246,0.12),_transparent_34%)] dark:bg-[radial-gradient(circle_at_top_right,_rgba(96,165,250,0.12),_transparent_40%)]" />
-                            <div className="relative pl-2">
-                                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/8 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
-                                    <Sparkles className="h-3.5 w-3.5" />
-                                    <span>{t("home.announcementLabel")}</span>
-                                </div>
-                                <div className="prose prose-sm max-w-none text-foreground/90 dark:prose-invert [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                                    <ReactMarkdown>{announcement?.banner || ''}</ReactMarkdown>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {hasPendingOrders && (
-                        <div className="relative overflow-hidden rounded-[1.75rem] border border-yellow-500/20 bg-background/72 px-5 py-4 shadow-[0_18px_45px_-34px_rgba(15,23,42,0.28)] backdrop-blur-xl">
-                            <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-yellow-500 to-amber-400/70" />
-                            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(250,204,21,0.14),_transparent_38%)] dark:bg-[radial-gradient(circle_at_top_right,_rgba(250,204,21,0.12),_transparent_42%)]" />
-                            <div className="relative pl-2">
-                                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-yellow-500/15 bg-yellow-500/8 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-yellow-700 dark:text-yellow-300">
-                                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
-                                    <span>{t("home.pendingOrderLabel")}</span>
-                                </div>
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                    <p className="text-sm font-medium leading-7 text-foreground/90">
-                                        {pendingOrders?.length === 1
-                                            ? t("home.pendingOrder.single", { orderId: pendingOrders[0].orderId })
-                                            : t("home.pendingOrder.multiple", { count: pendingOrders?.length || 0 })}
-                                    </p>
-                                    <Link href={pendingOrders?.length === 1 ? `/order/${pendingOrders[0].orderId}` : "/orders"}>
-                                        <Button size="sm" variant="outline" className="w-fit rounded-full border-yellow-500/30 hover:bg-yellow-500/10 hover:text-yellow-600 dark:hover:text-yellow-400">
-                                            {pendingOrders?.length === 1 ? t("common.payNow") : t("common.viewOrders")}
-                                        </Button>
-                                    </Link>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </section>
+            {/* Ultra-compact Pending Order Notice (if user has unpaid orders) */}
+            {hasPendingOrders && (
+                <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-100 shadow-2xs">
+                    <div className="flex items-center gap-2 min-w-0">
+                        <Clock className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400 animate-pulse" />
+                        <span className="font-medium truncate">
+                            {pendingOrders?.length === 1
+                                ? t("home.pendingOrder.single", { orderId: pendingOrders[0].orderId })
+                                : t("home.pendingOrder.multiple", { count: pendingOrders?.length || 0 })}
+                        </span>
+                    </div>
+                    <Link
+                        href={pendingOrders?.length === 1 ? `/order/${pendingOrders[0].orderId}` : "/orders"}
+                        className="inline-flex items-center gap-1 self-end sm:self-auto font-semibold text-amber-700 dark:text-amber-300 hover:underline"
+                    >
+                        <span>{pendingOrders?.length === 1 ? t("common.payNow") : t("common.viewOrders")}</span>
+                        <ChevronRight className="h-3.5 w-3.5" />
+                    </Link>
+                </div>
             )}
 
-            <section className="relative mb-8 overflow-hidden rounded-[2rem] border border-border/40 bg-gradient-to-br from-card via-card/95 to-primary/5 shadow-[0_25px_80px_-40px_rgba(15,23,42,0.25)]">
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(255,255,255,0.75),_transparent_36%)] dark:bg-[radial-gradient(circle_at_top_right,_rgba(255,255,255,0.08),_transparent_36%)]" />
-                <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
-                <div className="relative px-6 py-5 md:px-8 md:py-6">
-                    <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                        <div className="min-w-0 space-y-1.5">
-                            <h1 className="bg-gradient-to-r from-foreground via-foreground/75 to-foreground/45 bg-clip-text text-lg font-medium tracking-tight text-transparent sm:text-xl">
-                                {t("home.title")}
-                            </h1>
-                            <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-                                {t("home.subtitle")}
-                            </p>
-                        </div>
-                        <div className="flex w-full flex-col items-stretch gap-2 md:w-auto md:flex-row md:items-center md:justify-end md:gap-3">
-                            {isLoggedIn && (
-                                <CheckInButton
-                                    enabled={checkinEnabled}
-                                    showCheckedInLabel
-                                    className="flex w-full md:w-auto"
-                                />
-                            )}
-                            <div className="flex flex-wrap items-center gap-2 md:gap-3">
-                                {typeof visitorCount === "number" && (
-                                    <div className="inline-flex items-center gap-2 rounded-full border border-border/40 bg-background/60 px-3.5 py-2 text-sm backdrop-blur-sm">
-                                        <Users className="h-3.5 w-3.5 text-primary" />
-                                        <span className="font-semibold tabular-nums text-foreground">{visitorCount}</span>
-                                        <span className="text-xs text-muted-foreground">{t("home.metrics.visitors")}</span>
-                                    </div>
-                                )}
-                                {wishlistEnabled && (
-                                    <Link href="/wishlist" className="inline-flex">
-                                        <Button variant="outline" className="h-10 rounded-2xl border-border/50 bg-background/70 px-4 shadow-none">
-                                            <Heart className="mr-2 h-4 w-4" />
-                                            {t("wishlist.title")}
-                                        </Button>
-                                    </Link>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section className="mb-8 space-y-3">
-                <div className="flex flex-col gap-3 rounded-[1.8rem] border border-border/40 bg-card/70 p-4 shadow-[0_20px_50px_-36px_rgba(15,23,42,0.3)] backdrop-blur-md">
-                    <div className="grid gap-3 xl:grid-cols-[minmax(0,18rem)_minmax(0,1fr)_auto] xl:items-center">
-                        <div className="relative w-full">
-                            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            {/* Compact Storefront Toolbar (Linear x Stripe style) */}
+            <section className="mb-5 space-y-2.5">
+                <div className="rounded-2xl border border-border/60 bg-card/80 p-3 md:p-3.5 shadow-2xs backdrop-blur-md space-y-2.5">
+                    {/* Top Row: Search Input + Categories */}
+                    <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2.5">
+                        {/* Search Bar with quick clear */}
+                        <div className="relative w-full md:w-72 shrink-0">
+                            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" />
                             <Input
                                 placeholder={t("common.searchPlaceholder")}
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
-                                className="h-11 rounded-2xl border-border/50 bg-background/90 pl-10 pr-9 shadow-none text-sm"
+                                className="h-9 rounded-xl border-border/60 bg-background/90 pl-9 pr-8 text-xs shadow-none transition-colors focus-visible:ring-1"
                             />
                             {searchTerm && (
                                 <button
                                     type="button"
                                     onClick={() => setSearchTerm("")}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                                    title="清空搜索"
                                 >
                                     <X className="h-3.5 w-3.5" />
                                 </button>
                             )}
                         </div>
 
-                        <div className="w-full overflow-x-auto no-scrollbar pb-1 xl:pb-0">
+                        {/* Category Navigation Pills */}
+                        <div className="flex-1 min-w-0 overflow-x-auto no-scrollbar">
                             <NavigationPill
                                 items={[
                                     { key: "", label: t("common.all") },
@@ -276,116 +219,119 @@ export function HomeContent({
                                 onSelect={(key) => setSelectedCategory(key || null)}
                             />
                         </div>
-
-                        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 xl:pb-0">
-                            {sortOptions.map((opt) => (
-                                <Button
-                                    key={opt.key}
-                                    type="button"
-                                    variant={sortKey === opt.key ? "secondary" : "ghost"}
-                                    size="sm"
-                                    className={cn(
-                                        "h-9 rounded-xl px-3 whitespace-nowrap text-xs transition-all",
-                                        sortKey === opt.key
-                                            ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-2xs font-medium"
-                                            : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
-                                    )}
-                                    onClick={() => setSortKey(opt.key)}
-                                >
-                                    {opt.label}
-                                </Button>
-                            ))}
-                        </div>
                     </div>
 
-                    {/* Quick Delivery Mode & In-Stock Quick Filters */}
-                    <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-border/40">
-                        <span className="text-[11px] font-medium text-muted-foreground mr-1">履约与现货筛选:</span>
-                        <button
-                            type="button"
-                            onClick={() => setFulfillmentFilter('all')}
-                            className={cn(
-                                "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
-                                fulfillmentFilter === 'all'
-                                    ? "bg-foreground text-background shadow-2xs"
-                                    : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                            )}
-                        >
-                            全部商品
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setFulfillmentFilter('auto')}
-                            className={cn(
-                                "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
-                                fulfillmentFilter === 'auto'
-                                    ? "bg-primary text-primary-foreground shadow-2xs"
-                                    : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                            )}
-                        >
-                            <Zap className="h-3 w-3" />
-                            ⚡ 自动秒发
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setFulfillmentFilter('manual')}
-                            className={cn(
-                                "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
-                                fulfillmentFilter === 'manual'
-                                    ? "bg-blue-600 text-white shadow-2xs dark:bg-blue-500"
-                                    : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                            )}
-                        >
-                            <PackageOpen className="h-3 w-3" />
-                            📦 手工交付
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setFulfillmentFilter(f => f === 'inStock' ? 'all' : 'inStock')}
-                            className={cn(
-                                "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
-                                fulfillmentFilter === 'inStock'
-                                    ? "bg-emerald-600 text-white shadow-2xs dark:bg-emerald-500"
-                                    : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                            )}
-                        >
-                            <Check className="h-3 w-3" />
-                            仅看现货
-                        </button>
+                    {/* Bottom Row: Fulfillment Filters + Sort + Product Count */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/40 text-xs">
+                        {/* Left: Fulfillment and Stock Quick Filter Chips */}
+                        <div className="flex flex-wrap items-center gap-1">
+                            <button
+                                type="button"
+                                onClick={() => setFulfillmentFilter('all')}
+                                className={cn(
+                                    "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
+                                    fulfillmentFilter === 'all'
+                                        ? "bg-foreground text-background shadow-2xs"
+                                        : "bg-muted/40 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                                )}
+                            >
+                                全部
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setFulfillmentFilter('auto')}
+                                className={cn(
+                                    "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
+                                    fulfillmentFilter === 'auto'
+                                        ? "bg-primary text-primary-foreground shadow-2xs"
+                                        : "bg-muted/40 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                                )}
+                            >
+                                <Zap className="h-3 w-3" />
+                                <span>秒发</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setFulfillmentFilter('manual')}
+                                className={cn(
+                                    "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
+                                    fulfillmentFilter === 'manual'
+                                        ? "bg-blue-600 text-white shadow-2xs dark:bg-blue-500"
+                                        : "bg-muted/40 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                                )}
+                            >
+                                <PackageOpen className="h-3 w-3" />
+                                <span>手工</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setFulfillmentFilter(f => f === 'inStock' ? 'all' : 'inStock')}
+                                className={cn(
+                                    "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
+                                    fulfillmentFilter === 'inStock'
+                                        ? "bg-emerald-600 text-white shadow-2xs dark:bg-emerald-500"
+                                        : "bg-muted/40 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                                )}
+                            >
+                                <Check className="h-3 w-3" />
+                                <span>仅现货</span>
+                            </button>
+                        </div>
+
+                        {/* Right: Sort Buttons & Product Counter */}
+                        <div className="flex items-center gap-2 ml-auto">
+                            <div className="flex items-center gap-0.5 overflow-x-auto no-scrollbar">
+                                {sortOptions.map((opt) => (
+                                    <button
+                                        key={opt.key}
+                                        type="button"
+                                        className={cn(
+                                            "h-7 rounded-md px-2 text-xs transition-all",
+                                            sortKey === opt.key
+                                                ? "bg-muted font-semibold text-foreground border border-border/60 shadow-2xs"
+                                                : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                                        )}
+                                        onClick={() => setSortKey(opt.key)}
+                                    >
+                                        {opt.label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="hidden sm:inline-flex items-center pl-2 border-l border-border/50 text-[11px] text-muted-foreground font-mono">
+                                <span>{sortedProducts.length} 件</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>
 
+            {/* Main Product Grid - Directly visible above the fold */}
             <section>
-                <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                    <div>
-                        <h2 className="text-lg font-medium tracking-tight text-foreground/90 md:text-xl">
-                            {t("home.catalogTitle")}
-                        </h2>
-                    </div>
-                    <Badge variant="secondary" className="w-fit rounded-full border border-border/50 bg-background/80 px-4 py-2">
-                        {t("home.resultsCount", { count: sortedProducts.length })}
-                    </Badge>
-                </div>
-
                 {sortedProducts.length === 0 ? (
-                    <div className="relative overflow-hidden rounded-[2rem] border border-dashed border-border/50 bg-muted/25 px-6 py-20 text-center">
-                        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(59,130,246,0.08),_transparent_60%)] dark:bg-[radial-gradient(circle_at_center,_rgba(96,165,250,0.08),_transparent_65%)]" />
-                        <div className="relative mb-4 inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-background/80 shadow-sm">
-                            <svg className="h-8 w-8 text-muted-foreground/50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                            </svg>
+                    <div className="relative overflow-hidden rounded-2xl border border-dashed border-border/60 bg-muted/20 px-6 py-16 text-center">
+                        <div className="relative mb-3 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-background shadow-xs text-muted-foreground">
+                            <Inbox className="h-6 w-6 text-muted-foreground/60" />
                         </div>
-                        <p className="relative font-medium text-muted-foreground">{t("home.noProducts")}</p>
-                        <p className="relative mt-2 text-sm text-muted-foreground/70">{t("home.checkBackLater")}</p>
-                        {selectedCategory && (
-                            <Button variant="link" className="relative mt-4" onClick={() => setSelectedCategory(null)}>
+                        <p className="font-medium text-sm text-foreground">{t("home.noProducts")}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{t("home.checkBackLater")}</p>
+                        {(selectedCategory || searchTerm || fulfillmentFilter !== 'all') && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="mt-4 h-8 text-xs rounded-lg"
+                                onClick={() => {
+                                    setSelectedCategory(null)
+                                    setSearchTerm("")
+                                    setFulfillmentFilter('all')
+                                }}
+                            >
                                 {t("common.all")}
                             </Button>
                         )}
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                         {pageItems.map((product, index) => {
                             const pointDiscountBadge = getProductPointDiscountBadge({
                                 pointDiscountEnabled: product.pointDiscountEnabled,
@@ -393,175 +339,168 @@ export function HomeContent({
                             })
                             const isManual = product.fulfillmentMode === 'manual' || product.groupManual
 
-                            return <Link
-                                key={product.id}
-                                href={`/buy/${product.id}`}
-                                prefetch={false}
-                                aria-label={t("common.viewDetails")}
-                                className={cn(
-                                    "group tech-card relative flex h-full flex-col overflow-hidden rounded-[1.8rem] border border-border/40 bg-card/90 shadow-[0_20px_50px_-38px_rgba(15,23,42,0.28)] transition-all duration-300 hover:border-primary/40 hover:shadow-md animate-in fade-in slide-in-from-bottom-2 motion-reduce:animate-none",
-                                    product.stockCount <= 0 && "opacity-90"
-                                )}
-                                style={{ animationDelay: `${index * 60}ms` }}
-                            >
-                                <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
-                                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(59,130,246,0.12),_transparent_32%)] opacity-80 dark:bg-[radial-gradient(circle_at_top_right,_rgba(96,165,250,0.14),_transparent_36%)]" />
-
-                                <div className="relative m-4 aspect-[4/3] overflow-hidden rounded-[1.45rem] bg-card/50">
-                                    {product.image ? (
-                                        <Image
-                                            src={product.image}
-                                            alt={product.name}
-                                            fill
-                                            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                                            priority={index < 2}
-                                            className="object-contain p-2 md:p-3 transition-transform duration-700 ease-out group-hover:scale-[1.04]"
-                                        />
-                                    ) : (
-                                        <div className="flex h-full items-center justify-center p-2 md:p-3 transition-transform duration-700 ease-out group-hover:scale-[1.04]">
-                                            <ProductImagePlaceholder productId={product.id} productName={product.name} size="sm" fill />
-                                        </div>
+                            return (
+                                <Link
+                                    key={product.id}
+                                    href={`/buy/${product.id}`}
+                                    prefetch={false}
+                                    aria-label={t("common.viewDetails")}
+                                    className={cn(
+                                        "group tech-card relative flex h-full flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-2xs transition-all duration-300 hover:border-primary/50 hover:shadow-md animate-in fade-in motion-reduce:animate-none",
+                                        product.stockCount <= 0 && "opacity-85"
                                     )}
-                                    <div className="absolute left-3 right-3 top-3 flex items-start justify-between gap-2">
-                                        <div className="flex flex-wrap items-center gap-1.5">
-                                            {isManual ? (
-                                                <Badge className="h-6.5 rounded-md border-0 bg-blue-600/90 px-2 text-[10px] font-medium text-white shadow-xs backdrop-blur-xs dark:bg-blue-500/90">
-                                                    <PackageOpen className="mr-1 h-3 w-3" />
-                                                    手工交付
-                                                </Badge>
-                                            ) : (
-                                                <Badge className="h-6.5 rounded-md border-0 bg-primary/90 px-2 text-[10px] font-medium text-primary-foreground shadow-xs backdrop-blur-xs">
-                                                    <Zap className="mr-1 h-3 w-3" />
-                                                    自动秒发
-                                                </Badge>
-                                            )}
-                                            {product.category && product.category !== "general" && (
-                                                <Badge className="h-6.5 rounded-md border border-border/40 bg-background/90 px-2 text-[10px] font-medium capitalize text-foreground shadow-xs">
-                                                    {product.category}
-                                                </Badge>
-                                            )}
+                                    style={{ animationDelay: `${index * 40}ms` }}
+                                >
+                                    <div className="absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+
+                                    <div className="relative m-3 aspect-[16/10] overflow-hidden rounded-xl bg-muted/30">
+                                        {product.image ? (
+                                            <Image
+                                                src={product.image}
+                                                alt={product.name}
+                                                fill
+                                                sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
+                                                priority={index < 4}
+                                                className="object-contain p-2 transition-transform duration-500 ease-out group-hover:scale-[1.03]"
+                                            />
+                                        ) : (
+                                            <div className="flex h-full items-center justify-center p-2 transition-transform duration-500 ease-out group-hover:scale-[1.03]">
+                                                <ProductImagePlaceholder productId={product.id} productName={product.name} size="sm" fill />
+                                            </div>
+                                        )}
+                                        <div className="absolute left-2.5 right-2.5 top-2.5 flex items-start justify-between gap-1.5">
+                                            <div className="flex flex-wrap items-center gap-1">
+                                                {isManual ? (
+                                                    <Badge className="h-5 rounded-md border-0 bg-blue-600/90 px-1.5 text-[10px] font-medium text-white shadow-xs backdrop-blur-xs dark:bg-blue-500/90">
+                                                        <PackageOpen className="mr-1 h-3 w-3" />
+                                                        手工交付
+                                                    </Badge>
+                                                ) : (
+                                                    <Badge className="h-5 rounded-md border-0 bg-primary/90 px-1.5 text-[10px] font-medium text-primary-foreground shadow-xs backdrop-blur-xs">
+                                                        <Zap className="mr-1 h-3 w-3" />
+                                                        秒发
+                                                    </Badge>
+                                                )}
+                                                {product.category && product.category !== "general" && (
+                                                    <Badge className="h-5 rounded-md border border-border/50 bg-background/90 px-1.5 text-[10px] font-medium capitalize text-foreground shadow-xs">
+                                                        {product.category}
+                                                    </Badge>
+                                                )}
+                                            </div>
+                                            <Badge
+                                                className={cn(
+                                                    "h-5 rounded-md border px-1.5 text-[10px] font-medium shadow-xs",
+                                                    product.stockCount > 0
+                                                        ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                                                        : "border-rose-500/20 bg-rose-500/10 text-rose-700 dark:text-rose-300"
+                                                )}
+                                            >
+                                                {product.stockCount > 0 ? t("common.inStock") : t("common.outOfStock")}
+                                            </Badge>
                                         </div>
-                                        <Badge
-                                            className={cn(
-                                                "h-6.5 rounded-md border px-2 text-[10px] font-medium shadow-xs",
-                                                product.stockCount > 0
-                                                    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                                                    : "border-rose-500/20 bg-rose-500/10 text-rose-700 dark:text-rose-300"
-                                            )}
-                                        >
-                                            {product.stockCount > 0 ? t("common.inStock") : t("common.outOfStock")}
-                                        </Badge>
+                                        {product.isHot && (
+                                            <Badge className="absolute bottom-2.5 left-2.5 h-5 rounded-md border-0 bg-orange-500 px-1.5 text-[10px] font-semibold text-white shadow-xs">
+                                                🔥 {t("buy.hot")}
+                                            </Badge>
+                                        )}
                                     </div>
-                                    {product.isHot && (
-                                        <Badge className="absolute bottom-3 left-3 h-6.5 rounded-md border-0 bg-orange-500 px-2.5 text-[10px] font-semibold text-white shadow-md shadow-orange-500/20">
-                                            🔥 {t("buy.hot")}
-                                        </Badge>
-                                    )}
-                                </div>
 
-                                <CardContent className="relative z-20 flex flex-1 flex-col px-5 pb-5 pt-1">
-                                    <div className="mb-2 flex items-start justify-between gap-3">
-                                        <div className="space-y-1.5">
+                                    <CardContent className="relative z-20 flex flex-1 flex-col px-4 pb-4 pt-0">
+                                        <div className="mb-1.5">
                                             <h3
-                                                className="line-clamp-1 text-base font-semibold tracking-tight text-foreground transition-colors duration-300 group-hover:text-primary"
+                                                className="line-clamp-1 text-sm font-semibold tracking-tight text-foreground transition-colors duration-200 group-hover:text-primary"
                                                 title={product.name}
                                             >
                                                 {product.name}
                                             </h3>
                                             {product.reviewCount !== undefined && product.reviewCount > 0 && (
-                                                <div className="flex items-center gap-1.5">
+                                                <div className="flex items-center gap-1 mt-0.5">
                                                     <StarRatingStatic rating={Math.round(product.rating || 0)} size="xs" />
-                                                    <span className="text-[11px] font-medium text-muted-foreground">
+                                                    <span className="text-[10px] text-muted-foreground font-mono">
                                                         ({product.reviewCount})
                                                     </span>
                                                 </div>
                                             )}
                                         </div>
-                                    </div>
 
-                                    <div className="mb-4 line-clamp-2 min-h-[2.6rem] text-xs leading-5 text-muted-foreground">
-                                        {product.descriptionPlain || product.description || t("buy.noDescription")}
-                                    </div>
+                                        <p className="mb-3 line-clamp-2 text-xs leading-4.5 text-muted-foreground">
+                                            {product.descriptionPlain || product.description || t("buy.noDescription")}
+                                        </p>
 
-                                    <div className="mt-auto rounded-xl border border-border/40 bg-muted/20 px-3.5 py-2.5">
-                                        <div className="flex flex-wrap items-center gap-1.5 pb-1">
-                                            {product.variantCount != null && product.variantCount > 1 && (
-                                                <Badge variant="secondary" className="rounded-md text-[10px] font-medium h-5 px-1.5">
-                                                    {t("home.variantCount", { count: product.variantCount })}
-                                                </Badge>
-                                            )}
-                                        </div>
-                                        <div className="flex items-end justify-between gap-3">
-                                            <div className="min-w-0">
-                                                <div className="flex flex-wrap items-baseline gap-1.5">
-                                                    {product.variantCount != null && product.variantCount > 1 && product.priceMin != null && product.priceMax != null ? (
-                                                        <>
-                                                            <span className="text-xs font-semibold text-primary">¥</span>
-                                                            <span className="whitespace-nowrap text-xl font-bold tracking-tight text-primary tabular-nums">
-                                                                {product.priceMin} - {product.priceMax}
+                                        {/* Stripe-style Price & Stock Footer */}
+                                        <div className="mt-auto rounded-xl border border-border/40 bg-muted/20 px-3 py-2">
+                                            <div className="flex items-end justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <div className="flex flex-wrap items-baseline gap-1">
+                                                        {product.variantCount != null && product.variantCount > 1 && product.priceMin != null && product.priceMax != null ? (
+                                                            <>
+                                                                <span className="text-xs font-semibold text-primary">¥</span>
+                                                                <span className="whitespace-nowrap text-lg font-bold tracking-tight text-primary tabular-nums">
+                                                                    {product.priceMin} - {product.priceMax}
+                                                                </span>
+                                                            </>
+                                                        ) : product.variantCount != null && product.variantCount > 1 && product.priceMin != null ? (
+                                                            <>
+                                                                <span className="text-xs font-semibold text-primary">¥</span>
+                                                                <span className="whitespace-nowrap text-lg font-bold tracking-tight text-primary tabular-nums">
+                                                                    {product.priceMin} 起
+                                                                </span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <span className="text-xs font-semibold text-primary">¥</span>
+                                                                <span className="whitespace-nowrap text-lg font-bold tracking-tight text-primary tabular-nums">
+                                                                    {Number(product.price).toFixed(2)}
+                                                                </span>
+                                                                {product.compareAtPrice && Number(product.compareAtPrice) > Number(product.price) && (
+                                                                    <>
+                                                                        <span className="text-[11px] tabular-nums text-muted-foreground/60 line-through ml-1">
+                                                                            ¥{Number(product.compareAtPrice).toFixed(2)}
+                                                                        </span>
+                                                                        <span className="rounded bg-rose-500/10 px-1 py-0.2 text-[9px] font-semibold text-rose-600 dark:text-rose-400">
+                                                                            -{Math.round((1 - Number(product.price) / Number(product.compareAtPrice)) * 100)}%
+                                                                        </span>
+                                                                    </>
+                                                                )}
+                                                            </>
+                                                        )}
+                                                        {pointDiscountBadge && (
+                                                            <span className="rounded bg-emerald-500/10 px-1 py-0.5 text-[9px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                                                                抵{pointDiscountBadge.percent}%
                                                             </span>
-                                                        </>
-                                                    ) : product.variantCount != null && product.variantCount > 1 && product.priceMin != null ? (
-                                                        <>
-                                                            <span className="text-xs font-semibold text-primary">¥</span>
-                                                            <span className="whitespace-nowrap text-xl font-bold tracking-tight text-primary tabular-nums">
-                                                                {product.priceMin} 起
-                                                            </span>
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            <span className="text-xs font-semibold text-primary">¥</span>
-                                                            <span className="whitespace-nowrap text-xl font-bold tracking-tight text-primary tabular-nums">
-                                                                {Number(product.price).toFixed(2)}
-                                                            </span>
-                                                            {product.compareAtPrice && Number(product.compareAtPrice) > Number(product.price) && (
-                                                                <>
-                                                                    <span className="text-xs tabular-nums text-muted-foreground/60 line-through ml-1">
-                                                                        ¥{Number(product.compareAtPrice).toFixed(2)}
-                                                                    </span>
-                                                                    <span className="rounded bg-rose-500/10 px-1 py-0.2 text-[9px] font-semibold text-rose-600 dark:text-rose-400">
-                                                                        -{Math.round((1 - Number(product.price) / Number(product.compareAtPrice)) * 100)}%
-                                                                    </span>
-                                                                </>
-                                                            )}
-                                                        </>
-                                                    )}
-                                                    {pointDiscountBadge && (
-                                                        <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                                                            抵{pointDiscountBadge.percent}%
-                                                        </span>
-                                                    )}
+                                                        )}
+                                                    </div>
+                                                    <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
+                                                        <span>库存 {product.stockCount >= INFINITE_STOCK ? "充足" : product.stockCount}</span>
+                                                        <span>·</span>
+                                                        <span>已售 {product.soldCount}</span>
+                                                    </div>
                                                 </div>
-                                                <div className="mt-1 flex flex-wrap items-center gap-x-2.5 text-[11px] text-muted-foreground">
-                                                    <span>{t("common.stock")}: <strong className="font-medium text-foreground/80">{product.stockCount >= INFINITE_STOCK ? "充足" : product.stockCount}</strong></span>
-                                                    <span>{t("common.sold")}: <strong className="font-medium text-foreground/80">{product.soldCount}</strong></span>
+
+                                                <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border/50 bg-background text-muted-foreground transition-all duration-200 group-hover:border-primary/40 group-hover:bg-primary group-hover:text-primary-foreground group-hover:scale-105 shadow-2xs">
+                                                    <ArrowRight className="h-3.5 w-3.5" />
                                                 </div>
                                             </div>
-
-                                            <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border/50 bg-background text-muted-foreground transition-all duration-200 group-hover:border-primary/40 group-hover:bg-primary group-hover:text-primary-foreground group-hover:scale-105 shadow-2xs">
-                                                <ArrowRight className="h-4 w-4" />
-                                            </div>
                                         </div>
-                                    </div>
-                                </CardContent>
-                            </Link>
+                                    </CardContent>
+                                </Link>
+                            )
                         })}
                     </div>
                 )}
             </section>
 
+            {/* Pagination */}
             {sortedProducts.length > 0 && (
-                <nav className="mt-10 flex flex-wrap items-center justify-center gap-3 sm:justify-between">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <span className="font-medium">
-                            {t("search.page", { page: currentPage, totalPages })}
-                        </span>
+                <nav className="mt-8 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <div>
+                        {t("search.page", { page: currentPage, totalPages })}
                     </div>
                     <div className="flex items-center gap-2">
                         <Button
                             variant="outline"
                             size="sm"
-                            className="h-9 rounded-xl px-3"
+                            className="h-8 rounded-lg px-3 text-xs"
                             onClick={() => setPage((p) => Math.max(1, p - 1))}
                             disabled={currentPage <= 1}
                         >
@@ -570,14 +509,14 @@ export function HomeContent({
                         <Button
                             variant="outline"
                             size="sm"
-                            className="h-9 rounded-xl px-3"
+                            className="h-8 rounded-lg px-3 text-xs"
                             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                             disabled={!hasMore}
                         >
                             {t("search.next")}
                         </Button>
                         {hasMore && (
-                            <Button variant="secondary" size="sm" className="h-9 rounded-xl px-4" onClick={() => setPage(currentPage + 1)}>
+                            <Button variant="secondary" size="sm" className="h-8 rounded-lg px-3.5 text-xs font-medium" onClick={() => setPage(currentPage + 1)}>
                                 {t("common.loadMore")}
                             </Button>
                         )}

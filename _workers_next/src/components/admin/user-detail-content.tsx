@@ -13,6 +13,7 @@ import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-li
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { UserPointAdjustmentDialog } from "./user-point-adjustment-dialog"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 function getOrderStatusVariant(status: string | null) {
     switch (status) {
@@ -79,6 +80,7 @@ export function AdminUserDetailContent(props: {
     hasLegacyBalanceInit: boolean
 }) {
     const { t } = useI18n()
+    const { confirm } = useConfirm()
     const router = useRouter()
     const [expandedOrderIds, setExpandedOrderIds] = useState<string[]>([])
     const [adjustOpen, setAdjustOpen] = useState(false)
@@ -109,7 +111,15 @@ export function AdminUserDetailContent(props: {
                         onClick={async () => {
                             const nextBlocked = !props.user.isBlocked
                             const confirmKey = nextBlocked ? "admin.users.confirmBlock" : "admin.users.confirmUnblock"
-                            if (!confirm(t(confirmKey))) return
+                            const ok = await confirm({
+                                title: nextBlocked ? "封禁用户" : "解封用户",
+                                description: t(confirmKey),
+                                variant: nextBlocked ? "destructive" : "default",
+                                icon: nextBlocked ? "alert" : "check",
+                                confirmText: t('common.confirm'),
+                                cancelText: t('common.cancel'),
+                            })
+                            if (!ok) return
 
                             setBlocking(true)
                             try {

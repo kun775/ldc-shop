@@ -857,7 +857,8 @@
         }
     },
     "footer": {
-        "disclaimer": "Built for Linux DO ecosystem. Not an official service. Developed by chatgpt.org.uk."
+        "disclaimer": "Built for Linux DO ecosystem. Not an official service. Developed by chatgpt.org.uk.",
+        "visitorCount": "Total Visitors {{count}}"
     },
     "profile": {
         "emailTitle": "Email",
@@ -941,6 +942,12 @@
         "popupHint": "Shown once per browser by default. Updating the popup content will show it again.",
         "popupDefaultTitle": "Announcement",
         "popupConfirm": "Got it",
+        "dismissOnce": "Got it",
+        "dismissToday": "Don't show today",
+        "dismissForever": "Don't show this again",
+        "dismissTodayNotice": "This announcement will not show again today",
+        "dismissForeverNotice": "This announcement will not show again",
+        "viewAnnouncement": "Announcement",
         "save": "Save Announcement",
         "saved": "Announcement saved!",
         "hint": "Both the top banner and popup are shown on the homepage. If start/end is set, they only appear during that time window."

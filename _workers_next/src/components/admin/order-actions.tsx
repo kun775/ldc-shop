@@ -7,9 +7,11 @@ import { markOrderDelivered, markOrderPaid, cancelOrder } from "@/actions/admin-
 import { toast } from "sonner"
 import { useI18n } from "@/lib/i18n/context"
 import { CheckCircle, Truck, XCircle, ExternalLink } from "lucide-react"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 export function AdminOrderActions({ order }: { order: any }) {
   const { t } = useI18n()
+  const { confirm } = useConfirm()
   const [loading, setLoading] = useState(false)
   const loadingRef = useRef(false)
 
@@ -21,22 +23,50 @@ export function AdminOrderActions({ order }: { order: any }) {
   const handle = async (action: 'paid' | 'delivered' | 'cancel') => {
     if (loadingRef.current) return
     try {
-      loadingRef.current = true
-      setLoading(true)
       if (action === 'paid') {
-        if (!confirm(t('admin.orders.confirmMarkPaid'))) return
+        const ok = await confirm({
+          title: t('admin.orders.markPaid') || "标记订单为已支付",
+          description: t('admin.orders.confirmMarkPaid'),
+          variant: 'default',
+          icon: 'check',
+          confirmText: t('common.confirm'),
+          cancelText: t('common.cancel'),
+        })
+        if (!ok) return
+        loadingRef.current = true
+        setLoading(true)
         await markOrderPaid(order.orderId)
         toast.success(t('common.success'))
         return
       }
       if (action === 'delivered') {
-        if (!confirm(t('admin.orders.confirmMarkDelivered'))) return
+        const ok = await confirm({
+          title: t('admin.orders.markDelivered') || "标记订单为已发货",
+          description: t('admin.orders.confirmMarkDelivered'),
+          variant: 'default',
+          icon: 'check',
+          confirmText: t('common.confirm'),
+          cancelText: t('common.cancel'),
+        })
+        if (!ok) return
+        loadingRef.current = true
+        setLoading(true)
         await markOrderDelivered(order.orderId)
         toast.success(t('common.success'))
         return
       }
       if (action === 'cancel') {
-        if (!confirm(t('admin.orders.confirmCancel'))) return
+        const ok = await confirm({
+          title: t('admin.orders.cancelOrder') || "取消订单",
+          description: t('admin.orders.confirmCancel'),
+          variant: 'destructive',
+          icon: 'alert',
+          confirmText: t('common.confirm'),
+          cancelText: t('common.cancel'),
+        })
+        if (!ok) return
+        loadingRef.current = true
+        setLoading(true)
         await cancelOrder(order.orderId)
         toast.success(t('common.success'))
       }

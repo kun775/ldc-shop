@@ -4,6 +4,7 @@ import { I18nProvider } from '@/lib/i18n/context'
 import { Toaster } from 'sonner'
 import { ThemeProvider as NextThemesProvider } from "next-themes"
 import { ThemeColorProvider } from './theme-color-provider'
+import { ConfirmDialogProvider } from './confirm-dialog-provider'
 import type { Locale } from '@/lib/i18n/shared'
 
 interface ProvidersProps {
@@ -23,8 +24,10 @@ export function Providers({ children, themeColor, initialLocale = 'en', currency
         >
             <ThemeColorProvider color={themeColor || null}>
                 <I18nProvider initialLocale={initialLocale} currencyUnit={currencyUnit}>
-                    {children}
-                    <Toaster position="top-center" richColors />
+                    <ConfirmDialogProvider>
+                        {children}
+                        <Toaster position="top-center" richColors />
+                    </ConfirmDialogProvider>
                 </I18nProvider>
             </ThemeColorProvider>
         </NextThemesProvider>

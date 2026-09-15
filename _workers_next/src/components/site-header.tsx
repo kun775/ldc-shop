@@ -12,9 +12,11 @@ import {
 import { User } from "lucide-react"
 import { SignInButton } from "@/components/signin-button"
 import { SignOutButton } from "@/components/signout-button"
-import { HeaderLogo, HeaderNav, HeaderSearch, HeaderUserMenuItems, HeaderUnreadBadge, LanguageSwitcher } from "@/components/header-client-parts"
+import { HeaderLogo, HeaderNav, HeaderSearch, HeaderUserMenuItems, HeaderUnreadBadge, HeaderAnnouncementTrigger, LanguageSwitcher } from "@/components/header-client-parts"
 import { ModeToggle } from "@/components/mode-toggle"
+import { CheckInButton } from "@/components/checkin-button"
 import { getSetting, recordLoginUser, getUserUnreadNotificationCount, getLoginUserDesktopNotificationsEnabled } from "@/lib/db/queries"
+import { getActiveAnnouncement } from "@/actions/settings"
 import { isRegistryEnabled } from "@/lib/registry"
 
 export async function SiteHeader() {
@@ -63,18 +65,28 @@ export async function SiteHeader() {
 
     let unreadCount = 0
     let desktopNotificationsEnabled = false
-    if (user?.id) {
-        try {
-            unreadCount = await getUserUnreadNotificationCount(user.id)
-        } catch {
-            unreadCount = 0
-        }
-        try {
-            desktopNotificationsEnabled = await getLoginUserDesktopNotificationsEnabled(user.id)
-        } catch {
-            desktopNotificationsEnabled = false
-        }
+    let activeAnnouncement: any = null
+    let checkinEnabled = true
+
+    try {
+        const [notificationsRes, desktopRes, announcementRes, checkinRes] = await Promise.all([
+            user?.id ? getUserUnreadNotificationCount(user.id).catch(() => 0) : 0,
+            user?.id ? getLoginUserDesktopNotificationsEnabled(user.id).catch(() => false) : false,
+            getActiveAnnouncement().catch(() => null),
+            getSetting('checkin_enabled').catch(() => null)
+        ])
+        unreadCount = notificationsRes
+        desktopNotificationsEnabled = desktopRes
+        activeAnnouncement = announcementRes
+        checkinEnabled = checkinRes !== 'false'
+    } catch {
+        unreadCount = 0
+        desktopNotificationsEnabled = false
+        activeAnnouncement = null
+        checkinEnabled = true
     }
+
+    const hasAnnouncement = Boolean(activeAnnouncement?.banner || activeAnnouncement?.popup?.content)
 
     return (
         <header className="sticky top-0 z-40 w-full border-b border-border/20 bg-gradient-to-b from-background/90 via-background/70 to-background/55 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70 relative after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-gradient-to-r after:from-transparent after:via-primary/25 after:to-transparent">
@@ -86,7 +98,13 @@ export async function SiteHeader() {
                 <div className="hidden md:flex flex-1 justify-center px-4">
                     {/* HeaderSearch removed as per user request */}
                 </div>
-                <div className="ml-auto flex items-center justify-end gap-2 md:gap-3">
+                <div className="ml-auto flex items-center justify-end gap-1.5 md:gap-2.5">
+                    {hasAnnouncement && (
+                        <HeaderAnnouncementTrigger hasAnnouncement={true} />
+                    )}
+                    {user && checkinEnabled && (
+                        <CheckInButton className="hidden sm:flex" />
+                    )}
                     <nav className="flex items-center space-x-1 rounded-full border border-border/20 bg-muted/20 px-1.5 py-1 md:px-2">
                         <LanguageSwitcher />
                         <ModeToggle />
@@ -101,18 +119,18 @@ export async function SiteHeader() {
                                         </Avatar>
                                     </Button>
                                 </DropdownMenuTrigger>
-                                    <DropdownMenuContent className="w-56" align="end" forceMount>
-                                        <DropdownMenuLabel className="font-normal">
-                                            <div className="flex flex-col space-y-1">
-                                                <p className="text-sm font-medium leading-none">{user.name}</p>
-                                                <p className="text-xs leading-none text-muted-foreground">ID: {user.id}</p>
-                                            </div>
-                                        </DropdownMenuLabel>
-                                        <DropdownMenuSeparator />
-                                        <HeaderUserMenuItems isAdmin={isAdmin} showNav={showNavigator} />
-                                        <DropdownMenuSeparator />
-                                        <SignOutButton />
-                                    </DropdownMenuContent>
+                                <DropdownMenuContent className="w-56" align="end" forceMount>
+                                    <DropdownMenuLabel className="font-normal">
+                                        <div className="flex flex-col space-y-1">
+                                            <p className="text-sm font-medium leading-none">{user.name}</p>
+                                            <p className="text-xs leading-none text-muted-foreground">ID: {user.id}</p>
+                                        </div>
+                                    </DropdownMenuLabel>
+                                    <DropdownMenuSeparator />
+                                    <HeaderUserMenuItems isAdmin={isAdmin} showNav={showNavigator} />
+                                    <DropdownMenuSeparator />
+                                    <SignOutButton />
+                                </DropdownMenuContent>
                             </DropdownMenu>
                         ) : (
                             <SignInButton />

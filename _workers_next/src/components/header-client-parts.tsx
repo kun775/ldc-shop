@@ -5,10 +5,12 @@ import { useI18n } from "@/lib/i18n/context"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { LanguageSwitcher } from "@/components/language-switcher"
 import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
 import { usePathname, useRouter } from "next/navigation"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import { getMyUnreadCount } from "@/actions/user-notifications"
+import { Megaphone } from "lucide-react"
 
 export function HeaderLogo({ adminName, shopNameOverride, shopLogoVersion }: { adminName?: string; shopNameOverride?: string | null; shopLogoVersion?: string | null }) {
     const { t } = useI18n()
@@ -167,3 +169,27 @@ export function HeaderUnreadBadge({ initialCount = 0, desktopEnabled = false, cl
         </span>
     )
 }
+
+export function HeaderAnnouncementTrigger({ hasAnnouncement }: { hasAnnouncement: boolean }) {
+    const { t } = useI18n()
+    if (!hasAnnouncement) return null
+
+    return (
+        <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+                if (typeof window !== "undefined") {
+                    window.dispatchEvent(new CustomEvent("ldc:open-announcement"))
+                }
+            }}
+            className="h-8 px-2.5 rounded-full text-xs font-medium text-muted-foreground hover:text-primary hover:bg-primary/10 gap-1.5 transition-colors"
+            title={t("announcement.viewAnnouncement")}
+        >
+            <Megaphone className="h-3.5 w-3.5 text-primary" />
+            <span className="hidden sm:inline">{t("announcement.viewAnnouncement")}</span>
+        </Button>
+    )
+}
+

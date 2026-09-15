@@ -19,6 +19,7 @@ import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
 import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
 import { isManualFulfillment } from "@/lib/fulfillment"
 import { Textarea } from "@/components/ui/textarea"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 import { 
   Zap, 
   PackageOpen, 
@@ -71,6 +72,7 @@ function statusVariant(status: string | null) {
 
 export function AdminOrderDetailContent({ order }: { order: any }) {
   const { t } = useI18n()
+  const { confirm } = useConfirm()
   const router = useRouter()
   const paymentBreakdown = getOrderPaymentBreakdown({
     amount: order.amount,
@@ -95,16 +97,34 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
   const handleStatus = async (action: 'paid' | 'delivered' | 'cancel') => {
     if (actionLock.current) return
     try {
-      actionLock.current = true
-      setActionLoading(true)
       if (action === 'paid') {
-        if (!confirm(t('admin.orders.confirmMarkPaid'))) return
+        const ok = await confirm({
+          title: t('admin.orders.markPaid') || "标记订单为已支付",
+          description: t('admin.orders.confirmMarkPaid'),
+          variant: 'default',
+          icon: 'check',
+          confirmText: t('common.confirm'),
+          cancelText: t('common.cancel'),
+        })
+        if (!ok) return
+        actionLock.current = true
+        setActionLoading(true)
         await markOrderPaid(order.orderId)
         toast.success(t('common.success'))
         return
       }
       if (action === 'delivered') {
-        if (!confirm(t('admin.orders.confirmMarkDelivered'))) return
+        const ok = await confirm({
+          title: t('admin.orders.markDelivered') || "标记订单为已发货",
+          description: t('admin.orders.confirmMarkDelivered'),
+          variant: 'default',
+          icon: 'check',
+          confirmText: t('common.confirm'),
+          cancelText: t('common.cancel'),
+        })
+        if (!ok) return
+        actionLock.current = true
+        setActionLoading(true)
         const formData = isManual ? new FormData(deliveryFormRef.current || undefined) : undefined
         if (isManual) formData?.set('deliveryNote', deliveryNote)
         await markOrderDelivered(order.orderId, formData)
@@ -113,7 +133,17 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
         return
       }
       if (action === 'cancel') {
-        if (!confirm(t('admin.orders.confirmCancel'))) return
+        const ok = await confirm({
+          title: t('admin.orders.cancelOrder') || "取消订单",
+          description: t('admin.orders.confirmCancel'),
+          variant: 'destructive',
+          icon: 'alert',
+          confirmText: t('common.confirm'),
+          cancelText: t('common.cancel'),
+        })
+        if (!ok) return
+        actionLock.current = true
+        setActionLoading(true)
         await cancelOrder(order.orderId)
         toast.success(t('common.success'))
       }
@@ -210,7 +240,15 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                 className="rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 text-xs"
                 onClick={async () => {
                   if (actionLock.current) return
-                  if (!confirm(t('admin.orders.confirmDelete'))) return
+                  const ok = await confirm({
+                    title: t('admin.orders.delete') || "删除订单",
+                    description: t('admin.orders.confirmDelete'),
+                    variant: 'destructive',
+                    icon: 'trash',
+                    confirmText: t('common.delete'),
+                    cancelText: t('common.cancel'),
+                  })
+                  if (!ok) return
                   actionLock.current = true
                   setActionLoading(true)
                   try {

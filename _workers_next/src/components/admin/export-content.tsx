@@ -10,6 +10,7 @@ import { Download, Upload, FileUp, AlertCircle, CheckCircle2 } from "lucide-reac
 import { importData, repairDataAction } from "@/actions/data"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 function downloadUrl(params: Record<string, string>) {
   const search = new URLSearchParams(params)
@@ -18,13 +19,22 @@ function downloadUrl(params: Record<string, string>) {
 
 export function AdminDataContent({ shopName }: { shopName: string | null }) {
   const { t } = useI18n()
+  const { confirm } = useConfirm()
   const [activeTab, setActiveTab] = useState<'export' | 'import'>('export')
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<{ count: number, errors: number } | null>(null)
   const [repairing, setRepairing] = useState(false)
 
   const handleRepair = async () => {
-    if (!confirm(t('admin.export.repairConfirm') || "Repair timestamps? This will convert Vercel-style text dates to Workers-style numbers.")) return
+    const ok = await confirm({
+      title: "数据时间戳修复",
+      description: t('admin.export.repairConfirm') || "确认修复时间戳格式吗？此操作将把旧版文本日期转换为毫秒时间戳格式。",
+      variant: "warning",
+      icon: "alert",
+      confirmText: t('common.confirm'),
+      cancelText: t('common.cancel'),
+    })
+    if (!ok) return
 
     setRepairing(true)
     try {

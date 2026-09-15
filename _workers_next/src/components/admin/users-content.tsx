@@ -12,6 +12,7 @@ import { toggleBlock } from "@/actions/admin-users"
 import { Loader2, Search, ArrowLeft, ArrowRight, Edit, Ban, CheckCircle } from "lucide-react"
 import { getDisplayUsername } from "@/lib/user-profile-link"
 import { UserPointAdjustmentDialog } from "./user-point-adjustment-dialog"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 interface User {
     userId: string
@@ -34,6 +35,7 @@ interface UsersContentProps {
 
 export function UsersContent({ data }: UsersContentProps) {
     const { t } = useI18n()
+    const { confirm } = useConfirm()
     const router = useRouter()
     const searchParams = useSearchParams()
 
@@ -73,7 +75,16 @@ export function UsersContent({ data }: UsersContentProps) {
     const handleToggleBlock = async (user: User) => {
         if (blockLock.current === user.userId) return
         const action = user.isBlocked ? 'unblock' : 'block'
-        if (!confirm(t(`admin.users.confirm${action.charAt(0).toUpperCase() + action.slice(1)}`))) return
+        const isBlock = !user.isBlocked
+        const ok = await confirm({
+            title: isBlock ? "封禁用户" : "解封用户",
+            description: t(`admin.users.confirm${action.charAt(0).toUpperCase() + action.slice(1)}`),
+            variant: isBlock ? "destructive" : "default",
+            icon: isBlock ? "alert" : "check",
+            confirmText: t('common.confirm'),
+            cancelText: t('common.cancel'),
+        })
+        if (!ok) return
 
         try {
             blockLock.current = user.userId

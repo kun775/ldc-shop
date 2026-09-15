@@ -1,14 +1,16 @@
 'use client'
 
 import { useI18n } from "@/lib/i18n/context"
+import { Users } from "lucide-react"
 import type { ReactNode } from "react"
 
 interface FooterContentProps {
     customFooter: string | null
     version: string
+    visitorCount?: number
 }
 
-export function FooterContent({ customFooter, version }: FooterContentProps) {
+export function FooterContent({ customFooter, version, visitorCount }: FooterContentProps) {
     const { t } = useI18n()
     const footerText = customFooter?.trim() || t('footer.disclaimer')
 
@@ -57,29 +59,32 @@ export function FooterContent({ customFooter, version }: FooterContentProps) {
         return nodes
     }
 
-    const renderFooterText = (text: string) => {
-        const lines = text.split(/\r?\n/)
-        return lines.flatMap((line, idx) => {
-            const parts = linkify(line)
-            if (idx < lines.length - 1) {
-                return [...parts, <br key={`footer-br-${idx}`} />]
-            }
-            return parts
-        })
-    }
-
     return (
-        <footer className="border-t border-border/50 py-6 pb-20 md:py-0 md:pb-0 bg-gradient-to-t from-muted/30 to-transparent">
-            <div className="container flex flex-col items-center justify-between gap-4 md:h-20 md:flex-row">
-                <div className="flex flex-col items-center gap-4 px-8 md:flex-row md:gap-2 md:px-0">
+        <footer className="border-t border-border/40 py-6 pb-20 md:py-0 md:pb-0 bg-gradient-to-t from-muted/30 to-transparent">
+            <div className="container flex flex-col items-center justify-between gap-4 md:h-16 md:flex-row">
+                <div className="flex flex-col items-center gap-4 px-4 md:flex-row md:gap-2 md:px-0">
                     <p
-                        className="text-center text-xs leading-loose text-muted-foreground/80 md:text-left footer-html"
+                        className="text-center text-xs leading-relaxed text-muted-foreground/80 md:text-left footer-html"
                         dangerouslySetInnerHTML={{ __html: footerText }}
                     />
                 </div>
-                <a href="https://github.com/kun775/ldc-shop" target="_blank" rel="noreferrer" className="text-center text-xs text-muted-foreground/40 hover:text-primary transition-colors duration-300">
-                    v{version}
-                </a>
+                <div className="flex items-center gap-4 text-xs text-muted-foreground/50">
+                    {typeof visitorCount === "number" && visitorCount > 0 && (
+                        <div className="inline-flex items-center gap-1.5 font-mono text-muted-foreground/60 hover:text-muted-foreground transition-colors" title="全站累计独立访客数">
+                            <Users className="h-3.5 w-3.5 text-primary/70" />
+                            <span>{t('footer.visitorCount', { count: visitorCount })}</span>
+                        </div>
+                    )}
+                    <span className="text-border/60">·</span>
+                    <a
+                        href="https://github.com/kun775/ldc-shop"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-center text-xs text-muted-foreground/50 hover:text-primary transition-colors duration-300 font-mono"
+                    >
+                        v{version}
+                    </a>
+                </div>
             </div>
         </footer>
     )

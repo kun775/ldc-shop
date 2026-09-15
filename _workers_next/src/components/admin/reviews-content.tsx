@@ -10,6 +10,7 @@ import { ClientDate } from "@/components/client-date"
 import { deleteReview, deleteReviewReply } from "@/actions/admin"
 import { toast } from "sonner"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 interface ReviewRow {
   id: number
@@ -33,6 +34,7 @@ interface ReviewRow {
 
 export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
   const { t } = useI18n()
+  const { confirm } = useConfirm()
   const [items, setItems] = useState(reviews)
   const [query, setQuery] = useState("")
   const [deletingId, setDeletingId] = useState<number | null>(null)
@@ -59,7 +61,15 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
 
   const handleDelete = async (id: number) => {
     if (deletingRef.current === id) return
-    if (!confirm(t('common.confirm') + '?')) return
+    const ok = await confirm({
+      title: t('common.confirmDelete'),
+      description: "确定要删除这条评价吗？删除后不可恢复。",
+      variant: "destructive",
+      icon: "trash",
+      confirmText: t('common.delete'),
+      cancelText: t('common.cancel'),
+    })
+    if (!ok) return
     try {
       deletingRef.current = id
       setDeletingId(id)
@@ -76,7 +86,15 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
 
   const handleDeleteReply = async (replyId: number, reviewId: number) => {
     if (deletingRef.current === replyId) return
-    if (!confirm(t('common.confirm') + '?')) return
+    const ok = await confirm({
+      title: t('common.confirmDelete'),
+      description: "确定要删除这条商家回复吗？",
+      variant: "destructive",
+      icon: "trash",
+      confirmText: t('common.delete'),
+      cancelText: t('common.cancel'),
+    })
+    if (!ok) return
     try {
       deletingRef.current = replyId
       setDeletingId(replyId)

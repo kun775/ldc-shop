@@ -11,6 +11,7 @@ import { adminApproveRefund, adminRejectRefund } from "@/actions/refund-requests
 import { RefundButton } from "@/components/admin/refund-button"
 import { toast } from "sonner"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 function statusVariant(status: string | null) {
   switch (status) {
@@ -23,6 +24,7 @@ function statusVariant(status: string | null) {
 
 export function AdminRefundsContent({ requests }: { requests: any[] }) {
   const { t } = useI18n()
+  const { prompt } = useConfirm()
   const [query, setQuery] = useState("")
   const [processingId, setProcessingId] = useState<number | null>(null)
   const processingRef = useRef<number | null>(null)
@@ -45,7 +47,16 @@ export function AdminRefundsContent({ requests }: { requests: any[] }) {
 
   const handle = async (id: number, action: 'approve' | 'reject') => {
     if (processingRef.current === id) return
-    const note = prompt(t('admin.refunds.adminNotePrompt')) || ''
+    const note = await prompt({
+      title: action === 'approve'
+        ? `${t('admin.refunds.approve')} - ${t('admin.refunds.adminNote')}`
+        : `${t('admin.refunds.reject')} - ${t('admin.refunds.adminNote')}`,
+      description: t('admin.refunds.adminNotePrompt'),
+      placeholder: "请输入审核处理说明（可选）...",
+      confirmText: t('common.confirm'),
+      cancelText: t('common.cancel'),
+    })
+    if (note === null) return // user cancelled
     try {
       processingRef.current = id
       setProcessingId(id)

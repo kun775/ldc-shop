@@ -857,7 +857,8 @@
         }
     },
     "footer": {
-        "disclaimer": "为 Linux DO 生态打造，非官方服务，由 chatgpt.org.uk 开发"
+        "disclaimer": "为 Linux DO 生态打造，非官方服务，由 chatgpt.org.uk 开发",
+        "visitorCount": "累计访客 {{count}}"
     },
     "profile": {
         "emailTitle": "邮箱",
@@ -939,8 +940,14 @@
         "popupContent": "弹窗内容",
         "popupPlaceholder": "输入弹窗公告内容，支持 Markdown...（留空则不显示弹窗）",
         "popupHint": "同一浏览器默认只会看到一次；更新弹窗内容后会再次弹出。",
-        "popupDefaultTitle": "系统公告",
+        "popupDefaultTitle": "站点公告",
         "popupConfirm": "我知道了",
+        "dismissOnce": "我知道了",
+        "dismissToday": "今日不再弹出",
+        "dismissForever": "本条不再弹出",
+        "dismissTodayNotice": "今日将不再自动弹出此公告",
+        "dismissForeverNotice": "本条公告已设置为永久不再自动弹出",
+        "viewAnnouncement": "站点公告",
         "save": "保存公告",
         "saved": "公告已保存！",
         "hint": "顶部公告和弹窗公告都显示在首页；设置开始/结束时间后，仅在该时间段内展示。"

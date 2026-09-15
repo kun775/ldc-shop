@@ -12,6 +12,7 @@ import { toast } from "sonner"
 import { Trash2, ThumbsUp, Sparkles } from "lucide-react"
 import { submitWishlistItem, toggleWishlistVote, deleteWishlistItem } from "@/actions/wishlist"
 import { cn } from "@/lib/utils"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 export interface WishlistItem {
     id: number
@@ -33,6 +34,7 @@ export function WishlistSection({
     isAdmin?: boolean
 }) {
     const { t } = useI18n()
+    const { confirm } = useConfirm()
     const [items, setItems] = useState<WishlistItem[]>(initialItems || [])
     const [title, setTitle] = useState("")
     const [desc, setDesc] = useState("")
@@ -104,7 +106,15 @@ export function WishlistSection({
     }
 
     const handleDelete = async (itemId: number) => {
-        if (!confirm(t("common.confirmDelete"))) return
+        const ok = await confirm({
+            title: t("common.confirmDelete"),
+            description: t("common.deleteConfirmDesc") || "确认要删除此心愿单项目吗？操作后不可撤销。",
+            variant: "destructive",
+            icon: "trash",
+            confirmText: t("common.delete"),
+            cancelText: t("common.cancel"),
+        })
+        if (!ok) return
         setDeletingId(itemId)
         try {
             const res = await deleteWishlistItem(itemId)

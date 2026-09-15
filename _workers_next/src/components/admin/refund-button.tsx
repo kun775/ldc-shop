@@ -8,11 +8,13 @@ import { toast } from "sonner"
 import { Loader2, ExternalLink, CheckCircle, RefreshCcw, AlertTriangle } from "lucide-react"
 import { useI18n } from "@/lib/i18n/context"
 import { cn } from "@/lib/utils"
+import { useConfirm } from "@/components/confirm-dialog-provider"
 
 export function RefundButton({ order }: { order: any }) {
     const [loading, setLoading] = useState(false)
     const [showMarkDone, setShowMarkDone] = useState(false)
     const { t } = useI18n()
+    const { confirm } = useConfirm()
 
     if (order.status !== 'delivered' && order.status !== 'paid') return null
     if (!order.tradeNo) return null
@@ -25,7 +27,14 @@ export function RefundButton({ order }: { order: any }) {
         const confirmMsg = isOver30Days
             ? `${t('admin.orders.refundProxyConfirm')}\n\n⚠️ 提示：该订单交易成功已超过 30 天售后窗口，确认仍要执行退款吗？`
             : t('admin.orders.refundProxyConfirm')
-        if (!confirm(confirmMsg)) return
+        const ok = await confirm({
+            title: t('admin.orders.refund') || "执行订单退款",
+            description: confirmMsg,
+            variant: isOver30Days ? 'warning' : 'destructive',
+            confirmText: t('admin.orders.refund'),
+            cancelText: t('common.cancel'),
+        })
+        if (!ok) return
         setLoading(true)
         try {
             const result = await proxyRefund(order.orderId)
@@ -44,7 +53,14 @@ export function RefundButton({ order }: { order: any }) {
     }
 
     const handleMarkDone = async () => {
-        if (!confirm(t('admin.orders.refundVerifyPlatform'))) return
+        const ok = await confirm({
+            title: t('admin.orders.markRefunded') || "标记已退款",
+            description: t('admin.orders.refundVerifyPlatform'),
+            variant: 'default',
+            confirmText: t('common.confirm'),
+            cancelText: t('common.cancel'),
+        })
+        if (!ok) return
 
         setLoading(true)
         try {
