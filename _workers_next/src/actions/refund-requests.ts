@@ -204,10 +204,14 @@ export async function adminRejectRefund(requestId: number, adminNote?: string) {
 }
 
 export async function getPendingRefundRequestCount() {
-  await checkAdmin()
-  await ensureRefundRequestsTable()
-  const rows = await db.select({
-    count: sql<number>`count(*)`
-  }).from(refundRequests).where(eq(refundRequests.status, 'pending'))
-  return { success: true, count: Number(rows[0]?.count || 0) }
+  try {
+    await checkAdmin()
+    await ensureRefundRequestsTable()
+    const rows = await db.select({
+      count: sql<number>`count(*)`
+    }).from(refundRequests).where(eq(refundRequests.status, 'pending'))
+    return { success: true, count: Number(rows[0]?.count || 0) }
+  } catch {
+    return { success: false, count: 0 }
+  }
 }

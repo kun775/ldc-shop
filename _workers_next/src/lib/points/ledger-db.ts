@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto"
-import { db } from "@/lib/db"
+import { db, execD1 } from "@/lib/db"
 import { loginUsers, orders, products, settings, userPointLedger } from "@/lib/db/schema"
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import {
@@ -234,20 +234,25 @@ export async function ensureUserPointLedgerSchema() {
             CREATE INDEX IF NOT EXISTS user_point_ledger_user_created_idx
             ON user_point_ledger (user_id, created_at DESC, id DESC)
         `)
-        await db.run(sql`
-            CREATE TRIGGER IF NOT EXISTS user_point_ledger_apply_balance
-            AFTER UPDATE OF status ON user_point_ledger
-            WHEN OLD.status = 'pending' AND NEW.status = 'completed'
-            BEGIN
-                UPDATE login_users
-                SET points = points + NEW.delta
-                WHERE user_id = NEW.user_id
-                  AND points + NEW.delta >= 0;
-                SELECT CASE
-                    WHEN changes() = 0 THEN RAISE(ABORT, 'POINT_BALANCE_NEGATIVE')
+        try {
+            await execD1(`
+                CREATE TRIGGER IF NOT EXISTS user_point_ledger_apply_balance
+                AFTER UPDATE OF status ON user_point_ledger
+                WHEN OLD.status = 'pending' AND NEW.status = 'completed'
+                BEGIN
+                    UPDATE login_users
+                    SET points = points + NEW.delta
+                    WHERE user_id = NEW.user_id
+                      AND points + NEW.delta >= 0;
+                    SELECT CASE
+                        WHEN changes() = 0 THEN RAISE(ABORT, 'POINT_BALANCE_NEGATIVE')
+                    END;
                 END;
-            END
-        `)
+            `)
+        } catch (triggerError) {
+            console.error("Failed to create user_point_ledger_apply_balance trigger:", triggerError)
+            throw triggerError
+        }
 
         await setSettingValue("point_ledger_schema_version", String(POINT_LEDGER_SCHEMA_VERSION))
         markPointLedgerSchemaReady()

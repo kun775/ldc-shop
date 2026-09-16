@@ -74,12 +74,16 @@ export async function sendUserMessage(title: string, body: string) {
 }
 
 export async function getUnreadUserMessageCount() {
-    await checkAdmin()
-    await ensureUserMessagesTable()
-    const rows = await db.select({ count: sql<number>`count(*)` })
-        .from(userMessages)
-        .where(eq(userMessages.isRead, false))
-    return { success: true, count: Number(rows[0]?.count || 0) }
+    try {
+        await checkAdmin()
+        await ensureUserMessagesTable()
+        const rows = await db.select({ count: sql<number>`count(*)` })
+            .from(userMessages)
+            .where(eq(userMessages.isRead, false))
+        return { success: true, count: Number(rows[0]?.count || 0) }
+    } catch {
+        return { success: false, count: 0 }
+    }
 }
 
 export async function markUserMessageRead(id: number) {

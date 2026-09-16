@@ -212,35 +212,47 @@ export async function ensureDatabaseInitialized() {
             return;
         }
 
+        let tableExists = false;
         try {
             // Quick check if products table exists
             await db.run(sql`SELECT 1 FROM products LIMIT 1`);
-
-            // IMPORTANT: Even if table exists, ensure columns exist!
-            await ensureProductsColumns();
-            await ensureOrdersColumns();
-            await ensureOrderDeliveryFilesTable();
-            await ensureCardsColumns();
-            await ensureCardKeyDuplicatesAllowed();
-            await ensureLoginUsersTable();
-            await ensureLoginUsersColumns();
-            loginUsersSchemaReady = true;
-            await ensureUserNotificationsTable();
-            await ensureAdminMessagesTable();
-            await ensureUserMessagesTable();
-            await ensureBroadcastTables();
-            await ensureWishlistTables();
-            await migrateTimestampColumnsToMs();
-            await migrateMalformedGitHubUserIds();
-            await migrateGitHubUsersDedupAndCanonicalize();
-            await ensureIndexes();
-            await backfillProductAggregates();
-
-            await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
-            markCurrentSchemaReady();
-            return;
+            tableExists = true;
         } catch {
-            // Table doesn't exist, initialize database
+            tableExists = false;
+        }
+
+        if (tableExists) {
+            // IMPORTANT: Existing installations must never fall through to the
+            // first-run bootstrap when an incremental migration fails.
+            try {
+                await ensureProductsColumns();
+                await ensureOrdersColumns();
+                await ensureOrderDeliveryFilesTable();
+                await ensureCardsColumns();
+                await ensureCardKeyDuplicatesAllowed();
+                await ensureLoginUsersTable();
+                await ensureLoginUsersColumns();
+                loginUsersSchemaReady = true;
+                await ensureUserNotificationsTable();
+                await ensureAdminMessagesTable();
+                await ensureUserMessagesTable();
+                await ensureBroadcastTables();
+                await ensureWishlistTables();
+                await migrateTimestampColumnsToMs();
+                await migrateMalformedGitHubUserIds();
+                await migrateGitHubUsersDedupAndCanonicalize();
+                await ensureIndexes();
+                await backfillProductAggregates();
+
+                await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
+                markCurrentSchemaReady();
+            } catch (migrationError) {
+                // Keep the existing database usable for read paths and retry the
+                // migration on the next isolate instead of running bootstrap SQL.
+                console.error("Incremental database migration failed:", migrationError);
+                dbInitialized = true;
+            }
+            return;
         }
 
         console.log("First run detected, initializing database...");
@@ -1390,7 +1402,8 @@ export async function getDashboardStats(nowMs: number) {
 
             pointRow = pointStats[0] || emptyPointRow;
         } catch (error: any) {
-            if (!isMissingTableOrColumn(error)) throw error;
+            console.warn("Failed to query point stats in dashboard stats:", error);
+            pointRow = emptyPointRow;
         }
 
         return {
@@ -1574,7 +1587,7 @@ export async function getAdminOverview(lowStockThreshold = 5) {
                         }).from(userPointLedger)
                         return rows
                     } catch (error: any) {
-                        if (!isMissingTableOrColumn(error)) throw error
+                        console.warn("Failed to query point rows in admin overview:", error)
                         return [{ todayProduced: 0, todayConsumed: 0 }]
                     }
                 })(),
