@@ -146,9 +146,9 @@ async function RootLayoutContent({
           }}
         />
       </head>
-      <body className={cn("min-h-screen bg-background font-sans antialiased has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:overflow-hidden")}>
+      <body className={cn("min-h-screen bg-background font-sans antialiased has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:min-h-0 has-[[data-admin-root]]:overflow-hidden")}>
         <Providers themeColor={themeColor} initialLocale={initialLocale} currencyUnit={currencyUnit}>
-          <div className="relative flex min-h-screen flex-col has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:overflow-hidden">
+          <div className="relative flex min-h-screen flex-col has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:min-h-0 has-[[data-admin-root]]:overflow-hidden">
             <SiteHeader />
             <div className="flex-1 pb-16 md:pb-0 has-[[data-admin-root]]:flex has-[[data-admin-root]]:min-h-0 has-[[data-admin-root]]:flex-col has-[[data-admin-root]]:overflow-hidden has-[[data-admin-root]]:pb-0">{children}</div>
             <SiteFooter />
@@ -163,8 +163,8 @@ async function RootLayoutContent({
 function RootLayoutFallback() {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={cn("min-h-screen bg-background font-sans antialiased has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:overflow-hidden")}>
-        <div className="relative flex min-h-screen flex-col has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:overflow-hidden">
+      <body className={cn("min-h-screen bg-background font-sans antialiased has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:min-h-0 has-[[data-admin-root]]:overflow-hidden")}>
+        <div className="relative flex min-h-screen flex-col has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:min-h-0 has-[[data-admin-root]]:overflow-hidden">
           <div className="h-16 border-b border-border/40 bg-background/70" />
           <div className="flex-1" />
           <div className="h-16 border-t border-border/40 bg-background/70" />

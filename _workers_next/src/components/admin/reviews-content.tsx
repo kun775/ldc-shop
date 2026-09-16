@@ -141,7 +141,7 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
         </div>
       }
       footer={
-        totalPages > 1 ? (
+        filtered.length > 0 ? (
           <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
             <div>
               {page} / {totalPages} 页 · 共 {filtered.length} 条

@@ -48,7 +48,7 @@ export function AdminListPage({
                     {toolbar}
                 </div>
             ) : null}
-            <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 {children}
             </div>
             {footer ? (
@@ -69,7 +69,7 @@ export function AdminListScroll({
 }) {
     return (
         <div className={cn(
-            "h-full min-h-0 overflow-auto overscroll-contain rounded-2xl border border-border/60 bg-card shadow-2xs [&>[data-slot=table-container]]:overflow-visible",
+            "min-h-0 flex-1 overflow-auto overscroll-contain rounded-2xl border border-border/60 bg-card shadow-2xs [&>[data-slot=table-container]]:overflow-visible",
             className
         )}>
             {children}

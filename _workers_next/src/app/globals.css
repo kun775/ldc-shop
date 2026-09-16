@@ -455,10 +455,32 @@
   text-overflow: ellipsis;
 }
 
+/* ======================================
+   后台固定工作台视口锁定
+   后台页面锁定 100dvh，顶栏/底栏固定在视口上下，
+   内容区由 AdminPageShell / AdminListScroll 独立滚动，
+   避免「页面与列表」双滚动条；前台商城保持自然滚动。
+   ====================================== */
 html:has([data-admin-root]),
 body:has([data-admin-root]) {
   height: 100dvh;
+  min-height: 0;
   overflow: hidden;
+}
+
+/* 降级保护：浏览器不支持 :has() 时，后台退回文档自然滚动，
+   避免因视口锁定失效导致内容被裁切且完全无法滚动。 */
+@supports not (selector(:has(*))) {
+  html,
+  body {
+    height: auto;
+    overflow: visible;
+  }
+
+  [data-admin-root],
+  [data-admin-root] main {
+    overflow: visible;
+  }
 }
 
 .floating-field .peer:placeholder-shown ~ .floating-label {

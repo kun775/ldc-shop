@@ -123,7 +123,7 @@ export function UsersContent({ data }: UsersContentProps) {
                 </form>
             }
             footer={
-                totalPages > 1 ? (
+                data.total > 0 ? (
                     <div className="flex justify-end gap-2">
                         <Button
                             variant="outline"

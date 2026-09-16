@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useI18n } from "@/lib/i18n/context"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Eye, EyeOff, ArrowUp, ArrowDown, Search } from "lucide-react"
+import { Plus, Eye, EyeOff, ArrowUp, ArrowDown, Search, ChevronLeft, ChevronRight } from "lucide-react"
 import { deleteProduct, toggleProductStatus, reorderProduct } from "@/actions/admin"
 import { INFINITE_STOCK } from "@/lib/constants"
 import { toast } from "sonner"
@@ -43,9 +43,11 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
     const router = useRouter()
     const [busy, setBusy] = useState(false)
     const [search, setSearch] = useState("")
+    const [page, setPage] = useState(1)
     const busyRef = useRef(false)
 
     const threshold = lowStockThreshold || 5
+    const pageSize = 20
 
     const filteredProducts = useMemo(() => {
         const q = search.trim().toLowerCase()
@@ -57,6 +59,20 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
             return nameMatch || catMatch || variantMatch
         })
     }, [products, search])
+
+    // 搜索条件变化时回到第一页
+    useEffect(() => {
+        setPage(1)
+    }, [search])
+
+    const totalPages = Math.max(1, Math.ceil(filteredProducts.length / pageSize))
+    const safePage = Math.min(page, totalPages)
+    const pagedProducts = useMemo(
+        () => filteredProducts.slice((safePage - 1) * pageSize, safePage * pageSize),
+        [filteredProducts, safePage]
+    )
+    const showingFrom = filteredProducts.length === 0 ? 0 : (safePage - 1) * pageSize + 1
+    const showingTo = Math.min(safePage * pageSize, filteredProducts.length)
 
     const handleDelete = async (id: string) => {
         if (busyRef.current) return
@@ -141,15 +157,56 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                 </div>
             }
             toolbar={
-                <div className="relative max-w-sm">
-                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                        placeholder="搜索商品名称、分类或规格..."
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className="pl-9 h-9 text-xs"
-                    />
+                <div className="flex items-center justify-between gap-4">
+                    <div className="relative w-full max-w-sm">
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                            placeholder="搜索商品名称、分类或规格..."
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            className="pl-9 h-9 text-xs"
+                        />
+                    </div>
+                    <div className="text-xs text-muted-foreground whitespace-nowrap">
+                        共 {filteredProducts.length} 个商品
+                    </div>
                 </div>
+            }
+            footer={
+                filteredProducts.length > 0 ? (
+                    <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
+                        <div>
+                            显示 {showingFrom}-{showingTo} / 共 {filteredProducts.length} 条
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 text-xs gap-1 border-border/80"
+                                disabled={safePage <= 1}
+                                onClick={() => setPage(Math.max(1, safePage - 1))}
+                            >
+                                <ChevronLeft className="h-3.5 w-3.5" />
+                                <span>上一页</span>
+                            </Button>
+                            <span className="text-xs font-mono px-2.5 py-1 rounded-md bg-muted/40 border border-border/50">
+                                {safePage} / {totalPages}
+                            </span>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 text-xs gap-1 border-border/80"
+                                disabled={safePage >= totalPages}
+                                onClick={() => setPage(Math.min(totalPages, safePage + 1))}
+                            >
+                                <span>下一页</span>
+                                <ChevronRight className="h-3.5 w-3.5" />
+                            </Button>
+                        </div>
+                    </div>
+                ) : null
             }
         >
             <AdminListScroll>
@@ -174,7 +231,7 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            filteredProducts.map((product, idx) => (
+                            pagedProducts.map((product, idx) => (
                             <TableRow key={product.id} className={!product.isActive ? 'opacity-50' : ''}>
                                 <TableCell>
                                     <div className="flex flex-col gap-1">
@@ -183,7 +240,7 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                                         size="icon"
                                         className="h-6 w-6"
                                         onClick={() => handleReorder(product.id, 'up')}
-                                        disabled={busy || idx === 0}
+                                        disabled={busy || ((safePage - 1) * pageSize + idx) === 0}
                                     >
                                         <ArrowUp className="h-3 w-3" />
                                     </Button>
