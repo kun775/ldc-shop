@@ -38,23 +38,25 @@ async function AdminLayoutContent({ children }: { children: React.ReactNode }) {
     const shouldPrompt = registryEnabled && registryPrompted !== "true" && registryOptIn !== "true"
 
     return (
-        <div className="min-h-screen bg-background md:h-screen">
+        <div data-admin-root="true" className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
             <UpdateNotification currentVersion={APP_VERSION} />
             <RegistryPrompt shouldPrompt={shouldPrompt} registryEnabled={registryEnabled} />
-            <AdminSidebar username={user.username} />
-            <main className="px-4 py-6 md:ml-64 md:h-screen md:overflow-y-auto md:px-8 md:py-10">
-                {children}
-            </main>
+            <div className="flex min-h-0 flex-1">
+                <AdminSidebar username={user.username} />
+                <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-4 py-4 md:ml-64 md:px-6 md:py-5">
+                    {children}
+                </main>
+            </div>
         </div>
     )
 }
 
 function AdminLayoutFallback() {
     return (
-        <div className="min-h-screen bg-background md:h-screen">
-            <div className="h-16 border-b border-border/40 bg-background/70 md:hidden" />
-            <div className="hidden md:fixed md:inset-y-0 md:left-0 md:block md:w-64 md:border-r md:border-border/40 md:bg-muted/10" />
-            <main className="p-6 md:ml-64 md:h-screen md:overflow-y-auto md:px-8 md:py-10">
+        <div data-admin-root="true" className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+            <div className="h-14 shrink-0 border-b border-border/40 bg-background/70 md:hidden" />
+            <div className="hidden md:fixed md:top-16 md:bottom-16 md:left-0 md:block md:w-64 md:border-r md:border-border/40 md:bg-muted/10" />
+            <main className="flex min-h-0 flex-1 flex-col overflow-hidden p-4 md:ml-64 md:px-6 md:py-5">
                 <div className="space-y-4">
                     <div className="h-8 w-40 rounded-md bg-muted/60 animate-pulse" />
                     <div className="h-24 w-full rounded-xl bg-muted/40 animate-pulse" />

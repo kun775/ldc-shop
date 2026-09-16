@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useI18n } from "@/lib/i18n/context"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
@@ -11,6 +11,8 @@ import { deleteReview, deleteReviewReply } from "@/actions/admin"
 import { toast } from "sonner"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
+import { ChevronLeft, ChevronRight } from "lucide-react"
 
 interface ReviewRow {
   id: number
@@ -37,8 +39,14 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
   const { confirm } = useConfirm()
   const [items, setItems] = useState(reviews)
   const [query, setQuery] = useState("")
+  const [page, setPage] = useState(1)
+  const pageSize = 20
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const deletingRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    setPage(1)
+  }, [query])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -58,6 +66,9 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
       return hay.includes(q)
     })
   }, [items, query])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const pagedItems = filtered.slice((page - 1) * pageSize, page * pageSize)
 
   const handleDelete = async (id: number) => {
     if (deletingRef.current === id) return
@@ -114,31 +125,79 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">{t('admin.reviews.title')}</h1>
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t('admin.reviews.searchPlaceholder')}
-          className="md:w-[340px]"
-        />
-      </div>
-
-      <div className="rounded-md border bg-card">
+    <AdminListPage
+      header={<h1 className="text-2xl font-bold tracking-tight">{t('admin.reviews.title')}</h1>}
+      toolbar={
+        <div className="flex items-center justify-between gap-4">
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('admin.reviews.searchPlaceholder')}
+            className="h-9 text-xs md:max-w-sm"
+          />
+          <div className="text-xs text-muted-foreground whitespace-nowrap">
+            共 {filtered.length} 条评价
+          </div>
+        </div>
+      }
+      footer={
+        totalPages > 1 ? (
+          <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
+            <div>
+              {page} / {totalPages} 页 · 共 {filtered.length} 条
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs gap-1 border-border/80"
+                disabled={page <= 1}
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                <span>上一页</span>
+              </Button>
+              <span className="text-xs font-mono px-2.5 py-1 rounded-md bg-muted/40 border border-border/50">
+                {page} / {totalPages}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs gap-1 border-border/80"
+                disabled={page >= totalPages}
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              >
+                <span>下一页</span>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        ) : null
+      }
+    >
+      <AdminListScroll>
         <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t('admin.reviews.product')}</TableHead>
-              <TableHead>{t('admin.reviews.user')}</TableHead>
-              <TableHead>{t('admin.reviews.rating')}</TableHead>
-              <TableHead>{t('admin.reviews.comment')}</TableHead>
-              <TableHead>{t('admin.reviews.date')}</TableHead>
-              <TableHead className="text-right">{t('admin.reviews.actions')}</TableHead>
+          <TableHeader className="bg-muted/40">
+            <TableRow className="border-b border-border/60 hover:bg-transparent">
+              <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.reviews.product')}</TableHead>
+              <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.reviews.user')}</TableHead>
+              <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.reviews.rating')}</TableHead>
+              <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.reviews.comment')}</TableHead>
+              <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.reviews.date')}</TableHead>
+              <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur text-right">{t('admin.reviews.actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.map((r) => (
+            {pagedItems.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                  未找到相关评价
+                </TableCell>
+              </TableRow>
+            ) : (
+              pagedItems.map((r) => (
               <TableRow key={r.id}>
                 <TableCell className="max-w-[260px]">
                   <div className="font-medium">{r.productName}</div>
@@ -205,10 +264,10 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
                   </Button>
                 </TableCell>
               </TableRow>
-            ))}
+            )))}
           </TableBody>
         </Table>
-      </div>
-    </div>
+      </AdminListScroll>
+    </AdminListPage>
   )
 }

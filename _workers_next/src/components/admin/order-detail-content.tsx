@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label"
 import { CopyButton } from "@/components/copy-button"
 import { ClientDate } from "@/components/client-date"
 import { RefundButton } from "@/components/admin/refund-button"
+import { AdminPageShell } from "@/components/admin/admin-page-shell"
 import { toast } from "sonner"
 import { markOrderDelivered, markOrderPaid, cancelOrder, updateOrderEmail, deleteOrder } from "@/actions/admin-orders"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
@@ -171,7 +172,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <AdminPageShell className="space-y-6 p-0.5">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t('admin.orders.detailTitle')}</h1>
@@ -479,6 +480,6 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
           </div>
         </CardContent>
       </Card>
-    </div>
+    </AdminPageShell>
   )
 }

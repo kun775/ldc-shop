@@ -1,4 +1,4 @@
-import { getDashboardStats, getSetting, getAllSettings, getVisitorCount } from "@/lib/db/queries"
+import { getAllSettings } from "@/lib/db/queries"
 import { isRegistryEnabled } from "@/lib/registry"
 import { AdminSettingsContent } from "@/components/admin/settings-content"
 import { unstable_noStore } from "next/cache"
@@ -11,12 +11,7 @@ export default async function AdminSettingsPage() {
     const cookieStore = await cookies()
     void cookieStore.get('ldc_pending_order')
     unstable_noStore()
-    const nowMs = Date.now()
-    const [stats, settingsMap, visitorCount] = await Promise.all([
-        getDashboardStats(nowMs),
-        getAllSettings(),
-        getVisitorCount().catch(() => 0)
-    ])
+    const settingsMap = await getAllSettings()
 
     const shopName = settingsMap['shop_name'] || null
     const shopDescription = settingsMap['shop_description'] || null
@@ -37,7 +32,6 @@ export default async function AdminSettingsPage() {
 
     return (
         <AdminSettingsContent
-            stats={stats}
             shopName={shopName}
             shopDescription={shopDescription}
             shopLogo={shopLogo}
@@ -45,7 +39,6 @@ export default async function AdminSettingsPage() {
             currencyUnit={currencyUnit}
             themeColor={themeColor}
             themeFont={themeFont}
-            visitorCount={visitorCount}
             lowStockThreshold={lowStockThreshold}
             checkinReward={checkinReward}
             checkinEnabled={checkinEnabled}

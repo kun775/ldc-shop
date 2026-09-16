@@ -4,6 +4,7 @@ import { useMemo } from "react"
 import { useI18n } from "@/lib/i18n/context"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { CopyButton } from "@/components/copy-button"
+import { AdminPageShell } from "@/components/admin/admin-page-shell"
 
 export function AdminPaymentCodeContent({ payLink, payee }: { payLink: string; payee?: string | null }) {
     const { t } = useI18n()
@@ -23,7 +24,7 @@ export function AdminPaymentCodeContent({ payLink, payee }: { payLink: string; p
     }, [payLink])
 
     return (
-        <div className="max-w-2xl space-y-6">
+        <AdminPageShell className="max-w-2xl space-y-6 p-0.5">
             <Card className="tech-card">
                 <CardHeader className="space-y-2">
                     <CardTitle className="text-2xl">{t('payment.adminTitle')}</CardTitle>
@@ -65,6 +66,6 @@ export function AdminPaymentCodeContent({ payLink, payee }: { payLink: string; p
                     </div>
                 </CardContent>
             </Card>
-        </div>
+        </AdminPageShell>
     )
 }

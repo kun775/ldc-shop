@@ -455,6 +455,12 @@
   text-overflow: ellipsis;
 }
 
+html:has([data-admin-root]),
+body:has([data-admin-root]) {
+  height: 100dvh;
+  overflow: hidden;
+}
+
 .floating-field .peer:placeholder-shown ~ .floating-label {
   top: 0.75rem;
   font-size: 0.875rem;

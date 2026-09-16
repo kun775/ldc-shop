@@ -1,14 +1,15 @@
 import { AnnouncementForm } from "@/components/admin/announcement-form"
 import { getAnnouncementConfig } from "@/actions/settings"
 import { Suspense } from "react"
+import { AdminPageShell } from "@/components/admin/admin-page-shell"
 
 async function AnnouncementContent() {
     const announcement = await getAnnouncementConfig()
 
     return (
-        <div className="space-y-6">
+        <AdminPageShell className="space-y-6 p-0.5">
             <AnnouncementForm initialConfig={announcement} />
-        </div>
+        </AdminPageShell>
     )
 }
 

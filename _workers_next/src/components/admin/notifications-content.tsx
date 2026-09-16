@@ -10,6 +10,7 @@ import { toast } from "sonner"
 import type { FormEvent } from "react"
 import { saveNotificationSettings, testBarkNotification, testEmailNotification, testNotification } from "@/actions/admin"
 import { Bell, CreditCard, RotateCcw, MessageSquare, ExternalLink, Mail, Smartphone } from "lucide-react"
+import { AdminPageShell } from "@/components/admin/admin-page-shell"
 
 interface NotificationsContentProps {
     settings: {
@@ -134,7 +135,7 @@ export function NotificationsContent({ settings }: NotificationsContentProps) {
     }
 
     return (
-        <div className="space-y-6">
+        <AdminPageShell className="space-y-6 p-0.5">
             <h2 className="text-3xl font-bold tracking-tight">{t('admin.settings.notifications.title')}</h2>
 
             {/* 功能介绍卡片 */}
@@ -578,6 +579,6 @@ export function NotificationsContent({ settings }: NotificationsContentProps) {
                     </div>
                 </CardContent>
             </Card>
-        </div>
+        </AdminPageShell>
     )
 }

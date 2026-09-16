@@ -60,7 +60,7 @@ export function FooterContent({ customFooter, version, visitorCount }: FooterCon
     }
 
     return (
-        <footer className="border-t border-border/40 py-6 pb-20 md:py-0 md:pb-0 bg-gradient-to-t from-muted/30 to-transparent">
+        <footer className="shrink-0 border-t border-border/40 bg-background/90 py-3 pb-20 backdrop-blur md:py-0 md:pb-0">
             <div className="container flex flex-col items-center justify-between gap-4 md:h-16 md:flex-row">
                 <div className="flex flex-col items-center gap-4 px-4 md:flex-row md:gap-2 md:px-0">
                     <p

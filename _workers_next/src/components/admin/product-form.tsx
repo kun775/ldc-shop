@@ -9,6 +9,7 @@ import { ProductSettingsSidebar } from "@/components/admin/product-settings-side
 import { prepareUploadedImage } from "@/lib/client-image"
 import { Loader2, Save, ExternalLink, ArrowLeft, Zap, PackageOpen } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { AdminPageShell } from "@/components/admin/admin-page-shell"
 import Link from "next/link"
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -269,9 +270,9 @@ export default function ProductForm({ product, categories = [] }: { product?: an
     const isManual = currentProduct?.fulfillmentMode === 'manual'
 
     return (
-        <div className="mx-auto max-w-7xl space-y-5">
+        <AdminPageShell className="mx-auto max-w-7xl space-y-5 p-0.5">
             {/* Linear Style Sticky Action Bar */}
-            <div className="sticky top-2 z-30 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-background/85 px-4 py-2.5 shadow-xs backdrop-blur-md">
+            <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-background/90 px-4 py-2.5 shadow-xs backdrop-blur-md">
                 <div className="flex items-center gap-2.5 min-w-0">
                     <Button
                         type="button"
@@ -428,6 +429,6 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                     </fieldset>
                 </form>
             </div>
-        </div>
+        </AdminPageShell>
     )
 }

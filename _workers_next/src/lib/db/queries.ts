@@ -1,5 +1,5 @@
 import { db } from "./index";
-import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger } from "./schema";
+import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger, refundRequests, userMessages } from "./schema";
 import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/lib/constants";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema } from "@/lib/points/ledger-db";
 import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once";
@@ -1420,6 +1420,236 @@ export async function getRecentOrders(limit: number = 10) {
             limit
         })
     })
+}
+
+function toSafeNumber(value: unknown) {
+    const parsed = Number(value ?? 0)
+    return Number.isFinite(parsed) ? parsed : 0
+}
+
+function startOfLocalDay(nowMs: number, daysAgo = 0) {
+    const now = new Date(nowMs)
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    start.setDate(start.getDate() - daysAgo)
+    return start.getTime()
+}
+
+function formatLocalDate(ms: number) {
+    const date = new Date(ms)
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+}
+
+export async function getAdminOverview(nowMs: number, lowStockThreshold = 5) {
+    const todayStartMs = startOfLocalDay(nowMs)
+    const yesterdayStartMs = startOfLocalDay(nowMs, 1)
+    const trendStartMs = startOfLocalDay(nowMs, 6)
+    const threshold = Number.isFinite(lowStockThreshold) && lowStockThreshold > 0 ? lowStockThreshold : 5
+
+    const emptyTrend = Array.from({ length: 7 }, (_, index) => {
+        const dayStart = startOfLocalDay(nowMs, 6 - index)
+        return {
+            date: formatLocalDate(dayStart),
+            orders: 0,
+            revenue: 0,
+            refunds: 0,
+        }
+    })
+
+    const emptyOverview = {
+        kpis: {
+            todayRevenue: 0,
+            yesterdayRevenue: 0,
+            todayOrders: 0,
+            yesterdayOrders: 0,
+            monthRevenue: 0,
+            totalRevenue: 0,
+            todayRefunds: 0,
+            monthRefunds: 0,
+            todayPointsConsumed: 0,
+            todayPointsProduced: 0,
+            visitorCount: 0,
+        },
+        ops: {
+            pendingOrders: 0,
+            awaitingDelivery: 0,
+            pendingRefunds: 0,
+            unreadMessages: 0,
+            lowStockProducts: 0,
+            activeProducts: 0,
+        },
+        trend: emptyTrend,
+        topProducts: [] as Array<{ productId: string; productName: string; orders: number; revenue: number }>,
+        recentOrders: [] as Array<{
+            orderId: string
+            productName: string
+            username: string | null
+            amount: string
+            pointsUsed: number
+            status: string | null
+            createdAt: Date | null
+            paidAt: Date | null
+        }>,
+        lowStockItems: [] as Array<{ id: string; name: string; stock: number }>,
+    }
+
+    try {
+        return await withOrderColumnFallback(async () => {
+            const monthStartMs = new Date(new Date(nowMs).getFullYear(), new Date(nowMs).getMonth(), 1).getTime()
+
+            const [financeRows, refundRows, messageRows, visitorRows, trendRows, topProductRows, recentOrderRows, productRows, pointRows] = await Promise.all([
+                db.select({
+                    todayRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') AND ${normalizeTimestampMs(orders.paidAt)} >= ${todayStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    yesterdayRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') AND ${normalizeTimestampMs(orders.paidAt)} >= ${yesterdayStartMs} AND ${normalizeTimestampMs(orders.paidAt)} < ${todayStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    todayOrders: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') AND ${normalizeTimestampMs(orders.paidAt)} >= ${todayStartMs} THEN 1 ELSE 0 END), 0)`,
+                    yesterdayOrders: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') AND ${normalizeTimestampMs(orders.paidAt)} >= ${yesterdayStartMs} AND ${normalizeTimestampMs(orders.paidAt)} < ${todayStartMs} THEN 1 ELSE 0 END), 0)`,
+                    monthRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') AND ${normalizeTimestampMs(orders.paidAt)} >= ${monthStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    totalRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    todayRefunds: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} = 'refunded' AND COALESCE(${normalizeTimestampMs(orders.deliveredAt)}, ${normalizeTimestampMs(orders.paidAt)}, ${normalizeTimestampMs(orders.createdAt)}) >= ${todayStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    monthRefunds: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} = 'refunded' AND COALESCE(${normalizeTimestampMs(orders.deliveredAt)}, ${normalizeTimestampMs(orders.paidAt)}, ${normalizeTimestampMs(orders.createdAt)}) >= ${monthStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    pendingOrders: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} = 'pending' THEN 1 ELSE 0 END), 0)`,
+                    awaitingDelivery: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} = 'paid' AND COALESCE(${orders.fulfillmentMode}, 'auto') = 'manual' THEN 1 ELSE 0 END), 0)`,
+                }).from(orders),
+                db.select({
+                    pendingRefunds: sql<number>`COALESCE(SUM(CASE WHEN ${refundRequests.status} = 'pending' THEN 1 ELSE 0 END), 0)`,
+                }).from(refundRequests).catch(() => [{ pendingRefunds: 0 }]),
+                db.select({
+                    unreadMessages: sql<number>`COALESCE(SUM(CASE WHEN ${userMessages.isRead} = 0 THEN 1 ELSE 0 END), 0)`,
+                }).from(userMessages).catch(() => [{ unreadMessages: 0 }]),
+                db.select({ count: sql<number>`count(*)` }).from(loginUsers).catch(() => [{ count: 0 }]),
+                db.select({
+                    dayKey: sql<string>`strftime('%Y-%m-%d', COALESCE(${normalizeTimestampMs(orders.paidAt)}, ${normalizeTimestampMs(orders.createdAt)}) / 1000, 'unixepoch', 'localtime')`,
+                    ordersCount: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') THEN 1 ELSE 0 END), 0)`,
+                    revenue: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    refunds: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} = 'refunded' THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                }).from(orders).where(and(
+                    sql`${orders.status} IN ('paid', 'delivered', 'refunded')`,
+                    sql`COALESCE(${normalizeTimestampMs(orders.paidAt)}, ${normalizeTimestampMs(orders.createdAt)}) >= ${trendStartMs}`
+                )).groupBy(sql`strftime('%Y-%m-%d', COALESCE(${normalizeTimestampMs(orders.paidAt)}, ${normalizeTimestampMs(orders.createdAt)}) / 1000, 'unixepoch', 'localtime')`).catch(() => []),
+                db.select({
+                    productId: orders.productId,
+                    productName: orders.productName,
+                    ordersCount: sql<number>`count(*)`,
+                    revenue: sql<number>`COALESCE(sum(CAST(${orders.amount} AS REAL)), 0)`,
+                }).from(orders).where(and(
+                    sql`${orders.status} IN ('paid', 'delivered')`,
+                    sql`${normalizeTimestampMs(orders.paidAt)} >= ${monthStartMs}`
+                )).groupBy(orders.productId, orders.productName).orderBy(desc(sql<number>`COALESCE(sum(CAST(${orders.amount} AS REAL)), 0)`)).limit(5),
+                db.select({
+                    orderId: orders.orderId,
+                    productName: orders.productName,
+                    username: orders.username,
+                    amount: orders.amount,
+                    pointsUsed: orders.pointsUsed,
+                    status: orders.status,
+                    createdAt: orders.createdAt,
+                    paidAt: orders.paidAt,
+                }).from(orders).orderBy(desc(normalizeTimestampMs(orders.createdAt))).limit(8),
+                db.select({
+                    id: products.id,
+                    name: products.name,
+                    stock: sql<number>`COALESCE(${products.stockCount}, 0)`,
+                    isActive: products.isActive,
+                    fulfillmentMode: products.fulfillmentMode,
+                    isShared: products.isShared,
+                }).from(products),
+                (async () => {
+                    try {
+                        await ensureUserPointLedgerSchema()
+                        const rows = await db.select({
+                            todayProduced: sql<number>`COALESCE(SUM(CASE WHEN ${userPointLedger.status} = 'completed' AND ${userPointLedger.eventType} = 'checkin_reward' AND ${normalizeTimestampMs(userPointLedger.createdAt)} >= ${todayStartMs} THEN ${userPointLedger.delta} ELSE 0 END), 0)`,
+                            todayConsumed: sql<number>`ABS(COALESCE(SUM(CASE WHEN ${userPointLedger.status} = 'completed' AND ${userPointLedger.eventType} = 'order_deduction' AND ${normalizeTimestampMs(userPointLedger.createdAt)} >= ${todayStartMs} THEN ${userPointLedger.delta} ELSE 0 END), 0))`,
+                        }).from(userPointLedger)
+                        return rows
+                    } catch (error: any) {
+                        if (!isMissingTableOrColumn(error)) throw error
+                        return [{ todayProduced: 0, todayConsumed: 0 }]
+                    }
+                })(),
+            ])
+
+            const finance = financeRows[0] || {}
+            const refundCount = toSafeNumber((refundRows as any)?.[0]?.pendingRefunds)
+            const unreadMessages = toSafeNumber((messageRows as any)?.[0]?.unreadMessages)
+            const visitorCount = toSafeNumber((visitorRows as any)?.[0]?.count)
+            const points = pointRows[0] || { todayProduced: 0, todayConsumed: 0 }
+
+            const trendMap = new Map<string, { orders: number; revenue: number; refunds: number }>()
+            for (const row of trendRows as Array<{ dayKey?: string; ordersCount?: number; revenue?: number; refunds?: number }>) {
+                const key = String(row.dayKey || '')
+                if (!key) continue
+                trendMap.set(key, {
+                    orders: toSafeNumber(row.ordersCount),
+                    revenue: toSafeNumber(row.revenue),
+                    refunds: toSafeNumber(row.refunds),
+                })
+            }
+
+            const trend = emptyTrend.map((item) => {
+                const hit = trendMap.get(item.date)
+                return hit ? { ...item, ...hit } : item
+            })
+
+            const activeProducts = productRows.filter((row) => row.isActive !== false).length
+            const lowStockItems = productRows
+                .filter((row) => {
+                    if (row.isActive === false) return false
+                    if (row.fulfillmentMode === 'manual' || row.isShared) return false
+                    const stock = toSafeNumber(row.stock)
+                    return stock < INFINITE_STOCK && stock <= threshold
+                })
+                .sort((a, b) => toSafeNumber(a.stock) - toSafeNumber(b.stock))
+                .slice(0, 6)
+                .map((row) => ({ id: row.id, name: row.name, stock: toSafeNumber(row.stock) }))
+
+            return {
+                kpis: {
+                    todayRevenue: toSafeNumber(finance.todayRevenue),
+                    yesterdayRevenue: toSafeNumber(finance.yesterdayRevenue),
+                    todayOrders: toSafeNumber(finance.todayOrders),
+                    yesterdayOrders: toSafeNumber(finance.yesterdayOrders),
+                    monthRevenue: toSafeNumber(finance.monthRevenue),
+                    totalRevenue: toSafeNumber(finance.totalRevenue),
+                    todayRefunds: toSafeNumber(finance.todayRefunds),
+                    monthRefunds: toSafeNumber(finance.monthRefunds),
+                    todayPointsConsumed: toSafeNumber(points.todayConsumed),
+                    todayPointsProduced: toSafeNumber(points.todayProduced),
+                    visitorCount,
+                },
+                ops: {
+                    pendingOrders: toSafeNumber(finance.pendingOrders),
+                    awaitingDelivery: toSafeNumber(finance.awaitingDelivery),
+                    pendingRefunds: refundCount,
+                    unreadMessages,
+                    lowStockProducts: lowStockItems.length,
+                    activeProducts,
+                },
+                trend,
+                topProducts: (topProductRows || []).map((row) => ({
+                    productId: row.productId,
+                    productName: row.productName,
+                    orders: toSafeNumber(row.ordersCount),
+                    revenue: toSafeNumber(row.revenue),
+                })),
+                recentOrders: (recentOrderRows || []).map((row) => ({
+                    orderId: row.orderId,
+                    productName: row.productName,
+                    username: row.username,
+                    amount: row.amount,
+                    pointsUsed: toSafeNumber(row.pointsUsed),
+                    status: row.status,
+                    createdAt: row.createdAt,
+                    paidAt: row.paidAt,
+                })),
+                lowStockItems,
+            }
+        })
+    } catch (error: any) {
+        if (isMissingTableOrColumn(error)) return emptyOverview
+        throw error
+    }
 }
 
 // Settings

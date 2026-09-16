@@ -6,7 +6,7 @@ import { useEffect, useState } from "react"
 import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger, SheetClose } from "@/components/ui/sheet"
-import { Package, CreditCard, Megaphone, Star, Download, Tags, RotateCcw, Users, Settings, QrCode, Bell, Menu, MessageSquare } from "lucide-react"
+import { Package, CreditCard, Megaphone, Star, Download, Tags, RotateCcw, Users, Settings, QrCode, Bell, Menu, MessageSquare, LayoutDashboard } from "lucide-react"
 import { useI18n } from "@/lib/i18n/context"
 import { getPendingRefundRequestCount } from "@/actions/refund-requests"
 import { getUnreadUserMessageCount } from "@/actions/user-messages"
@@ -22,7 +22,9 @@ interface NavLinkProps {
 
 function NavLink({ href, icon, label, badge, closeOnNavigate }: NavLinkProps) {
     const pathname = usePathname()
-    const isActive = pathname === href || (href !== '/admin/settings' && pathname.startsWith(href))
+    const isActive = href === '/admin'
+        ? pathname === '/admin'
+        : pathname === href || pathname.startsWith(`${href}/`)
 
     const content = (
         <span className="flex w-full items-center justify-between">
@@ -146,6 +148,7 @@ function SidebarContent({ closeOnNavigate = false, showTitle = true, username, t
                     <div className="px-2 pb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground/60">
                         店铺运营
                     </div>
+                    <NavLink href="/admin" icon={<LayoutDashboard className="h-4 w-4" />} label={t('admin.overview.nav')} closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/settings" icon={<Settings className="h-4 w-4" />} label={t('common.storeSettings')} closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/products" icon={<Package className="h-4 w-4" />} label={t('common.productManagement')} closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/orders" icon={<CreditCard className="h-4 w-4" />} label={t('common.ordersRefunds')} closeOnNavigate={closeOnNavigate} />
@@ -202,7 +205,7 @@ export function AdminSidebar({ username }: { username: string }) {
             </div>
 
             {/* Desktop sidebar */}
-            <aside className="hidden border-r bg-muted/40 md:fixed md:inset-y-0 md:left-0 md:z-30 md:flex md:w-64 md:flex-col">
+            <aside className="hidden border-r bg-muted/30 md:fixed md:top-16 md:bottom-16 md:left-0 md:z-20 md:flex md:w-64 md:flex-col">
                 <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
                     <SidebarContent username={username} t={t} />
                 </div>

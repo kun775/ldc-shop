@@ -1,18 +1,20 @@
 'use client'
 
-import { useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { useI18n } from "@/lib/i18n/context"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Eye, EyeOff, ArrowUp, ArrowDown } from "lucide-react"
+import { Plus, Eye, EyeOff, ArrowUp, ArrowDown, Search } from "lucide-react"
 import { deleteProduct, toggleProductStatus, reorderProduct } from "@/actions/admin"
 import { INFINITE_STOCK } from "@/lib/constants"
 import { toast } from "sonner"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
 
 interface Product {
     id: string
@@ -40,9 +42,21 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
     const { confirm } = useConfirm()
     const router = useRouter()
     const [busy, setBusy] = useState(false)
+    const [search, setSearch] = useState("")
     const busyRef = useRef(false)
 
     const threshold = lowStockThreshold || 5
+
+    const filteredProducts = useMemo(() => {
+        const q = search.trim().toLowerCase()
+        if (!q) return products
+        return products.filter((p) => {
+            const nameMatch = p.name.toLowerCase().includes(q)
+            const catMatch = (p.category || '').toLowerCase().includes(q)
+            const variantMatch = [p.variantGroupId, p.variantLabel].filter(Boolean).join(" ").toLowerCase().includes(q)
+            return nameMatch || catMatch || variantMatch
+        })
+    }, [products, search])
 
     const handleDelete = async (id: string) => {
         if (busyRef.current) return
@@ -114,34 +128,53 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
     }
 
     return (
-        <div className="space-y-6">
-            {/* Products Table */}
-            <div className="flex items-center justify-between">
-                <h1 className="text-3xl font-bold tracking-tight">{t('common.productManagement')}</h1>
-                <Button asChild>
-                    <Link href="/admin/product/new">
-                        <Plus className="h-4 w-4 mr-2" />
-                        {t('admin.products.addNew')}
-                    </Link>
-                </Button>
-            </div>
-
-            <Card className="rounded-md border bg-card">
+        <AdminListPage
+            header={
+                <div className="flex items-center justify-between">
+                    <h1 className="text-2xl font-bold tracking-tight">{t('common.productManagement')}</h1>
+                    <Button asChild size="sm" className="rounded-xl">
+                        <Link href="/admin/product/new">
+                            <Plus className="h-4 w-4 mr-2" />
+                            {t('admin.products.addNew')}
+                        </Link>
+                    </Button>
+                </div>
+            }
+            toolbar={
+                <div className="relative max-w-sm">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                        placeholder="搜索商品名称、分类或规格..."
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        className="pl-9 h-9 text-xs"
+                    />
+                </div>
+            }
+        >
+            <AdminListScroll>
                 <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead className="w-[50px]">{t('admin.products.order')}</TableHead>
-                            <TableHead>{t('admin.products.name')}</TableHead>
-                            <TableHead>{t('admin.products.price')}</TableHead>
-                            <TableHead>{t('admin.products.category')}</TableHead>
-                            <TableHead>{t('admin.products.hot')}</TableHead>
-                            <TableHead>{t('admin.products.stock')}</TableHead>
-                            <TableHead>{t('admin.products.status')}</TableHead>
-                            <TableHead className="text-right">{t('admin.products.actions')}</TableHead>
+                    <TableHeader className="bg-muted/40">
+                        <TableRow className="border-b border-border/60 hover:bg-transparent">
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[50px]">{t('admin.products.order')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.name')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.price')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.category')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.hot')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.stock')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.status')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur text-right">{t('admin.products.actions')}</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {products.map((product, idx) => (
+                        {filteredProducts.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                                    未找到符合条件的商品
+                                </TableCell>
+                            </TableRow>
+                        ) : (
+                            filteredProducts.map((product, idx) => (
                             <TableRow key={product.id} className={!product.isActive ? 'opacity-50' : ''}>
                                 <TableCell>
                                     <div className="flex flex-col gap-1">
@@ -238,10 +271,10 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                                     </Button>
                                 </TableCell>
                             </TableRow>
-                        ))}
+                        )))}
                     </TableBody>
                 </Table>
-            </Card>
-        </div>
+            </AdminListScroll>
+        </AdminListPage>
     )
 }

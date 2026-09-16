@@ -13,6 +13,7 @@ import { clearAdminMessages, deleteAdminMessage, sendAdminMessage } from "@/acti
 import { clearUserMessages, deleteUserMessage, markUserMessageRead } from "@/actions/user-messages"
 import { useRouter } from "next/navigation"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { AdminPageShell } from "@/components/admin/admin-page-shell"
 
 type TargetType = "all" | "username" | "userId"
 
@@ -77,7 +78,7 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
     }
 
     return (
-        <div className="space-y-6">
+        <AdminPageShell className="space-y-6 p-0.5">
             <h1 className="text-3xl font-bold tracking-tight">{t('admin.messages.title')}</h1>
 
             <Card ref={composeRef}>
@@ -425,6 +426,6 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                     )}
                 </CardContent>
             </Card>
-        </div>
+        </AdminPageShell>
     )
 }

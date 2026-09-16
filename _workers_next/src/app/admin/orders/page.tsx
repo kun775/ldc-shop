@@ -35,7 +35,7 @@ export default async function AdminOrdersPage(props: {
     const q = (firstParam(searchParams.q) || '').trim()
     const status = (firstParam(searchParams.status) || 'all').trim()
     const page = parseIntParam(firstParam(searchParams.page), 1)
-    const pageSize = Math.min(parseIntParam(firstParam(searchParams.pageSize), 50), 200)
+    const pageSize = Math.min(parseIntParam(firstParam(searchParams.pageSize), 20), 100)
 
     const whereParts: any[] = []
     if (status !== 'all') {

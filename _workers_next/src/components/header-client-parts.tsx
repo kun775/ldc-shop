@@ -56,7 +56,7 @@ export function HeaderNav({ isAdmin, isLoggedIn, showNav = true }: { isAdmin: bo
             )}
             {isAdmin && (
                 <Link
-                    href="/admin/settings"
+                    href="/admin"
                     className="flex items-center text-sm font-medium text-muted-foreground hover:text-primary transition-colors duration-200 hover:-translate-y-0.5"
                 >
                     {t('common.admin')}
@@ -108,7 +108,7 @@ export function HeaderUserMenuItems({ isAdmin, showNav = true }: { isAdmin: bool
             </DropdownMenuItem>
             {isAdmin && (
                 <DropdownMenuItem asChild>
-                    <Link href="/admin/settings">{t('common.admin')}</Link>
+                    <Link href="/admin">{t('common.admin')}</Link>
                 </DropdownMenuItem>
             )}
         </>

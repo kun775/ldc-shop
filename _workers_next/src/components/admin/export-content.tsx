@@ -11,6 +11,7 @@ import { importData, repairDataAction } from "@/actions/data"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { AdminPageShell } from "@/components/admin/admin-page-shell"
 
 function downloadUrl(params: Record<string, string>) {
   const search = new URLSearchParams(params)
@@ -84,7 +85,7 @@ export function AdminDataContent({ shopName }: { shopName: string | null }) {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <AdminPageShell className="space-y-6 p-0.5">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">{t('admin.export.title').replace('Export', 'Management').replace('导出', '管理')}</h1>
         <p className="text-sm text-muted-foreground mt-2">{t('admin.export.subtitle')}</p>
@@ -200,6 +201,6 @@ export function AdminDataContent({ shopName }: { shopName: string | null }) {
           </div>
         )}
       </div>
-    </div>
+    </AdminPageShell>
   )
 }

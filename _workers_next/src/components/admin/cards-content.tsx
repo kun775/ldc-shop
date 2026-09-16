@@ -14,6 +14,7 @@ import { CopyButton } from "@/components/copy-button"
 import { Trash2, PlusCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { AdminPageShell } from "@/components/admin/admin-page-shell"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 
 interface CardData {
@@ -211,7 +212,7 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
     }
 
     return (
-        <div className="space-y-8 max-w-4xl mx-auto">
+        <AdminPageShell className="mx-auto max-w-4xl space-y-8 p-0.5">
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">{t('admin.cards.title')}: {productName}</h1>
@@ -454,6 +455,6 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-        </div>
+        </AdminPageShell>
     )
 }

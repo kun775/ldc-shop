@@ -26,7 +26,7 @@ export function MobileNav({ isLoggedIn, isAdmin, showNav = true }: MobileNavProp
             active: pathname === "/"
         },
         ...(isAdmin ? [{
-            href: "/admin/settings",
+            href: "/admin",
             label: t('common.admin'),
             icon: Settings,
             active: pathname.startsWith("/admin")

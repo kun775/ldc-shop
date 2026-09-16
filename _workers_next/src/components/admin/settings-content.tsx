@@ -4,36 +4,20 @@ import { type ChangeEvent, useRef, useState } from "react"
 import { useI18n } from "@/lib/i18n/context"
 import { prepareUploadedImage } from "@/lib/client-image"
 import { DEFAULT_THEME_FONT, getThemeFontStack, THEME_FONT_VALUES, type ThemeFont } from "@/lib/theme-fonts"
-import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
-import { TrendingUp, ShoppingCart, CreditCard, Package, Users } from "lucide-react"
+import { AdminPageShell } from "@/components/admin/admin-page-shell"
 import { saveShopName, saveShopDescription, saveShopLogo, saveShopFooter, saveThemeColor, saveThemeFont, saveLowStockThreshold, saveCheckinReward, saveCheckinEnabled, saveWishlistEnabled, saveNoIndex, saveRefundReclaimCards, saveRegistryHideNav, saveCurrencyUnit } from "@/actions/admin"
 import { joinRegistry, leaveRegistry } from "@/actions/registry"
 import { checkForUpdatesClient, type ClientUpdateCheckResult } from "@/lib/update-check-client"
 import { toast } from "sonner"
 import { normalizeCurrencyUnit } from "@/lib/currency-unit"
 
-interface StatPeriod {
-    count: number
-    revenue: number
-    pointsProduced: number
-    pointsConsumed: number
-}
-
-interface Stats {
-    today: StatPeriod
-    week: StatPeriod
-    month: StatPeriod
-    total: StatPeriod
-}
-
 interface AdminSettingsContentProps {
-    stats: Stats
     shopName: string | null
     shopDescription: string | null
     shopLogo: string | null
@@ -41,7 +25,6 @@ interface AdminSettingsContentProps {
     currencyUnit: string | null
     themeColor: string | null
     themeFont: string | null
-    visitorCount: number
     lowStockThreshold: number
     checkinReward: number
     checkinEnabled: boolean
@@ -74,16 +57,10 @@ const THEME_COLORS = [
 
 const SHOP_LOGO_UPLOAD_MAX_BYTES = 500 * 1024
 
-export function AdminSettingsContent({ stats, shopName, shopDescription, shopLogo, shopFooter, currencyUnit, themeColor, themeFont, visitorCount, lowStockThreshold, checkinReward, checkinEnabled, wishlistEnabled, noIndexEnabled, refundReclaimCards, registryHideNav, registryOptIn, registryEnabled, currentVersion }: AdminSettingsContentProps) {
+export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shopFooter, currencyUnit, themeColor, themeFont, lowStockThreshold, checkinReward, checkinEnabled, wishlistEnabled, noIndexEnabled, refundReclaimCards, registryHideNav, registryOptIn, registryEnabled, currentVersion }: AdminSettingsContentProps) {
     const { t } = useI18n()
     const router = useRouter()
     const shopLogoFileInputRef = useRef<HTMLInputElement | null>(null)
-    const statCards = [
-        { key: 'today', title: t('admin.stats.today'), icon: ShoppingCart, value: stats.today },
-        { key: 'week', title: t('admin.stats.week'), icon: TrendingUp, value: stats.week },
-        { key: 'month', title: t('admin.stats.month'), icon: CreditCard, value: stats.month },
-        { key: 'total', title: t('admin.stats.total'), icon: Package, value: stats.total },
-    ] as const
 
     // State
     const [shopNameValue, setShopNameValue] = useState(shopName || '')
@@ -395,40 +372,8 @@ export function AdminSettingsContent({ stats, shopName, shopDescription, shopLog
     }
 
     return (
-        <div className="space-y-6">
+        <AdminPageShell className="space-y-6 p-0.5">
             <h1 className="text-3xl font-bold tracking-tight">{t('common.storeSettings')}</h1>
-
-            {/* Dashboard Stats */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-                {statCards.map(({ key, title, icon: Icon, value }) => (
-                    <Card key={key}>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">{title}</CardTitle>
-                            <Icon className="h-4 w-4 text-muted-foreground" />
-                        </CardHeader>
-                        <CardContent className="space-y-2">
-                            <div className="text-2xl font-bold">{value.count}</div>
-                            <div className="space-y-1 text-xs text-muted-foreground">
-                                <p>{t('admin.stats.ldcRevenue')}: {value.revenue.toFixed(0)} {t('common.credits')}</p>
-                                <p>{t('admin.stats.pointsProduced')}: {value.pointsProduced}</p>
-                                <p>{t('admin.stats.pointsConsumed')}: {value.pointsConsumed}</p>
-                            </div>
-                        </CardContent>
-                    </Card>
-                ))}
-                <Link href="/admin/users" className="block">
-                    <Card className="hover:bg-accent/50 transition-colors h-full">
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">{t('admin.stats.visitors')}</CardTitle>
-                            <Users className="h-4 w-4 text-muted-foreground" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">{visitorCount}</div>
-                            <p className="text-xs text-muted-foreground">{t('home.visitorCount', { count: visitorCount })}</p>
-                        </CardContent>
-                    </Card>
-                </Link>
-            </div>
 
             {/* Shop Settings */}
             <Card>
@@ -838,6 +783,6 @@ export function AdminSettingsContent({ stats, shopName, shopDescription, shopLog
                 </CardContent>
             </Card>
 
-        </div>
+        </AdminPageShell>
     )
 }

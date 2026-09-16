@@ -27,6 +27,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
 import {
     Search,
     RotateCcw,
@@ -236,9 +237,9 @@ export function AdminOrdersContent({
     }
 
     return (
-        <div className="space-y-5">
-            {/* Top Bar: Title, Count, Actions */}
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <AdminListPage
+            header={
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
                     <div className="flex items-center gap-2.5">
                         <h1 className="text-2xl font-bold tracking-tight text-foreground">{t('admin.orders.title')}</h1>
@@ -287,9 +288,10 @@ export function AdminOrdersContent({
                     </DropdownMenu>
                 </div>
             </div>
-
-            {/* Filter & Search Card */}
-            <div className="rounded-2xl border border-border/60 bg-card p-4 shadow-2xs space-y-3.5">
+            }
+            toolbar={
+            <>
+            <div className="rounded-2xl border border-border/60 bg-card p-3 shadow-2xs space-y-3">
                 {/* Segmented Status Tabs */}
                 <div className="flex flex-wrap items-center gap-1 border-b border-border/40 pb-3">
                     {statusOptions.map((s) => {
@@ -374,8 +376,6 @@ export function AdminOrdersContent({
                     </div>
                 </div>
             </div>
-
-            {/* Batch Action Bar / Counter Header */}
             {selectedIds.length > 0 ? (
                 <div className="flex items-center justify-between rounded-xl border border-primary/20 bg-primary/5 px-4 py-2.5 transition-all">
                     <div className="flex items-center gap-3">
@@ -411,7 +411,7 @@ export function AdminOrdersContent({
                     </div>
                     <div className="flex items-center gap-1.5">
                         <span className="text-muted-foreground/80">{t('admin.orders.pageSize')}:</span>
-                        {[50, 100, 200].map((n) => (
+                        {[20, 50, 100].map((n) => (
                             <button
                                 key={n}
                                 type="button"
@@ -429,14 +429,50 @@ export function AdminOrdersContent({
                     </div>
                 </div>
             )}
-
-            {/* High-density Table */}
-            <div className="rounded-2xl border border-border/60 bg-card shadow-2xs overflow-hidden">
-                <div className="overflow-x-auto">
+            </>
+            }
+            footer={
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-1 text-xs text-muted-foreground">
+                <div>
+                    {t('admin.orders.showing', { from: showingFrom, to: showingTo, total })}
+                    <span className="mx-2 text-border">|</span>
+                    {t('admin.orders.page', { page, totalPages })}
+                </div>
+                <div className="flex items-center gap-2">
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs gap-1 border-border/80"
+                        disabled={!canPrev}
+                        onClick={() => applyAllFilters({ page: page - 1 })}
+                    >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                        <span>{t('admin.orders.prev')}</span>
+                    </Button>
+                    <span className="text-xs font-mono px-2.5 py-1 rounded-md bg-muted/40 border border-border/50">
+                        {page} / {totalPages}
+                    </span>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs gap-1 border-border/80"
+                        disabled={!canNext}
+                        onClick={() => applyAllFilters({ page: page + 1 })}
+                    >
+                        <span>{t('admin.orders.next')}</span>
+                        <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                </div>
+            </div>
+            }
+        >
+            <AdminListScroll>
                     <Table>
                         <TableHeader className="bg-muted/40">
                             <TableRow className="border-b border-border/60 hover:bg-transparent text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                                <TableHead className="w-[44px] text-center">
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[44px] text-center">
                                     <input
                                         type="checkbox"
                                         checked={allOnPageSelected}
@@ -450,20 +486,18 @@ export function AdminOrdersContent({
                                         className="h-4 w-4 rounded border-border/80 accent-primary cursor-pointer align-middle"
                                     />
                                 </TableHead>
-                                <TableHead className="w-[170px]">{t('admin.orders.orderId')}</TableHead>
-                                <TableHead className="w-[140px]">{t('admin.orders.user')}</TableHead>
-                                <TableHead className="min-w-[220px]">{t('admin.orders.product')}</TableHead>
-                                <TableHead className="w-[120px]">{t('admin.orders.paymentBreakdown')}</TableHead>
-                                <TableHead className="w-[100px]">{t('admin.orders.status')}</TableHead>
-                                <TableHead className="w-[130px]">{t('admin.orders.tradeNo')}</TableHead>
-                                <TableHead className="w-[130px]">{t('admin.orders.cardKey')}</TableHead>
-                                <TableHead className="w-[120px] text-right">{t('admin.orders.actions')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[210px]">{t('admin.orders.orderId')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur min-w-[240px]">{t('admin.orders.product')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[140px]">{t('admin.orders.user')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[110px]">{t('admin.orders.paymentBreakdown')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[96px]">{t('admin.orders.status')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[120px] text-right">{t('admin.orders.actions')}</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody className="divide-y divide-border/40">
                             {orders.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={9} className="h-48 text-center text-muted-foreground">
+                                    <TableCell colSpan={6} className="h-48 text-center text-muted-foreground">
                                         <div className="flex flex-col items-center justify-center gap-2">
                                             <Inbox className="h-8 w-8 text-muted-foreground/40" />
                                             <span className="text-sm">{t('admin.orders.emptyOrders') || '未找到符合条件的订单'}</span>
@@ -499,7 +533,6 @@ export function AdminOrdersContent({
                                                 />
                                             </TableCell>
 
-                                            {/* Order ID & Date */}
                                             <TableCell className="align-top py-3.5">
                                                 <div className="space-y-1">
                                                     <Link
@@ -513,42 +546,14 @@ export function AdminOrdersContent({
                                                     <div className="text-[11px] text-muted-foreground/80 font-mono">
                                                         <ClientDate value={order.createdAt} format="dateTime" />
                                                     </div>
+                                                    {order.tradeNo ? (
+                                                        <div className="font-mono text-[11px] text-muted-foreground">
+                                                            <CopyButton text={order.tradeNo} truncate maxLength={14} />
+                                                        </div>
+                                                    ) : null}
                                                 </div>
                                             </TableCell>
 
-                                            {/* User */}
-                                            <TableCell className="align-top py-3.5">
-                                                {order.username ? (
-                                                    <div className="space-y-1">
-                                                        <div className="flex items-center gap-1.5">
-                                                            <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
-                                                                {order.username[0]?.toUpperCase()}
-                                                            </div>
-                                                            <a
-                                                                href={getExternalProfileUrl(order.username, order.userId) || "#"}
-                                                                target="_blank"
-                                                                rel="noreferrer"
-                                                                className="font-medium text-xs text-foreground hover:text-primary transition-colors hover:underline truncate max-w-[110px]"
-                                                                title={order.username}
-                                                            >
-                                                                {getDisplayUsername(order.username, order.userId)}
-                                                            </a>
-                                                        </div>
-                                                        {order.email && (
-                                                            <div className="text-[11px] text-muted-foreground font-mono">
-                                                                <CopyButton text={order.email} truncate maxLength={16} />
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                ) : (
-                                                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground/80">
-                                                        <User className="h-3.5 w-3.5 text-muted-foreground/50" />
-                                                        <span>{t('admin.orders.guest') || '游客'}</span>
-                                                    </div>
-                                                )}
-                                            </TableCell>
-
-                                            {/* Product & Fulfillment */}
                                             <TableCell className="align-top py-3.5">
                                                 <div className="space-y-1.5">
                                                     <div className="flex flex-wrap items-center gap-1.5">
@@ -595,7 +600,45 @@ export function AdminOrdersContent({
                                                             ))}
                                                         </div>
                                                     )}
+                                                    {order.cardKey ? (
+                                                        <div className="font-mono text-[11px] text-muted-foreground">
+                                                            <CopyButton text={order.cardKey} truncate maxLength={16} />
+                                                        </div>
+                                                    ) : isManualFulfillment(order.fulfillmentMode) ? (
+                                                        <span className="text-[10px] text-blue-600/70 dark:text-blue-400/70 font-medium">人工交付</span>
+                                                    ) : null}
                                                 </div>
+                                            </TableCell>
+
+                                            <TableCell className="align-top py-3.5">
+                                                {order.username ? (
+                                                    <div className="space-y-1">
+                                                        <div className="flex items-center gap-1.5">
+                                                            <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
+                                                                {order.username[0]?.toUpperCase()}
+                                                            </div>
+                                                            <a
+                                                                href={getExternalProfileUrl(order.username, order.userId) || "#"}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className="font-medium text-xs text-foreground hover:text-primary transition-colors hover:underline truncate max-w-[110px]"
+                                                                title={order.username}
+                                                            >
+                                                                {getDisplayUsername(order.username, order.userId)}
+                                                            </a>
+                                                        </div>
+                                                        {order.email && (
+                                                            <div className="text-[11px] text-muted-foreground font-mono">
+                                                                <CopyButton text={order.email} truncate maxLength={16} />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground/80">
+                                                        <User className="h-3.5 w-3.5 text-muted-foreground/50" />
+                                                        <span>{t('admin.orders.guest') || '游客'}</span>
+                                                    </div>
+                                                )}
                                             </TableCell>
 
                                             {/* Payment Breakdown */}
@@ -628,30 +671,6 @@ export function AdminOrdersContent({
                                                 </Badge>
                                             </TableCell>
 
-                                            {/* Trade No */}
-                                            <TableCell className="align-top py-3.5">
-                                                {order.tradeNo ? (
-                                                    <div className="font-mono text-xs text-muted-foreground">
-                                                        <CopyButton text={order.tradeNo} truncate maxLength={12} />
-                                                    </div>
-                                                ) : (
-                                                    <span className="text-muted-foreground/40 text-xs font-mono">-</span>
-                                                )}
-                                            </TableCell>
-
-                                            {/* Card Key */}
-                                            <TableCell className="align-top py-3.5">
-                                                {order.cardKey ? (
-                                                    <div className="font-mono text-xs text-muted-foreground">
-                                                        <CopyButton text={order.cardKey} truncate maxLength={14} />
-                                                    </div>
-                                                ) : isManualFulfillment(order.fulfillmentMode) ? (
-                                                    <span className="text-[10px] text-blue-600/70 dark:text-blue-400/70 font-medium">人工交付</span>
-                                                ) : (
-                                                    <span className="text-muted-foreground/40 text-xs font-mono">-</span>
-                                                )}
-                                            </TableCell>
-
                                             {/* Actions */}
                                             <TableCell className="align-top py-3.5 text-right">
                                                 <div className="flex items-center justify-end gap-1">
@@ -673,44 +692,7 @@ export function AdminOrdersContent({
                             )}
                         </TableBody>
                     </Table>
-                </div>
-            </div>
-
-            {/* Pagination Footer */}
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-1 text-xs text-muted-foreground">
-                <div>
-                    {t('admin.orders.showing', { from: showingFrom, to: showingTo, total })}
-                    <span className="mx-2 text-border">|</span>
-                    {t('admin.orders.page', { page, totalPages })}
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 text-xs gap-1 border-border/80"
-                        disabled={!canPrev}
-                        onClick={() => applyAllFilters({ page: page - 1 })}
-                    >
-                        <ChevronLeft className="h-3.5 w-3.5" />
-                        <span>{t('admin.orders.prev')}</span>
-                    </Button>
-                    <span className="text-xs font-mono px-2.5 py-1 rounded-md bg-muted/40 border border-border/50">
-                        {page} / {totalPages}
-                    </span>
-                    <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 text-xs gap-1 border-border/80"
-                        disabled={!canNext}
-                        onClick={() => applyAllFilters({ page: page + 1 })}
-                    >
-                        <span>{t('admin.orders.next')}</span>
-                        <ChevronRight className="h-3.5 w-3.5" />
-                    </Button>
-                </div>
-            </div>
-        </div>
+            </AdminListScroll>
+        </AdminListPage>
     )
 }

@@ -13,6 +13,7 @@ import { Loader2, Search, ArrowLeft, ArrowRight, Edit, Ban, CheckCircle } from "
 import { getDisplayUsername } from "@/lib/user-profile-link"
 import { UserPointAdjustmentDialog } from "./user-point-adjustment-dialog"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
 
 interface User {
     userId: string
@@ -103,13 +104,10 @@ export function UsersContent({ data }: UsersContentProps) {
     const totalPages = Math.ceil(data.total / data.pageSize)
 
     return (
-        <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <h1 className="text-3xl font-bold tracking-tight">{t('admin.users.title')}</h1>
-            </div>
-
-            <div className="flex items-center gap-4">
-                <form onSubmit={handleSearch} className="flex gap-2 flex-1 max-w-sm">
+        <AdminListPage
+            header={<h1 className="text-2xl font-bold tracking-tight">{t('admin.users.title')}</h1>}
+            toolbar={
+                <form onSubmit={handleSearch} className="flex max-w-xl gap-2">
                     <div className="relative flex-1">
                         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <Input
@@ -123,19 +121,46 @@ export function UsersContent({ data }: UsersContentProps) {
                         {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : t('admin.users.search')}
                     </Button>
                 </form>
-            </div>
-
-            <div className="rounded-md border bg-card">
+            }
+            footer={
+                totalPages > 1 ? (
+                    <div className="flex justify-end gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handlePageChange(data.page - 1)}
+                            disabled={data.page <= 1}
+                        >
+                            <ArrowLeft className="h-4 w-4 mr-2" />
+                            {t('search.prev')}
+                        </Button>
+                        <div className="flex items-center text-sm text-muted-foreground">
+                            {t('search.page', { page: data.page, totalPages: totalPages })}
+                        </div>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handlePageChange(data.page + 1)}
+                            disabled={data.page >= totalPages}
+                        >
+                            {t('search.next')}
+                            <ArrowRight className="h-4 w-4 ml-2" />
+                        </Button>
+                    </div>
+                ) : null
+            }
+        >
+            <AdminListScroll>
                 <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>{t('admin.users.userId')}</TableHead>
-                            <TableHead>{t('admin.users.username')}</TableHead>
-                            <TableHead>{t('admin.users.points')}</TableHead>
-                            <TableHead>{t('admin.users.orders')}</TableHead>
-                            <TableHead>{t('admin.users.lastLogin')}</TableHead>
-                            <TableHead>{t('admin.users.createdAt')}</TableHead>
-                            <TableHead className="text-right">{t('common.actions')}</TableHead>
+                    <TableHeader className="bg-muted/40">
+                        <TableRow className="border-b border-border/60 hover:bg-transparent">
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.userId')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.username')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.points')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.orders')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.lastLogin')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.createdAt')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur text-right">{t('common.actions')}</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -186,33 +211,7 @@ export function UsersContent({ data }: UsersContentProps) {
                         )}
                     </TableBody>
                 </Table>
-            </div>
-
-            {/* Pagination */}
-            {totalPages > 1 && (
-                <div className="flex justify-center gap-2">
-                    <Button
-                        variant="outline"
-                        onClick={() => handlePageChange(data.page - 1)}
-                        disabled={data.page <= 1}
-                    >
-                        <ArrowLeft className="h-4 w-4 mr-2" />
-                        {t('search.prev')}
-                    </Button>
-                    <div className="flex items-center text-sm text-muted-foreground">
-                        {t('search.page', { page: data.page, totalPages: totalPages })}
-                    </div>
-                    <Button
-                        variant="outline"
-                        onClick={() => handlePageChange(data.page + 1)}
-                        disabled={data.page >= totalPages}
-                    >
-                        {t('search.next')}
-                        <ArrowRight className="h-4 w-4 ml-2" />
-                    </Button>
-                </div>
-            )}
-
+            </AdminListScroll>
             <UserPointAdjustmentDialog
                 open={!!editingUser}
                 onOpenChange={(open) => {
@@ -228,6 +227,6 @@ export function UsersContent({ data }: UsersContentProps) {
                     router.refresh()
                 }}
             />
-        </div>
+        </AdminListPage>
     )
 }

@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { saveCategory, deleteCategory } from "@/actions/admin"
 import { toast } from "sonner"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
 
 type CategoryRow = { id: number; name: string; icon: string | null; sortOrder: number }
 
@@ -61,9 +62,9 @@ export function AdminCategoriesContent({ categories }: { categories: CategoryRow
   }
 
   return (
-    <div className="space-y-6 max-w-4xl">
-      <h1 className="text-3xl font-bold tracking-tight">{t('admin.categories.title')}</h1>
-
+    <AdminListPage
+      header={<h1 className="text-2xl font-bold tracking-tight">{t('admin.categories.title')}</h1>}
+      toolbar={
       <Card>
         <CardHeader>
           <CardTitle>{t('admin.categories.create')}</CardTitle>
@@ -88,15 +89,16 @@ export function AdminCategoriesContent({ categories }: { categories: CategoryRow
           </div>
         </CardContent>
       </Card>
-
-      <div className="rounded-md border bg-card">
+      }
+    >
+      <AdminListScroll>
         <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t('admin.categories.icon')}</TableHead>
-              <TableHead>{t('admin.categories.name')}</TableHead>
-              <TableHead>{t('admin.categories.sortOrder')}</TableHead>
-              <TableHead className="text-right">{t('admin.categories.actions')}</TableHead>
+          <TableHeader className="bg-muted/40">
+            <TableRow className="border-b border-border/60 hover:bg-transparent">
+              <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.categories.icon')}</TableHead>
+              <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.categories.name')}</TableHead>
+              <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.categories.sortOrder')}</TableHead>
+              <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur text-right">{t('admin.categories.actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -167,7 +169,7 @@ export function AdminCategoriesContent({ categories }: { categories: CategoryRow
             ))}
           </TableBody>
         </Table>
-      </div>
-    </div>
+      </AdminListScroll>
+    </AdminListPage>
   )
 }

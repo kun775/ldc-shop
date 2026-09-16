@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { UserPointAdjustmentDialog } from "./user-point-adjustment-dialog"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { AdminPageShell } from "@/components/admin/admin-page-shell"
 
 function getOrderStatusVariant(status: string | null) {
     switch (status) {
@@ -95,7 +96,7 @@ export function AdminUserDetailContent(props: {
     }
 
     return (
-        <div className="space-y-6">
+        <AdminPageShell className="space-y-6 p-0.5">
             <div className="flex items-start justify-between gap-4">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">{t("admin.users.detailTitle")}</h1>
@@ -329,6 +330,6 @@ export function AdminUserDetailContent(props: {
                 currentPoints={props.user.points}
                 onSuccess={() => router.refresh()}
             />
-        </div>
+        </AdminPageShell>
     )
 }
