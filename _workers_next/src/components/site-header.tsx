@@ -18,6 +18,7 @@ import { CheckInButton } from "@/components/checkin-button"
 import { getSetting, recordLoginUser, getUserUnreadNotificationCount, getLoginUserDesktopNotificationsEnabled } from "@/lib/db/queries"
 import { getActiveAnnouncement } from "@/actions/settings"
 import { isRegistryEnabled } from "@/lib/registry"
+import { resolveEffectiveShopLogo } from "@/lib/shop-logo"
 import { getAdminUsernames, isAdminIdentity } from "@/lib/admin-auth"
 
 export async function SiteHeader() {
@@ -31,16 +32,21 @@ export async function SiteHeader() {
     const isAdmin = isAdminIdentity(user)
     const firstAdminName = rawAdminUsers[0] // Get first admin name for branding
     let shopNameOverride: string | null = null
+    let shopLogo: string | null = null
     let shopLogoVersion: string | null = null
     try {
-        const [name, logoUpdatedAt] = await Promise.all([
+        const [name, logo, logoSource, logoUpdatedAt] = await Promise.all([
             getSetting('shop_name'),
+            getSetting('shop_logo'),
+            getSetting('shop_logo_source'),
             getSetting('shop_logo_updated_at')
         ])
         shopNameOverride = name
+        shopLogo = resolveEffectiveShopLogo(logo, logoSource).effectiveLogo || null
         shopLogoVersion = logoUpdatedAt
     } catch {
         shopNameOverride = null
+        shopLogo = null
         shopLogoVersion = null
     }
 
@@ -91,7 +97,7 @@ export async function SiteHeader() {
         <header className="sticky top-0 z-40 w-full shrink-0 border-b border-border/20 bg-gradient-to-b from-background/90 via-background/70 to-background/55 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70 relative after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-gradient-to-r after:from-transparent after:via-primary/25 after:to-transparent">
             <div className="container flex h-16 items-center gap-2 md:gap-3">
                 <div className="flex items-center gap-4 md:gap-8 min-w-0">
-                    <HeaderLogo adminName={firstAdminName} shopNameOverride={shopNameOverride} shopLogoVersion={shopLogoVersion} />
+                    <HeaderLogo adminName={firstAdminName} shopNameOverride={shopNameOverride} shopLogo={shopLogo} shopLogoVersion={shopLogoVersion} />
                     <HeaderNav isAdmin={isAdmin} isLoggedIn={!!user} showNav={showNavigator} />
                 </div>
                 <div className="hidden md:flex flex-1 justify-center px-4">

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { resolveEffectiveShopLogo } from "@/lib/shop-logo";
 import "./globals.css";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
@@ -42,17 +43,21 @@ export async function generateMetadata(): Promise<Metadata> {
   let shopName: string | null = null;
   let shopDescription: string | null = null;
   let noIndex = false;
+  let shopLogo: string | null = null;
   let logoUpdatedAt: string | null = null;
   try {
-    const [name, desc, noIndexSetting, logoUpdatedAtSetting] = await Promise.all([
+    const [name, desc, noIndexSetting, logo, logoSource, logoUpdatedAtSetting] = await Promise.all([
       getSetting("shop_name"),
       getSetting("shop_description"),
       getSetting("noindex_enabled"),
+      getSetting("shop_logo"),
+      getSetting("shop_logo_source"),
       getSetting("shop_logo_updated_at"),
     ]);
     shopName = name;
     shopDescription = desc;
     noIndex = noIndexSetting === 'true';
+    shopLogo = resolveEffectiveShopLogo(logo, logoSource).effectiveLogo || null;
     logoUpdatedAt = logoUpdatedAtSetting;
   } catch {
     shopName = null;
@@ -76,9 +81,9 @@ export async function generateMetadata(): Promise<Metadata> {
       "mobile-web-app-capable": "yes",
     },
     icons: {
-      icon: logoUpdatedAt ? `/favicon?v=${logoUpdatedAt}` : "/favicon",
-      shortcut: logoUpdatedAt ? `/favicon?v=${logoUpdatedAt}` : "/favicon",
-      apple: logoUpdatedAt ? `/favicon?v=${logoUpdatedAt}` : "/favicon",
+      icon: shopLogo || (logoUpdatedAt ? `/favicon?v=${logoUpdatedAt}` : "/favicon"),
+      shortcut: shopLogo || (logoUpdatedAt ? `/favicon?v=${logoUpdatedAt}` : "/favicon"),
+      apple: shopLogo || (logoUpdatedAt ? `/favicon?v=${logoUpdatedAt}` : "/favicon"),
     },
   };
 

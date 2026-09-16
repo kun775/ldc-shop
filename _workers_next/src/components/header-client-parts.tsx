@@ -12,17 +12,28 @@ import { cn } from "@/lib/utils"
 import { getMyUnreadCount } from "@/actions/user-notifications"
 import { Megaphone } from "lucide-react"
 
-export function HeaderLogo({ adminName, shopNameOverride, shopLogoVersion }: { adminName?: string; shopNameOverride?: string | null; shopLogoVersion?: string | null }) {
+export function HeaderLogo({ adminName, shopNameOverride, shopLogo, shopLogoVersion }: { adminName?: string; shopNameOverride?: string | null; shopLogo?: string | null; shopLogoVersion?: string | null }) {
     const { t } = useI18n()
     const override = shopNameOverride?.trim()
     const shopName = adminName
         ? t('common.shopNamePattern', { name: adminName, appName: t('common.appName') })
         : t('common.appName')
-    const logoUrl = shopLogoVersion ? `/favicon?v=${shopLogoVersion}` : "/favicon"
+    const fallbackLogoUrl = shopLogoVersion ? `/favicon?v=${shopLogoVersion}` : "/favicon"
+    const logoUrl = shopLogo?.trim() || fallbackLogoUrl
 
     return (
         <Link href="/" className="flex items-center gap-2 min-w-0 group text-muted-foreground hover:text-primary transition-colors duration-200 hover:-translate-y-0.5">
-            <img src={logoUrl} alt="Logo" className="h-8 w-8 rounded-lg object-cover shadow-sm transition-all duration-300 group-hover:shadow-md" />
+            <img
+                src={logoUrl}
+                alt={`${override || shopName} Logo`}
+                className="h-8 w-8 rounded-lg object-cover shadow-sm transition-all duration-300 group-hover:shadow-md"
+                referrerPolicy="no-referrer"
+                onError={(event) => {
+                    if (event.currentTarget.src !== new URL(fallbackLogoUrl, window.location.origin).href) {
+                        event.currentTarget.src = fallbackLogoUrl
+                    }
+                }}
+            />
             <span className="text-xs sm:text-sm font-semibold tracking-tight truncate max-w-[160px] sm:max-w-[220px] md:max-w-none">
                 {override || shopName}
             </span>

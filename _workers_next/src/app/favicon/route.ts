@@ -79,8 +79,23 @@ export async function GET(request: Request) {
   const generatedKey = `generated:${generatedSeed}`
   const decoded = target.startsWith("data:") ? decodeImageDataUrl(target) : null
 
-  // Never fetch administrator-configured URLs from the server. Remote logos are rendered
-  // directly in the UI; the favicon endpoint only serves bounded image data or a local SVG.
+  // Redirect remote custom logos so the browser fetches them directly. This preserves the
+  // administrator-selected favicon without turning the Worker into a server-side fetch proxy.
+  if (/^https?:\/\//i.test(target)) {
+    try {
+      const remoteLogo = new URL(target)
+      return NextResponse.redirect(remoteLogo, {
+        status: 307,
+        headers: {
+          "Cache-Control": "public, max-age=3600, stale-while-revalidate=300",
+          "X-Content-Type-Options": "nosniff",
+        },
+      })
+    } catch {
+      return renderGeneratedLogo(generatedSeed, generatedKey)
+    }
+  }
+
   if (!decoded) {
     return renderGeneratedLogo(generatedSeed, generatedKey)
   }
