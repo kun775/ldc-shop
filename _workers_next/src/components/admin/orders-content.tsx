@@ -291,61 +291,70 @@ export function AdminOrdersContent({
             }
             toolbar={
             <>
-            <div className="rounded-2xl border border-border/60 bg-card p-3 shadow-2xs space-y-3">
-                {/* Segmented Status Tabs */}
-                <div className="flex flex-wrap items-center gap-1 border-b border-border/40 pb-3">
-                    {statusOptions.map((s) => {
-                        const isActive = statusValue === s.key
-                        return (
-                            <button
-                                key={s.key}
-                                type="button"
-                                onClick={() => {
-                                    setStatusValue(s.key)
-                                    applyAllFilters({ status: s.key, page: 1 })
-                                }}
-                                className={cn(
-                                    "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all",
-                                    isActive
-                                        ? "bg-primary text-primary-foreground shadow-xs"
-                                        : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
-                                )}
-                            >
-                                {s.icon}
-                                <span>{s.label}</span>
-                            </button>
-                        )
-                    })}
-                </div>
-
-                {/* Search Bar & Actions */}
-                <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="relative flex-1 max-w-xl">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/70" />
-                        <Input
-                            value={queryValue}
-                            onChange={(e) => setQueryValue(e.target.value)}
-                            placeholder={t('admin.orders.searchPlaceholder')}
-                            className="pl-9 pr-8 h-9 text-xs"
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') applyFilters({ q: queryValue, page: 1 })
-                            }}
-                        />
-                        {queryValue && (
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setQueryValue("")
-                                    applyFilters({ q: "", page: 1 })
-                                }}
-                                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                            >
-                                <XCircle className="h-4 w-4" />
-                            </button>
-                        )}
+            <div className="rounded-2xl border border-border/60 bg-card px-3 py-2.5 shadow-2xs">
+                {/* 状态筛选与搜索合并为一行：筛选在左，搜索在右 */}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <div className="flex flex-wrap items-center gap-1">
+                        {statusOptions.map((s) => {
+                            const isActive = statusValue === s.key
+                            return (
+                                <button
+                                    key={s.key}
+                                    type="button"
+                                    onClick={() => {
+                                        setStatusValue(s.key)
+                                        applyAllFilters({ status: s.key, page: 1 })
+                                    }}
+                                    className={cn(
+                                        "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all",
+                                        isActive
+                                            ? "bg-primary text-primary-foreground shadow-xs"
+                                            : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                                    )}
+                                >
+                                    {s.icon}
+                                    <span>{s.label}</span>
+                                </button>
+                            )
+                        })}
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="ml-auto flex flex-wrap items-center gap-2">
+                        <div className="relative w-[220px] sm:w-[280px]">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
+                            <Input
+                                value={queryValue}
+                                onChange={(e) => setQueryValue(e.target.value)}
+                                placeholder={t('admin.orders.searchPlaceholder')}
+                                className="h-9 pl-8 pr-7 text-xs"
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') applyFilters({ q: queryValue, page: 1 })
+                                }}
+                            />
+                            {queryValue && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setQueryValue("")
+                                        applyFilters({ q: "", page: 1 })
+                                    }}
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground"
+                                >
+                                    <XCircle className="h-3.5 w-3.5" />
+                                </button>
+                            )}
+                        </div>
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="h-9 px-3.5 text-xs gap-1.5"
+                            disabled={!queryValue.trim() || queryValue.trim() === query}
+                            onClick={() => applyFilters({ q: queryValue, page: 1 })}
+                        >
+                            <Search className="h-3.5 w-3.5" />
+                            {t('admin.orders.search')}
+                        </Button>
                         {(queryValue.trim() || statusValue !== 'all') && (
                             <Button
                                 type="button"
@@ -362,17 +371,6 @@ export function AdminOrdersContent({
                                 {t('admin.orders.clearFilters')}
                             </Button>
                         )}
-                        <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            className="h-9 px-3.5 text-xs gap-1.5"
-                            disabled={!queryValue.trim() || queryValue.trim() === query}
-                            onClick={() => applyFilters({ q: queryValue, page: 1 })}
-                        >
-                            <Search className="h-3.5 w-3.5" />
-                            {t('admin.orders.search')}
-                        </Button>
                     </div>
                 </div>
             </div>
@@ -469,10 +467,10 @@ export function AdminOrdersContent({
             }
         >
             <AdminListScroll>
-                    <Table>
+                    <Table className="min-w-[1024px] table-fixed">
                         <TableHeader className="bg-muted/40">
                             <TableRow className="border-b border-border/60 hover:bg-transparent text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[44px] text-center">
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[3.5%] text-center">
                                     <input
                                         type="checkbox"
                                         checked={allOnPageSelected}
@@ -486,18 +484,18 @@ export function AdminOrdersContent({
                                         className="h-4 w-4 rounded border-border/80 accent-primary cursor-pointer align-middle"
                                     />
                                 </TableHead>
-                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[210px]">{t('admin.orders.orderId')}</TableHead>
-                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur min-w-[240px]">{t('admin.orders.product')}</TableHead>
-                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[140px]">{t('admin.orders.user')}</TableHead>
-                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[110px]">{t('admin.orders.paymentBreakdown')}</TableHead>
-                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[96px]">{t('admin.orders.status')}</TableHead>
-                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[120px] text-right">{t('admin.orders.actions')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[16%]">{t('admin.orders.orderId')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[29%]">{t('admin.orders.product')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[14.5%]">{t('admin.orders.user')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[11%]">{t('admin.orders.paymentBreakdown')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[9%]">{t('admin.orders.status')}</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur w-[17%] text-right">{t('admin.orders.actions')}</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody className="divide-y divide-border/40">
                             {orders.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={6} className="h-48 text-center text-muted-foreground">
+                                    <TableCell colSpan={7} className="h-48 text-center text-muted-foreground">
                                         <div className="flex flex-col items-center justify-center gap-2">
                                             <Inbox className="h-8 w-8 text-muted-foreground/40" />
                                             <span className="text-sm">{t('admin.orders.emptyOrders') || '未找到符合条件的订单'}</span>
@@ -533,39 +531,38 @@ export function AdminOrdersContent({
                                                 />
                                             </TableCell>
 
-                                            <TableCell className="align-top py-3.5">
-                                                <div className="space-y-1">
+                                            <TableCell className="align-top py-2.5 whitespace-normal">
+                                                <div className="min-w-0 space-y-1">
                                                     <Link
                                                         href={`/admin/orders/${order.orderId}`}
-                                                        className="font-mono text-xs font-semibold text-foreground hover:text-primary transition-colors hover:underline inline-flex items-center gap-1 group"
+                                                        className="group inline-flex max-w-full items-center gap-1 font-mono text-xs font-semibold text-foreground hover:text-primary transition-colors hover:underline"
                                                         title="查看订单详情"
                                                     >
-                                                        <span>{order.orderId}</span>
-                                                        <ArrowUpRight className="h-3 w-3 text-muted-foreground/50 group-hover:text-primary transition-colors" />
+                                                        <span className="truncate">{order.orderId}</span>
+                                                        <ArrowUpRight className="h-3 w-3 shrink-0 text-muted-foreground/50 group-hover:text-primary transition-colors" />
                                                     </Link>
-                                                    <div className="text-[11px] text-muted-foreground/80 font-mono">
+                                                    <div className="font-mono text-[11px] text-muted-foreground/75">
                                                         <ClientDate value={order.createdAt} format="dateTime" />
                                                     </div>
                                                     {order.tradeNo ? (
-                                                        <div className="font-mono text-[11px] text-muted-foreground">
-                                                            <CopyButton text={order.tradeNo} truncate maxLength={14} />
+                                                        <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                                                            <span className="shrink-0 text-muted-foreground/55">{t('admin.orders.tradeNo')}</span>
+                                                            <CopyButton text={order.tradeNo} compact />
                                                         </div>
                                                     ) : null}
                                                 </div>
                                             </TableCell>
 
-                                            <TableCell className="align-top py-3.5">
-                                                <div className="space-y-1.5">
+                                            <TableCell className="align-top py-2.5 whitespace-normal">
+                                                <div className="min-w-0 space-y-1">
+                                                    {/* 主行：商品名与发货方式徽标同排，避免堆叠成多层 */}
                                                     <div className="flex flex-wrap items-center gap-1.5">
-                                                        <span className="font-medium text-xs text-foreground">{order.productName}</span>
+                                                        <span className="text-[13px] font-medium text-foreground">{order.productName}</span>
                                                         {order.productId && productVariantLabels[order.productId] && (
                                                             <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal bg-muted/60 text-muted-foreground">
                                                                 {productVariantLabels[order.productId]}
                                                             </Badge>
                                                         )}
-                                                    </div>
-
-                                                    <div className="flex flex-wrap items-center gap-1.5">
                                                         {isManualFulfillment(order.fulfillmentMode) ? (
                                                             <span className="inline-flex items-center gap-1 rounded border border-blue-500/20 bg-blue-500/5 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
                                                                 <PackageOpen className="h-3 w-3" />
@@ -577,42 +574,44 @@ export function AdminOrdersContent({
                                                                 <span>{t('admin.orders.fulfillmentAuto')}</span>
                                                             </span>
                                                         )}
-
                                                         {order.status === 'paid' && isManualFulfillment(order.fulfillmentMode) && (
-                                                            <span className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400 animate-pulse">
+                                                            <span className="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
                                                                 <Clock className="h-3 w-3" />
                                                                 <span>{t('admin.orders.needsDelivery')}</span>
                                                             </span>
                                                         )}
                                                     </div>
 
+                                                    {/* 下单信息：改为轻量内联文本，不再用会折行错位的胶囊 */}
                                                     {checkoutFieldValues.length > 0 && (
-                                                        <div className="flex flex-wrap gap-1 pt-0.5">
+                                                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] leading-snug">
                                                             {checkoutFieldValues.map((field) => (
                                                                 <span
                                                                     key={field.id}
-                                                                    className="inline-flex items-center gap-1 rounded bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground border border-border/40 font-normal max-w-[220px] truncate"
+                                                                    className="inline-flex min-w-0 max-w-[165px] items-baseline gap-1"
                                                                     title={`${field.label}: ${field.value}`}
                                                                 >
-                                                                    <span className="text-muted-foreground/70">{field.label}:</span>
-                                                                    <span className="font-mono text-foreground truncate">{field.value}</span>
+                                                                    <span className="shrink-0 text-muted-foreground/55">{field.label}</span>
+                                                                    <span className="truncate font-mono text-foreground/75">{field.value}</span>
                                                                 </span>
                                                             ))}
                                                         </div>
                                                     )}
+
+                                                    {/* 交付内容：仅自动发货有卡密时需要单独一行；
+                                                        「人工交付」与上方「手动发货」徽标语义重复，不再重复展示 */}
                                                     {order.cardKey ? (
-                                                        <div className="font-mono text-[11px] text-muted-foreground">
-                                                            <CopyButton text={order.cardKey} truncate maxLength={16} />
+                                                        <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                                                            <span className="shrink-0 text-muted-foreground/55">{t('admin.orders.cardKey')}</span>
+                                                            <CopyButton text={order.cardKey} compact />
                                                         </div>
-                                                    ) : isManualFulfillment(order.fulfillmentMode) ? (
-                                                        <span className="text-[10px] text-blue-600/70 dark:text-blue-400/70 font-medium">人工交付</span>
                                                     ) : null}
                                                 </div>
                                             </TableCell>
 
-                                            <TableCell className="align-top py-3.5">
+                                            <TableCell className="align-top py-2.5 whitespace-normal">
                                                 {order.username ? (
-                                                    <div className="space-y-1">
+                                                    <div className="min-w-0 space-y-1">
                                                         <div className="flex items-center gap-1.5">
                                                             <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
                                                                 {order.username[0]?.toUpperCase()}
@@ -621,15 +620,16 @@ export function AdminOrdersContent({
                                                                 href={getExternalProfileUrl(order.username, order.userId) || "#"}
                                                                 target="_blank"
                                                                 rel="noreferrer"
-                                                                className="font-medium text-xs text-foreground hover:text-primary transition-colors hover:underline truncate max-w-[110px]"
+                                                                className="truncate font-medium text-xs text-foreground hover:text-primary transition-colors hover:underline"
                                                                 title={order.username}
                                                             >
                                                                 {getDisplayUsername(order.username, order.userId)}
                                                             </a>
                                                         </div>
                                                         {order.email && (
-                                                            <div className="text-[11px] text-muted-foreground font-mono">
-                                                                <CopyButton text={order.email} truncate maxLength={16} />
+                                                            <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                                                                <span className="shrink-0 text-muted-foreground/55">{t('admin.orders.email')}</span>
+                                                                <CopyButton text={order.email} compact />
                                                             </div>
                                                         )}
                                                     </div>
@@ -642,21 +642,21 @@ export function AdminOrdersContent({
                                             </TableCell>
 
                                             {/* Payment Breakdown */}
-                                            <TableCell className="align-top py-3.5">
+                                            <TableCell className="align-top py-2.5">
                                                 <div className="space-y-0.5 font-mono">
                                                     <div className="font-semibold text-xs text-foreground tabular-nums flex items-baseline gap-1">
-                                                        <span className="text-[10px] text-muted-foreground font-sans">实付</span>
+                                                        <span className="text-[10px] text-muted-foreground font-sans">{t('admin.orders.ldcPaid')}</span>
                                                         <span>¥{paymentBreakdown.ldcAmount}</span>
                                                     </div>
                                                     {Number(paymentBreakdown.pointsAmount) > 0 && (
                                                         <div className="text-[10px] text-amber-600 dark:text-amber-400 font-medium tabular-nums flex items-baseline gap-1">
-                                                            <span className="text-[10px] text-muted-foreground font-sans">积分</span>
+                                                            <span className="text-[10px] text-muted-foreground font-sans">{t('admin.orders.pointsDeduction')}</span>
                                                             <span>-{paymentBreakdown.pointsAmount}</span>
                                                         </div>
                                                     )}
                                                     {paymentBreakdown.totalAmount !== paymentBreakdown.ldcAmount && (
                                                         <div className="text-[10px] text-muted-foreground/80 tabular-nums flex items-baseline gap-1">
-                                                            <span className="text-[10px] text-muted-foreground/60 font-sans">合计</span>
+                                                            <span className="text-[10px] text-muted-foreground/60 font-sans">{t('admin.orders.orderTotal')}</span>
                                                             <span>¥{paymentBreakdown.totalAmount}</span>
                                                         </div>
                                                     )}
@@ -664,7 +664,7 @@ export function AdminOrdersContent({
                                             </TableCell>
 
                                             {/* Status */}
-                                            <TableCell className="align-top py-3.5">
+                                            <TableCell className="align-middle py-2.5">
                                                 <Badge variant="outline" className={cn("text-xs font-medium inline-flex items-center gap-1 px-2 py-0.5", statusConfig.badgeClass)}>
                                                     {statusConfig.icon}
                                                     <span>{statusConfig.label}</span>
@@ -672,10 +672,10 @@ export function AdminOrdersContent({
                                             </TableCell>
 
                                             {/* Actions */}
-                                            <TableCell className="align-top py-3.5 text-right">
+                                            <TableCell className="align-middle py-2.5 text-right">
                                                 <div className="flex items-center justify-end gap-1">
                                                     {order.status === 'paid' && isManualFulfillment(order.fulfillmentMode) && (
-                                                        <Button asChild size="sm" className="h-7 px-2 text-xs bg-blue-600 hover:bg-blue-700 text-white gap-1 shadow-xs">
+                                                        <Button asChild size="sm" className="h-7 px-2 text-xs bg-blue-600 hover:bg-blue-700 text-white gap-1 shadow-xs shrink-0">
                                                             <Link href={`/admin/orders/${order.orderId}#fulfillment`}>
                                                                 <PackageOpen className="h-3 w-3" />
                                                                 <span>发货</span>

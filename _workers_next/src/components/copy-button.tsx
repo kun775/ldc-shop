@@ -12,6 +12,8 @@ interface CopyButtonProps {
     truncate?: boolean
     maxLength?: number
     iconOnly?: boolean
+    /** 表格单元格内联使用：无底色胶囊、小图标，单行截断 */
+    compact?: boolean
 }
 
 export function CopyButton({ text, label, truncate = false, maxLength = 20, ...props }: CopyButtonProps) {
@@ -32,6 +34,31 @@ export function CopyButton({ text, label, truncate = false, maxLength = 20, ...p
     const displayText = truncate && text.length > maxLength
         ? `${text.substring(0, maxLength)}...`
         : text
+
+    if (props.compact) {
+        return (
+            <span className="inline-flex min-w-0 items-center gap-1">
+                <code
+                    className="min-w-0 truncate font-mono text-[11px] text-foreground/75"
+                    title={text}
+                >
+                    {text}
+                </code>
+                <button
+                    type="button"
+                    onClick={handleCopy}
+                    title={t('common.copy') || '复制'}
+                    className="shrink-0 text-muted-foreground/45 transition-colors hover:text-foreground"
+                >
+                    {copied ? (
+                        <Check className="h-3 w-3 text-emerald-500" />
+                    ) : (
+                        <Copy className="h-3 w-3" />
+                    )}
+                </button>
+            </span>
+        )
+    }
 
     if (props.iconOnly) {
         return (
