@@ -544,9 +544,9 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         console.error('[Notification] Points payment notify failed:', err);
                     }
 
-                    // Send email with card keys
+                    // Send email with card keys (only for automatic fulfillment)
                     const orderEmail = resolvedDeliveryEmail;
-                    if (orderEmail) {
+                    if (orderEmail && !manualFulfillment) {
                         await sendOrderEmail({
                             to: orderEmail,
                             orderId,

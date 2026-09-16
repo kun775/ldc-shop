@@ -254,7 +254,7 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                     }
 
                     const recipientEmail = order.email?.trim()
-                    if (recipientEmail && isValidEmail(recipientEmail)) {
+                    if (!isManualFulfillment(fulfillmentMode) && recipientEmail && isValidEmail(recipientEmail)) {
                         await sendOrderEmail({
                             to: recipientEmail,
                             orderId: orderId,
@@ -412,7 +412,7 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                 } else if (!recipientEmail && profileEmail) {
                     recipientEmail = profileEmail
                 }
-                if (recipientEmail && isValidEmail(recipientEmail)) {
+                if (!isManualFulfillment(fulfillmentMode) && recipientEmail && isValidEmail(recipientEmail)) {
                     await sendOrderEmail({
                         to: recipientEmail,
                         orderId: orderId,
