@@ -1,5 +1,6 @@
 'use server'
 
+import { after } from "next/server"
 import { db } from "@/lib/db"
 import { cards, orders, refundRequests } from "@/lib/db/schema"
 import { and, eq, sql } from "drizzle-orm"
@@ -8,8 +9,9 @@ import { checkAdmin } from "@/actions/admin"
 import { createUserNotification, ensureDatabaseInitialized, recalcProductAggregates, recalcProductAggregatesForMany } from "@/lib/db/queries"
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
-import { DELIVERY_FILE_LIMITS, deleteDeliveryFiles, saveDeliveryFiles } from "@/lib/delivery-files"
+import { DELIVERY_FILE_LIMITS, deleteDeliveryFiles, listDeliveryFiles, saveDeliveryFiles } from "@/lib/delivery-files"
 import { isManualFulfillment } from "@/lib/fulfillment"
+import { isValidEmail, sendManualDeliveryEmail } from "@/lib/email"
 
 export async function markOrderPaid(orderId: string) {
   await checkAdmin()
@@ -81,6 +83,24 @@ export async function markOrderDelivered(orderId: string, formData?: FormData) {
           productName: order.productName || 'Product'
         },
         href: `/order/${order.orderId}`
+      }
+    })
+  }
+
+  if (manual && order.email && isValidEmail(order.email)) {
+    const finalNote = deliveryNote || order.deliveryNote || null
+    after(async () => {
+      try {
+        const hasAttachments = files.length > 0 || (await listDeliveryFiles(orderId)).length > 0
+        await sendManualDeliveryEmail({
+          to: order.email!,
+          orderId: order.orderId,
+          productName: order.productName || 'Product',
+          deliveryNote: finalNote,
+          hasAttachments,
+        })
+      } catch (err) {
+        console.error('[Email] Manual delivery email failed:', err)
       }
     })
   }
