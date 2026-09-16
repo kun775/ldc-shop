@@ -3,7 +3,7 @@
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { products, cards, orders, loginUsers } from "@/lib/db/schema"
-import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded, createUserNotification, ensureDatabaseInitialized, recalcProductAggregates } from "@/lib/db/queries"
+import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded, createUserNotification, ensureDatabaseInitialized, getLoginUserEmail, recalcProductAggregates } from "@/lib/db/queries"
 import { generateOrderId, generateSign } from "@/lib/crypto"
 import { eq, sql, and, or, isNull, lt, gt, inArray } from "drizzle-orm"
 import { cookies } from "next/headers"
@@ -148,7 +148,16 @@ export async function createOrder(productId: string, quantity: number = 1, email
     const isZeroPrice = finalAmount <= 0
     const fulfillmentMode = parseFulfillmentMode(product.fulfillmentMode)
     const manualFulfillment = isManualFulfillment(fulfillmentMode)
-    const contactInfo = (email || '').trim()
+    const rawContact = (email || '').trim()
+    let fallbackEmail = (user?.email || '').trim()
+    if (!fallbackEmail && user?.id) {
+        try {
+            fallbackEmail = (await getLoginUserEmail(user.id)) || ''
+        } catch {
+            // best effort
+        }
+    }
+    const contactInfo = rawContact || fallbackEmail
     const resolvedContactInfo = contactInfo || null
     const resolvedDeliveryEmail = isValidEmail(contactInfo) ? contactInfo : null
 

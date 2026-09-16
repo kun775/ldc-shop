@@ -4,7 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import { isPaymentOrder } from "@/lib/payment";
 import { notifyAdminPaymentSuccess } from "@/lib/notifications";
 import { sendOrderEmail } from "@/lib/email";
-import { recalcProductAggregates, createUserNotification } from "@/lib/db/queries";
+import { recalcProductAggregates, createUserNotification, getLoginUserEmail } from "@/lib/db/queries";
 import { pullOneCardFromApi } from "@/lib/card-api";
 import { RESERVATION_TTL_MS } from "@/lib/constants";
 import { updateTag } from "next/cache";
@@ -395,7 +395,14 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                     console.error('[Notification] Delivery notify failed:', err);
                 }
 
-                const recipientEmail = order.email?.trim()
+                let recipientEmail = order.email?.trim()
+                if (!recipientEmail && order.userId) {
+                    try {
+                        recipientEmail = (await getLoginUserEmail(order.userId)) || ''
+                    } catch {
+                        // best effort
+                    }
+                }
                 if (recipientEmail && isValidEmail(recipientEmail)) {
                     await sendOrderEmail({
                         to: recipientEmail,

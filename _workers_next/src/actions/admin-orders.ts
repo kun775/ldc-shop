@@ -6,7 +6,7 @@ import { cards, orders, refundRequests } from "@/lib/db/schema"
 import { and, eq, sql } from "drizzle-orm"
 import { revalidatePath, updateTag } from "next/cache"
 import { checkAdmin } from "@/actions/admin"
-import { createUserNotification, ensureDatabaseInitialized, recalcProductAggregates, recalcProductAggregatesForMany } from "@/lib/db/queries"
+import { createUserNotification, ensureDatabaseInitialized, getLoginUserEmail, recalcProductAggregates, recalcProductAggregatesForMany } from "@/lib/db/queries"
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
 import { DELIVERY_FILE_LIMITS, deleteDeliveryFiles, listDeliveryFiles, saveDeliveryFiles } from "@/lib/delivery-files"
@@ -87,18 +87,28 @@ export async function markOrderDelivered(orderId: string, formData?: FormData) {
     })
   }
 
-  if (manual && order.email && isValidEmail(order.email)) {
+  if (manual) {
     const finalNote = deliveryNote || order.deliveryNote || null
     after(async () => {
       try {
-        const hasAttachments = files.length > 0 || (await listDeliveryFiles(orderId)).length > 0
-        await sendManualDeliveryEmail({
-          to: order.email!,
-          orderId: order.orderId,
-          productName: order.productName || 'Product',
-          deliveryNote: finalNote,
-          hasAttachments,
-        })
+        let recipientEmail = (order.email || '').trim()
+        if (!recipientEmail && order.userId) {
+          try {
+            recipientEmail = (await getLoginUserEmail(order.userId)) || ''
+          } catch {
+            // best effort
+          }
+        }
+        if (recipientEmail && isValidEmail(recipientEmail)) {
+          const hasAttachments = files.length > 0 || (await listDeliveryFiles(orderId)).length > 0
+          await sendManualDeliveryEmail({
+            to: recipientEmail,
+            orderId: order.orderId,
+            productName: order.productName || 'Product',
+            deliveryNote: finalNote,
+            hasAttachments,
+          })
+        }
       } catch (err) {
         console.error('[Email] Manual delivery email failed:', err)
       }
