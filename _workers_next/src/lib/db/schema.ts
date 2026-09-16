@@ -67,6 +67,8 @@ export const orders = sqliteTable('orders', {
     checkoutFieldValues: text('checkout_field_values'),
     fulfillmentMode: text('fulfillment_mode').default('auto'),
     deliveryNote: text('delivery_note'),
+    fulfillmentClaimId: text('fulfillment_claim_id'),
+    fulfillmentClaimedAt: integer('fulfillment_claimed_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
 });
 
@@ -110,6 +112,8 @@ export const userPointLedger = sqliteTable('user_point_ledger', {
     operatorUsername: text('operator_username'),
     metadata: text('metadata'),
     status: text('status').default('completed').notNull(),
+    claimId: text('claim_id'),
+    claimedAt: integer('claimed_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
 });
 

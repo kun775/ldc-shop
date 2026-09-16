@@ -2,6 +2,7 @@ import { db } from "@/lib/db"
 import { cards, settings } from "@/lib/db/schema"
 import { setSetting } from "@/lib/db/queries"
 import { inArray } from "drizzle-orm"
+import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 
 export interface ProductCardApiConfig {
     enabled: boolean
@@ -126,11 +127,11 @@ export async function pullOneCardFromApi(productId: string): Promise<{
         headers.Authorization = `Bearer ${config.token}`
     }
 
-    const response = await fetch(requestUrl, {
+    const response = await fetchWithTimeout(requestUrl, {
         method: "GET",
         headers,
         cache: "no-store",
-    })
+    }, 8_000)
 
     if (!response.ok) {
         return { ok: false, error: `api_request_failed_${response.status}` }

@@ -161,6 +161,8 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                     <div className="relative w-full max-w-sm">
                         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <Input
+                            type="search"
+                            aria-label="搜索商品名称、分类或规格"
                             placeholder="搜索商品名称、分类或规格..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
@@ -237,22 +239,26 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                                     <div className="flex flex-col gap-1">
                                         <Button
                                             variant="ghost"
-                                        size="icon"
-                                        className="h-6 w-6"
-                                        onClick={() => handleReorder(product.id, 'up')}
-                                        disabled={busy || ((safePage - 1) * pageSize + idx) === 0}
-                                    >
-                                        <ArrowUp className="h-3 w-3" />
-                                    </Button>
-                                    <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-6 w-6"
-                                        onClick={() => handleReorder(product.id, 'down')}
-                                        disabled={busy || idx === products.length - 1}
-                                    >
-                                        <ArrowDown className="h-3 w-3" />
-                                    </Button>
+                                            size="icon"
+                                            className="h-6 w-6"
+                                            aria-label="上移"
+                                            title="上移"
+                                            onClick={() => handleReorder(product.id, 'up')}
+                                            disabled={busy || ((safePage - 1) * pageSize + idx) === 0}
+                                        >
+                                            <ArrowUp className="h-3 w-3" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6"
+                                            aria-label="下移"
+                                            title="下移"
+                                            onClick={() => handleReorder(product.id, 'down')}
+                                            disabled={busy || idx === products.length - 1}
+                                        >
+                                            <ArrowDown className="h-3 w-3" />
+                                        </Button>
                                 </div>
                                 </TableCell>
                                 <TableCell className="font-medium">

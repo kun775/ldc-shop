@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import en from '@/locales/en.json'
 import zh from '@/locales/zh.json'
-import { isLocale, type Locale } from './shared'
+import { type Locale } from './shared'
 import { resolveCurrencyUnit } from '@/lib/currency-unit'
 
 type Translations = typeof en
@@ -18,8 +18,12 @@ interface I18nContextType {
 
 const I18nContext = createContext<I18nContextType | null>(null)
 
-function getNestedValue(obj: any, path: string): string | null {
-    const value = path.split('.').reduce((acc, part) => acc?.[part], obj)
+function getNestedValue(obj: unknown, path: string): string | null {
+    let value: unknown = obj
+    for (const part of path.split('.')) {
+        if (!value || typeof value !== 'object') return null
+        value = (value as Record<string, unknown>)[part]
+    }
     return typeof value === 'string' ? value : null
 }
 
@@ -42,16 +46,10 @@ export function I18nProvider({
     const [locale, setLocaleState] = useState<Locale>(initialLocale)
 
     useEffect(() => {
-        const saved = localStorage.getItem('ldc-locale')
-        const resolved = isLocale(saved) ? saved : initialLocale
-
-        if (resolved !== locale) {
-            setLocaleState(resolved)
-            return
-        }
-        localStorage.setItem('ldc-locale', resolved)
-        document.cookie = `ldc-locale=${resolved}; path=/; max-age=31536000`
-    }, [initialLocale, locale])
+        localStorage.setItem('ldc-locale', locale)
+        document.cookie = `ldc-locale=${locale}; path=/; max-age=31536000`
+        document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
+    }, [locale])
 
     const setLocale = (newLocale: Locale) => {
         setLocaleState(newLocale)

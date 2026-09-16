@@ -7,14 +7,14 @@ import { RegistryPrompt } from "@/components/admin/registry-prompt"
 import { isRegistryEnabled } from "@/lib/registry"
 import { APP_VERSION } from "@/lib/version"
 import { Suspense } from "react"
+import { isAdminIdentity } from "@/lib/admin-auth"
 
 async function AdminLayoutContent({ children }: { children: React.ReactNode }) {
     const session = await auth()
     const user = session?.user
 
     // Admin Check - redirect to home if not admin
-    const adminUsers = process.env.ADMIN_USERS?.toLowerCase().split(',') || []
-    if (!user || !user.username || !adminUsers.includes(user.username.toLowerCase())) {
+    if (!isAdminIdentity(user) || !user?.username) {
         redirect("/")
     }
 

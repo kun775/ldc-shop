@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { buildDefaultLogoDataUrl } from "@/lib/default-logo"
 import { isLikelyLinuxDoAvatarUrl } from "@/lib/shop-logo"
 import { cn } from "@/lib/utils"
@@ -21,8 +21,6 @@ function getOrigin(url: string) {
 }
 
 export function ShopLogo({ name, url, logo, updatedAt }: ShopLogoProps) {
-    const [error, setError] = useState(false)
-    const [index, setIndex] = useState(0)
     const candidates = useMemo(() => {
         const list: string[] = []
         const trimmedLogo = (logo || "").trim()
@@ -40,11 +38,12 @@ export function ShopLogo({ name, url, logo, updatedAt }: ShopLogoProps) {
         return Array.from(new Set(list))
     }, [logo, name, updatedAt, url])
 
-    useEffect(() => {
-        setError(false)
-        setIndex(0)
-    }, [candidates.join("|")])
-
+    const candidateKey = candidates.join("|")
+    const [imageState, setImageState] = useState(() => ({ key: candidateKey, index: 0, error: false }))
+    const activeState = imageState.key === candidateKey
+        ? imageState
+        : { key: candidateKey, index: 0, error: false }
+    const { index, error } = activeState
     const src = candidates[index] || ""
 
     return (
@@ -65,9 +64,9 @@ export function ShopLogo({ name, url, logo, updatedAt }: ShopLogoProps) {
                     referrerPolicy="no-referrer"
                     onError={() => {
                         if (index + 1 < candidates.length) {
-                            setIndex((current) => current + 1)
+                            setImageState({ key: candidateKey, index: index + 1, error: false })
                         } else {
-                            setError(true)
+                            setImageState({ key: candidateKey, index, error: true })
                         }
                     }}
                 />

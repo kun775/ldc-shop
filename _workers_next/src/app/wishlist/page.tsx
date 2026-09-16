@@ -5,6 +5,7 @@ import { getSetting, getWishlistItems } from "@/lib/db/queries"
 import { WishlistSection } from "@/components/wishlist-section"
 import { Button } from "@/components/ui/button"
 import { unstable_noStore } from "next/cache"
+import { isAdminIdentity } from "@/lib/admin-auth"
 
 export default async function WishlistPage() {
     unstable_noStore()
@@ -21,8 +22,7 @@ export default async function WishlistPage() {
         ? await getWishlistItems(session?.user?.id || null, 30).catch(() => [])
         : []
 
-    const adminUsers = process.env.ADMIN_USERS?.toLowerCase().split(',') || []
-    const isAdmin = !!(session?.user?.username && adminUsers.includes(session.user.username.toLowerCase()))
+    const isAdmin = isAdminIdentity(session?.user)
 
     return (
         <main className="container py-8 md:py-12 space-y-6">

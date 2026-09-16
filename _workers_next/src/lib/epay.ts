@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
+
 export async function queryOrderStatus(orderId: string) {
     const merchantId = process.env.MERCHANT_ID
     const merchantKey = process.env.MERCHANT_KEY
@@ -27,7 +29,10 @@ export async function queryOrderStatus(orderId: string) {
     })
 
     try {
-        const res = await fetch(`${apiUrl}?${query.toString()}`)
+        const res = await fetchWithTimeout(`${apiUrl}?${query.toString()}`, {
+            headers: { Accept: 'application/json' },
+        }, 8_000)
+        if (!res.ok) throw new Error(`Payment query failed with HTTP ${res.status}`)
         const data = await res.json()
 
         if (data.code === 1) {

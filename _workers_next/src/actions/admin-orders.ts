@@ -164,10 +164,21 @@ export async function cancelOrder(orderId: string) {
   // 1. Refund points if used
   const order = await db.query.orders.findFirst({
     where: eq(orders.orderId, orderId),
-    columns: { userId: true, pointsUsed: true, productId: true }
+    columns: { userId: true, pointsUsed: true, productId: true, status: true }
   })
+  if (!order) throw new Error("Order not found")
+  if (order.status === 'processing') throw new Error("Order fulfillment is in progress")
 
-  if (order?.userId && order.pointsUsed && order.pointsUsed > 0) {
+  const cancelled = await db.update(orders)
+    .set({ status: 'cancelled', fulfillmentClaimId: null, fulfillmentClaimedAt: null })
+    .where(and(
+      eq(orders.orderId, orderId),
+      sql`${orders.status} NOT IN ('paid', 'delivered', 'processing', 'refunded')`
+    ))
+    .returning({ orderId: orders.orderId })
+  if (!cancelled.length) throw new Error("Order cannot be cancelled")
+
+  if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
     await ensurePointLedgerUserRecord({
       userId: order.userId,
     })
@@ -185,7 +196,6 @@ export async function cancelOrder(orderId: string) {
     })
   }
 
-  await db.update(orders).set({ status: 'cancelled' }).where(eq(orders.orderId, orderId))
   try {
     await db.run(sql.raw(`ALTER TABLE cards ADD COLUMN reserved_order_id TEXT`));
   } catch { /* duplicate column */ }

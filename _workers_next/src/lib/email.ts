@@ -1,6 +1,7 @@
 import { db } from "./db"
 import { settings } from "./db/schema"
 import { inArray } from "drizzle-orm"
+import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 
 async function getSettingsUncached(keys: string[]): Promise<Record<string, string>> {
     try {
@@ -219,7 +220,7 @@ export async function sendManualDeliveryEmail(params: ManualDeliveryEmailParams)
         const baseUrl = getAppBaseUrl()
         const orderUrl = baseUrl ? `${baseUrl}/order/${params.orderId}` : ''
 
-        const response = await fetch('https://api.resend.com/emails', {
+        const response = await fetchWithTimeout('https://api.resend.com/emails', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -231,7 +232,7 @@ export async function sendManualDeliveryEmail(params: ManualDeliveryEmailParams)
                 subject: template.subject(params.orderId),
                 html: template.body({ ...params, orderUrl })
             })
-        })
+        }, 10_000)
 
         if (!response.ok) {
             const error = await response.text()
@@ -359,7 +360,7 @@ export async function sendOrderEmail(params: OrderEmailParams) {
         const lang = params.language || settings.language || 'zh'
         const template = emailTemplates[lang as keyof typeof emailTemplates] || emailTemplates.zh
 
-        const response = await fetch('https://api.resend.com/emails', {
+        const response = await fetchWithTimeout('https://api.resend.com/emails', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -371,7 +372,7 @@ export async function sendOrderEmail(params: OrderEmailParams) {
                 subject: template.subject(params.orderId),
                 html: template.body(params)
             })
-        })
+        }, 10_000)
 
         if (!response.ok) {
             const error = await response.text()
@@ -396,7 +397,7 @@ export async function testResendEmail(to: string) {
     }
 
     try {
-        const response = await fetch('https://api.resend.com/emails', {
+        const response = await fetchWithTimeout('https://api.resend.com/emails', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -414,7 +415,7 @@ export async function testResendEmail(to: string) {
                     </div>
                 `
             })
-        })
+        }, 10_000)
 
         if (!response.ok) {
             const error = await response.text()

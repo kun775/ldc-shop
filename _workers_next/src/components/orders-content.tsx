@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from "react"
+import { useState } from "react"
 import { useI18n } from "@/lib/i18n/context"
 import Link from "next/link"
 import { Card } from "@/components/ui/card"
@@ -60,18 +60,16 @@ export function OrdersContent({ orders, productVariantLabels = {}, productImages
         return variant ? `${base} · ${variant}` : base
     }
 
-    const filtered = useMemo(() => {
-        const q = query.trim().toLowerCase()
-        return orders.filter(o => {
-            const st = o.status || 'pending'
-            const statusOk = status === 'all' ? true : st === status
-            if (!statusOk) return false
-            if (!q) return true
-            const displayName = getOrderName(o)
-            const hay = [o.orderId, o.productName, displayName].join(' ').toLowerCase()
-            return hay.includes(q)
-        })
-    }, [orders, query, status, productVariantLabels, t])
+    const q = query.trim().toLowerCase()
+    const filtered = orders.filter(o => {
+        const st = o.status || 'pending'
+        const statusOk = status === 'all' ? true : st === status
+        if (!statusOk) return false
+        if (!q) return true
+        const displayName = getOrderName(o)
+        const hay = [o.orderId, o.productName, displayName].join(' ').toLowerCase()
+        return hay.includes(q)
+    })
 
     return (
         <main className="container py-12">
@@ -83,6 +81,8 @@ export function OrdersContent({ orders, productVariantLabels = {}, productImages
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-6">
                 <div className="relative md:w-[360px]">
                     <Input
+                        type="search"
+                        aria-label={t('orders.searchPlaceholder')}
                         placeholder={t('orders.searchPlaceholder')}
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}

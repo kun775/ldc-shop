@@ -323,6 +323,8 @@ export function AdminOrdersContent({
                         <div className="relative w-[220px] sm:w-[280px]">
                             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
                             <Input
+                                type="search"
+                                aria-label={t('admin.orders.searchPlaceholder')}
                                 value={queryValue}
                                 onChange={(e) => setQueryValue(e.target.value)}
                                 placeholder={t('admin.orders.searchPlaceholder')}
@@ -338,7 +340,9 @@ export function AdminOrdersContent({
                                         setQueryValue("")
                                         applyFilters({ q: "", page: 1 })
                                     }}
-                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground"
+                                    aria-label={t('common.clear')}
+                                    title={t('common.clear')}
+                                    className="absolute right-0 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-muted hover:text-foreground"
                                 >
                                     <XCircle className="h-3.5 w-3.5" />
                                 </button>

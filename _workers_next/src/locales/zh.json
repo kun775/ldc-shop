@@ -23,6 +23,10 @@
         "confirm": "确认",
         "save": "保存",
         "delete": "删除",
+        "clear": "清空",
+        "confirmDelete": "确认删除",
+        "deleteConfirmDesc": "确认要删除此项吗？操作后不可撤销。",
+        "deleteSuccess": "删除成功",
         "edit": "编辑",
         "add": "添加",
         "back": "返回",
@@ -683,6 +687,8 @@
             "markPaid": "标记已支付",
             "markDelivered": "标记已发货",
             "cancel": "取消订单",
+            "cancelOrder": "取消订单",
+            "batchDelete": "批量删除订单",
             "delete": "删除订单",
             "confirmDelete": "确认删除此订单？该操作不可恢复。",
             "exportCsv": "导出 CSV",
@@ -927,6 +933,7 @@
             "newBody": "你有 {{count}} 条未读通知。"
         },
         "messages": {
+            "center": "消息中心",
             "title": "联系管理员",
             "compose": "写消息",
             "noTitle": "（无标题）",
@@ -1079,5 +1086,8 @@
         "disabled": "心愿单已关闭",
         "blocked": "你的账号已被限制",
         "anonymous": "匿名"
+    },
+    "points": {
+        "myPoints": "账户积分"
     }
 }

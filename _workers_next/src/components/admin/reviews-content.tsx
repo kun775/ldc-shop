@@ -130,6 +130,8 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
       toolbar={
         <div className="flex items-center justify-between gap-4">
           <Input
+            type="search"
+            aria-label={t('admin.reviews.searchPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('admin.reviews.searchPlaceholder')}

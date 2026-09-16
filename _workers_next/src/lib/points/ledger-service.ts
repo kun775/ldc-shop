@@ -18,6 +18,8 @@ export interface PointLedgerRecord {
     metadata: string | null
     balanceAfter: number | null
     status: "pending" | "completed"
+    claimId: string | null
+    claimedAt: Date | null
     createdAt: Date
 }
 
@@ -33,17 +35,17 @@ export interface PointLedgerRepository {
         sourceId?: string | null
         reason: string
         metadata?: string | null
-    }): Promise<{ claimed: boolean; record: PointLedgerRecord | null }>
+    }): Promise<{ claimed: boolean; claimId: string | null; record: PointLedgerRecord | null }>
+    finalizeAutomaticEvent(
+        id: number,
+        claimId: string,
+    ): Promise<PointLedgerRecord>
+    rollbackAutomaticEvent(id: number, claimId: string): Promise<void>
     applyBalanceDelta(
         userId: string,
         delta: number,
     ): Promise<{ ok: true; balanceAfter: number } | { ok: false }>
-    finalizeAutomaticEvent(
-        id: number,
-        patch: { balanceAfter: number },
-    ): Promise<PointLedgerRecord>
-    rollbackAutomaticEvent(id: number): Promise<void>
-    insertManualAdjustment(input: {
+    claimManualAdjustment(input: {
         userId: string
         delta: number
         businessKey: string
@@ -52,7 +54,7 @@ export interface PointLedgerRepository {
         operatorUserId: string | null
         operatorUsername: string | null
         metadata?: string | null
-    }): Promise<PointLedgerRecord>
+    }): Promise<{ claimed: boolean; claimId: string | null; record: PointLedgerRecord | null }>
 }
 
 /**
@@ -68,6 +70,27 @@ export interface PointLedgerRepository {
  *   - 更新时间: 2026-04-18
  *   - 更新内容: 初始化自动积分事件统一处理逻辑。
  */
+function assertMatchingAutomaticEvent(
+    record: PointLedgerRecord,
+    input: {
+        userId: string
+        eventType: PointLedgerEventType
+        delta: number
+        sourceType: string
+        sourceId?: string | null
+    },
+) {
+    if (
+        record.userId !== input.userId ||
+        record.eventType !== input.eventType ||
+        record.delta !== input.delta ||
+        record.sourceType !== input.sourceType ||
+        record.sourceId !== (input.sourceId ?? null)
+    ) {
+        throw new Error("POINT_LEDGER_BUSINESS_KEY_CONFLICT")
+    }
+}
+
 export async function applyAutomaticPointEvent(
     repo: PointLedgerRepository,
     input: {
@@ -83,26 +106,28 @@ export async function applyAutomaticPointEvent(
 ) {
     const existing = await repo.findByBusinessKey(input.businessKey)
     if (existing) {
-        return existing
+        assertMatchingAutomaticEvent(existing, input)
+        if (existing.status === "completed") return existing
     }
 
     const claimed = await repo.claimAutomaticEvent(input)
-    if (!claimed.claimed || !claimed.record) {
-        if (!claimed.record) {
-            throw new Error("POINT_LEDGER_CLAIM_FAILED")
-        }
+    if (!claimed.record) {
+        throw new Error("POINT_LEDGER_CLAIM_FAILED")
+    }
+    assertMatchingAutomaticEvent(claimed.record, input)
+    if (claimed.record.status === "completed") {
         return claimed.record
     }
-
-    const balanceResult = await repo.applyBalanceDelta(input.userId, input.delta)
-    if (!balanceResult.ok) {
-        await repo.rollbackAutomaticEvent(claimed.record.id)
-        throw new Error("POINT_BALANCE_NEGATIVE")
+    if (!claimed.claimed || !claimed.claimId) {
+        throw new Error("POINT_LEDGER_EVENT_IN_PROGRESS")
     }
 
-    return repo.finalizeAutomaticEvent(claimed.record.id, {
-        balanceAfter: balanceResult.balanceAfter,
-    })
+    try {
+        return await repo.finalizeAutomaticEvent(claimed.record.id, claimed.claimId)
+    } catch (error) {
+        await repo.rollbackAutomaticEvent(claimed.record.id, claimed.claimId)
+        throw error
+    }
 }
 
 /**
@@ -140,12 +165,7 @@ export async function applyAdminPointAdjustment(
     }
 
     const delta = input.direction === "increase" ? input.amount : -input.amount
-    const currentBalance = await repo.getCurrentBalance(input.userId)
-    if (currentBalance + delta < 0) {
-        throw new Error("POINT_BALANCE_NEGATIVE")
-    }
-
-    return repo.insertManualAdjustment({
+    const claimed = await repo.claimManualAdjustment({
         userId: input.userId,
         delta,
         businessKey: input.businessKey,
@@ -153,4 +173,17 @@ export async function applyAdminPointAdjustment(
         operatorUserId: input.operatorUserId,
         operatorUsername: input.operatorUsername,
     })
+    if (!claimed.record) throw new Error("POINT_LEDGER_CLAIM_FAILED")
+    if (claimed.record.userId !== input.userId || claimed.record.delta !== delta || claimed.record.eventType !== "admin_adjust") {
+        throw new Error("POINT_LEDGER_BUSINESS_KEY_CONFLICT")
+    }
+    if (claimed.record.status === "completed") return claimed.record
+    if (!claimed.claimed || !claimed.claimId) throw new Error("POINT_LEDGER_EVENT_IN_PROGRESS")
+
+    try {
+        return await repo.finalizeAutomaticEvent(claimed.record.id, claimed.claimId)
+    } catch (error) {
+        await repo.rollbackAutomaticEvent(claimed.record.id, claimed.claimId)
+        throw error
+    }
 }

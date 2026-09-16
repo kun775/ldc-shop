@@ -174,8 +174,6 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
         if (order.status !== 'pending') return
 
         let mounted = true
-        let intervalId: NodeJS.Timeout
-
         const check = async () => {
             try {
                 const result = await checkOrderStatus(order.orderId)
@@ -188,18 +186,16 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
             }
         }
 
-        // Check immediately
-        check()
-
-        // Poll every 3s for 1 minute (20 times)
+        // Check immediately, then poll every 3s for 1 minute (20 times).
+        void check()
         let attempts = 0
-        intervalId = setInterval(() => {
+        const intervalId = setInterval(() => {
             if (attempts > 20) {
                 clearInterval(intervalId)
                 return
             }
             attempts++
-            check()
+            void check()
         }, 3000)
 
         return () => {

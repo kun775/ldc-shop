@@ -5,13 +5,10 @@ const nextConfig: NextConfig = {
   // Cache Components are unreliable on Workers (dummy cache + setTimeout warnings)
   cacheComponents: false,
   images: {
-    remotePatterns: [
-      { protocol: 'https', hostname: '**' },
-      { protocol: 'http', hostname: '**' },
-    ],
-    formats: ['image/avif', 'image/webp'],
-    dangerouslyAllowSVG: true,
-    contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
+    // Product URLs are admin-configurable; render them directly instead of using the
+    // server-side optimizer as an unrestricted fetch proxy.
+    unoptimized: true,
+    dangerouslyAllowSVG: false,
   },
   async rewrites() {
     return [

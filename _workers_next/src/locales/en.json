@@ -23,6 +23,10 @@
         "confirm": "Confirm",
         "save": "Save",
         "delete": "Delete",
+        "clear": "Clear",
+        "confirmDelete": "Confirm Delete",
+        "deleteConfirmDesc": "Are you sure you want to delete this item? This action cannot be undone.",
+        "deleteSuccess": "Deleted successfully",
         "edit": "Edit",
         "add": "Add",
         "back": "Back",
@@ -683,6 +687,8 @@
             "markPaid": "Mark Paid",
             "markDelivered": "Mark Delivered",
             "cancel": "Cancel",
+            "cancelOrder": "Cancel Order",
+            "batchDelete": "Batch Delete Orders",
             "delete": "Delete",
             "confirmDelete": "Delete this order? This is irreversible.",
             "exportCsv": "Export CSV",
@@ -927,6 +933,7 @@
             "newBody": "You have {{count}} unread notification(s)."
         },
         "messages": {
+            "center": "Message Center",
             "title": "Contact Admin",
             "compose": "Compose",
             "noTitle": "(No title)",
@@ -1079,5 +1086,8 @@
         "disabled": "Wishlist is disabled",
         "blocked": "Your account is restricted",
         "anonymous": "Anonymous"
+    },
+    "points": {
+        "myPoints": "My Points"
     }
 }

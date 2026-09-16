@@ -8,6 +8,7 @@ import { cookies } from "next/headers"
 import { PAYMENT_PRODUCT_ID, PAYMENT_PRODUCT_NAME } from "@/lib/payment"
 import { withOrderColumnFallback } from "@/lib/db/queries"
 import { getAdminUsernames } from "@/lib/admin-auth"
+import { createOrderAccessToken, ORDER_ACCESS_COOKIE, ORDER_ACCESS_TTL_SECONDS } from "@/lib/order-access"
 
 function normalizeAmount(input: number | string) {
     const parsed = Number.parseFloat(String(input))
@@ -37,6 +38,8 @@ export async function createPaymentOrder(amountInput: number | string, payeeInpu
 
     const orderId = generateOrderId()
     const amount = normalized.toFixed(2)
+    // Fail before inserting an order if the server cannot issue the guest capability.
+    const orderAccessToken = createOrderAccessToken(orderId)
 
     await withOrderColumnFallback(async () => {
         await db.insert(orders).values({
@@ -55,7 +58,13 @@ export async function createPaymentOrder(amountInput: number | string, payeeInpu
     })
 
     const cookieStore = await cookies()
-    cookieStore.set('ldc_pending_order', orderId, { secure: true, path: '/', sameSite: 'lax' })
+    cookieStore.set(ORDER_ACCESS_COOKIE, orderAccessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        path: '/',
+        sameSite: 'lax',
+        maxAge: ORDER_ACCESS_TTL_SECONDS,
+    })
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
     const payParams: Record<string, any> = {

@@ -101,7 +101,14 @@ export function AdminRefundsContent({ requests }: { requests: any[] }) {
       header={<h1 className="text-2xl font-bold tracking-tight">{t('admin.refunds.title')}</h1>}
       toolbar={
         <div className="flex items-center justify-between gap-4">
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('admin.refunds.searchPlaceholder')} className="h-9 text-xs md:max-w-sm" />
+          <Input
+            type="search"
+            aria-label={t('admin.refunds.searchPlaceholder')}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('admin.refunds.searchPlaceholder')}
+            className="h-9 text-xs md:max-w-sm"
+          />
           <div className="text-xs text-muted-foreground whitespace-nowrap">
             共 {filtered.length} 条申请
           </div>

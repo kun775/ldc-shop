@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
+import { ORDER_ACCESS_COOKIE, readOrderIdFromAccessToken } from "@/lib/order-access"
 
 function normalizeOrderId(input: string | null): string | null {
   if (!input) return null
@@ -22,7 +23,9 @@ export async function GET(request: Request) {
   let orderId = queryOrder
   if (!orderId) {
     const cookieStore = await cookies()
-    orderId = normalizeOrderId(cookieStore.get("ldc_pending_order")?.value ?? null)
+    orderId = normalizeOrderId(
+      readOrderIdFromAccessToken(cookieStore.get(ORDER_ACCESS_COOKIE)?.value)
+    )
   }
 
   const destination = orderId ? `/order/${orderId}` : "/orders"

@@ -17,6 +17,7 @@ import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib
 import { resolveCheckoutPointUsage } from "@/lib/points/product-point-discount"
 import { parseCheckoutFieldConfigs, validateCheckoutFieldValues } from "@/lib/checkout-fields"
 import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
+import { createOrderAccessToken, ORDER_ACCESS_COOKIE, ORDER_ACCESS_TTL_SECONDS } from "@/lib/order-access"
 
 const MAX_ORDER_QUANTITY = 10000
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -236,6 +237,8 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
     // 4. Create Order + Reserve Stock (1 minute) OR Deliver Immediately
     const orderId = generateOrderId()
+    // Fail before any database write if the server cannot issue the guest capability.
+    const orderAccessToken = createOrderAccessToken(orderId)
 
     const reserveAndCreate = async () => {
         const { queryOrderStatus } = await import("@/lib/epay")
@@ -618,6 +621,15 @@ export async function createOrder(productId: string, quantity: number = 1, email
         throw error;
     }
 
+    const cookieStore = await cookies()
+    cookieStore.set(ORDER_ACCESS_COOKIE, orderAccessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        path: '/',
+        sameSite: 'lax',
+        maxAge: ORDER_ACCESS_TTL_SECONDS,
+    })
+
     if (isZeroPrice) {
         return {
             success: true,
@@ -625,9 +637,6 @@ export async function createOrder(productId: string, quantity: number = 1, email
             isZeroPrice: true
         }
     }
-
-    const cookieStore = await cookies()
-    cookieStore.set('ldc_pending_order', orderId, { secure: true, path: '/', sameSite: 'lax' })
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
     const payParams: Record<string, any> = {

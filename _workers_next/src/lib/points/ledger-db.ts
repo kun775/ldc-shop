@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto"
 import { db } from "@/lib/db"
 import { loginUsers, orders, products, settings, userPointLedger } from "@/lib/db/schema"
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
@@ -46,7 +47,8 @@ let pointLedgerLoginUsersSchemaReady = false
 const pointLedgerSchemaState = createAsyncOnceState()
 const pointLedgerLoginUsersState = createAsyncOnceState()
 const persistedPointLedgerSchemaVersionState = createAsyncOnceState()
-const POINT_LEDGER_SCHEMA_VERSION = 1
+const POINT_LEDGER_SCHEMA_VERSION = 2
+const POINT_LEDGER_CLAIM_TTL_MS = 5 * 60 * 1000
 
 const TIMESTAMP_MS_THRESHOLD = 1_000_000_000_000
 let persistedPointLedgerSchemaVersion: number | null = null
@@ -217,9 +219,13 @@ export async function ensureUserPointLedgerSchema() {
                 operator_username TEXT,
                 metadata TEXT,
                 status TEXT NOT NULL DEFAULT 'completed',
+                claim_id TEXT,
+                claimed_at INTEGER,
                 created_at INTEGER DEFAULT (unixepoch() * 1000)
             )
         `)
+        await safeAddColumn('user_point_ledger', 'claim_id', 'TEXT')
+        await safeAddColumn('user_point_ledger', 'claimed_at', 'INTEGER')
         await db.run(sql`
             CREATE UNIQUE INDEX IF NOT EXISTS user_point_ledger_business_key_uq
             ON user_point_ledger (business_key)
@@ -227,6 +233,20 @@ export async function ensureUserPointLedgerSchema() {
         await db.run(sql`
             CREATE INDEX IF NOT EXISTS user_point_ledger_user_created_idx
             ON user_point_ledger (user_id, created_at DESC, id DESC)
+        `)
+        await db.run(sql`
+            CREATE TRIGGER IF NOT EXISTS user_point_ledger_apply_balance
+            AFTER UPDATE OF status ON user_point_ledger
+            WHEN OLD.status = 'pending' AND NEW.status = 'completed'
+            BEGIN
+                UPDATE login_users
+                SET points = points + NEW.delta
+                WHERE user_id = NEW.user_id
+                  AND points + NEW.delta >= 0;
+                SELECT CASE
+                    WHEN changes() = 0 THEN RAISE(ABORT, 'POINT_BALANCE_NEGATIVE')
+                END;
+            END
         `)
 
         await setSettingValue("point_ledger_schema_version", String(POINT_LEDGER_SCHEMA_VERSION))
@@ -287,6 +307,10 @@ function mapLedgerRow(row: any): PointLedgerRecord {
         metadata: row.metadata ?? null,
         balanceAfter: row.balanceAfter === null || row.balanceAfter === undefined ? null : Number(row.balanceAfter),
         status: row.status === "pending" ? "pending" : "completed",
+        claimId: row.claimId ?? null,
+        claimedAt: row.claimedAt
+            ? (row.claimedAt instanceof Date ? row.claimedAt : new Date(row.claimedAt))
+            : null,
         createdAt: row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt),
     }
 }
@@ -331,6 +355,9 @@ function createPointLedgerRepository(identity: UserIdentity): PointLedgerReposit
         async claimAutomaticEvent(input) {
             await ensureReady()
 
+            const claimId = randomUUID()
+            const now = new Date()
+            const staleBefore = new Date(now.getTime() - POINT_LEDGER_CLAIM_TTL_MS)
             const inserted = await db.insert(userPointLedger).values({
                 userId: input.userId,
                 eventType: input.eventType,
@@ -344,11 +371,26 @@ function createPointLedgerRepository(identity: UserIdentity): PointLedgerReposit
                 operatorUsername: null,
                 metadata: input.metadata ?? null,
                 status: "pending",
-                createdAt: new Date(),
+                claimId,
+                claimedAt: now,
+                createdAt: now,
             }).onConflictDoNothing().returning({ id: userPointLedger.id })
 
+            let claimed = inserted.length > 0
+            if (!claimed) {
+                const reclaimed = await db.update(userPointLedger)
+                    .set({ claimId, claimedAt: now })
+                    .where(and(
+                        eq(userPointLedger.businessKey, input.businessKey),
+                        eq(userPointLedger.status, "pending"),
+                        sql`(${userPointLedger.claimedAt} IS NULL OR ${userPointLedger.claimedAt} < ${staleBefore.getTime()})`,
+                    ))
+                    .returning({ id: userPointLedger.id })
+                claimed = reclaimed.length > 0
+            }
+
             const record = await this.findByBusinessKey(input.businessKey)
-            return { claimed: inserted.length > 0, record }
+            return { claimed, claimId: claimed ? claimId : null, record }
         },
         async applyBalanceDelta(userId, delta) {
             await ensureReady()
@@ -370,70 +412,81 @@ function createPointLedgerRepository(identity: UserIdentity): PointLedgerReposit
                 balanceAfter: Number(updated[0].balanceAfter || 0),
             }
         },
-        async finalizeAutomaticEvent(id, patch) {
+        async finalizeAutomaticEvent(id, claimId) {
             await ensureReady()
 
             const rows = await db.update(userPointLedger)
                 .set({
-                    balanceAfter: patch.balanceAfter,
+                    balanceAfter: sql`(
+                        SELECT points + ${userPointLedger.delta}
+                        FROM login_users
+                        WHERE user_id = ${userPointLedger.userId}
+                    )`,
                     status: "completed",
+                    claimId: null,
+                    claimedAt: null,
                 })
-                .where(eq(userPointLedger.id, id))
+                .where(and(
+                    eq(userPointLedger.id, id),
+                    eq(userPointLedger.status, "pending"),
+                    eq(userPointLedger.claimId, claimId),
+                ))
                 .returning()
 
             if (!rows.length) {
-                throw new Error("POINT_LEDGER_NOT_FOUND")
+                throw new Error("POINT_LEDGER_CLAIM_LOST")
             }
 
             return mapLedgerRow(rows[0])
         },
-        async rollbackAutomaticEvent(id) {
+        async rollbackAutomaticEvent(id, claimId) {
             await ensureReady()
             await db.delete(userPointLedger)
                 .where(and(
                     eq(userPointLedger.id, id),
                     eq(userPointLedger.status, "pending"),
+                    eq(userPointLedger.claimId, claimId),
                 ))
         },
-        async insertManualAdjustment(input) {
+        async claimManualAdjustment(input) {
             await ensureReady()
 
-            const existing = await this.findByBusinessKey(input.businessKey)
-            if (existing) {
-                return existing
+            const claimId = randomUUID()
+            const now = new Date()
+            const staleBefore = new Date(now.getTime() - POINT_LEDGER_CLAIM_TTL_MS)
+            const inserted = await db.insert(userPointLedger).values({
+                userId: input.userId,
+                eventType: "admin_adjust",
+                delta: input.delta,
+                balanceAfter: null,
+                businessKey: input.businessKey,
+                sourceType: "admin",
+                sourceId: input.sourceId ?? null,
+                reason: input.reason,
+                operatorUserId: input.operatorUserId,
+                operatorUsername: input.operatorUsername,
+                metadata: input.metadata ?? null,
+                status: "pending",
+                claimId,
+                claimedAt: now,
+                createdAt: now,
+            }).onConflictDoNothing().returning({ id: userPointLedger.id })
+
+            let claimed = inserted.length > 0
+            if (!claimed) {
+                const reclaimed = await db.update(userPointLedger)
+                    .set({ claimId, claimedAt: now })
+                    .where(and(
+                        eq(userPointLedger.businessKey, input.businessKey),
+                        eq(userPointLedger.status, "pending"),
+                        sql`(${userPointLedger.claimedAt} IS NULL OR ${userPointLedger.claimedAt} < ${staleBefore.getTime()})`,
+                    ))
+                    .returning({ id: userPointLedger.id })
+                claimed = reclaimed.length > 0
             }
 
-            const balanceResult = await this.applyBalanceDelta(input.userId, input.delta)
-            if (!balanceResult.ok) {
-                throw new Error("POINT_BALANCE_NEGATIVE")
-            }
-
-            try {
-                const rows = await db.insert(userPointLedger).values({
-                    userId: input.userId,
-                    eventType: "admin_adjust",
-                    delta: input.delta,
-                    balanceAfter: balanceResult.balanceAfter,
-                    businessKey: input.businessKey,
-                    sourceType: "admin",
-                    sourceId: input.sourceId ?? null,
-                    reason: input.reason,
-                    operatorUserId: input.operatorUserId,
-                    operatorUsername: input.operatorUsername,
-                    metadata: input.metadata ?? null,
-                    status: "completed",
-                    createdAt: new Date(),
-                }).returning()
-
-                if (!rows.length) {
-                    throw new Error("POINT_LEDGER_INSERT_FAILED")
-                }
-
-                return mapLedgerRow(rows[0])
-            } catch (error) {
-                await this.applyBalanceDelta(input.userId, -input.delta)
-                throw error
-            }
+            const record = await this.findByBusinessKey(input.businessKey)
+            return { claimed, claimId: claimed ? claimId : null, record }
         },
     }
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useI18n } from "@/lib/i18n/context"
 import { Card, CardContent, CardFooter } from "@/components/ui/card"
@@ -52,9 +52,12 @@ export function SearchContent(props: {
 }) {
   const { t } = useI18n()
   const router = useRouter()
-  const [q, setQ] = useState(props.q)
-
-  useEffect(() => setQ(props.q), [props.q])
+  const [draftQuery, setDraftQuery] = useState<{ source: string; value: string }>(() => ({
+    source: props.q,
+    value: props.q,
+  }))
+  const q = draftQuery.source === props.q ? draftQuery.value : props.q
+  const setQ = (value: string) => setDraftQuery({ source: props.q, value })
 
   const categories = useMemo(() => {
     const base = [{ name: 'all', icon: null, sortOrder: -1 } as Category]
@@ -85,7 +88,13 @@ export function SearchContent(props: {
             router.push(buildUrl({ q: q.trim(), category: props.category, sort: props.sort, page: 1, pageSize: props.pageSize }))
           }}
         >
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('search.placeholder')} />
+          <Input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={t('search.placeholder')}
+            aria-label={t('search.placeholder')}
+          />
           <Button type="submit" variant="outline">{t('search.search')}</Button>
         </form>
       </div>

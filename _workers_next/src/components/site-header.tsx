@@ -18,6 +18,7 @@ import { CheckInButton } from "@/components/checkin-button"
 import { getSetting, recordLoginUser, getUserUnreadNotificationCount, getLoginUserDesktopNotificationsEnabled } from "@/lib/db/queries"
 import { getActiveAnnouncement } from "@/actions/settings"
 import { isRegistryEnabled } from "@/lib/registry"
+import { getAdminUsernames, isAdminIdentity } from "@/lib/admin-auth"
 
 export async function SiteHeader() {
     const session = await auth()
@@ -26,11 +27,9 @@ export async function SiteHeader() {
         await recordLoginUser(user.id, user.username || user.name || null, user.email || null)
     }
 
-    // Check if admin (case-insensitive)
-    const rawAdminUsers = process.env.ADMIN_USERS?.split(',') || []
-    const adminUsers = rawAdminUsers.map(u => u.toLowerCase())
-    const isAdmin = user?.username && adminUsers.includes(user.username.toLowerCase()) || false
-    const firstAdminName = rawAdminUsers[0]?.trim() // Get first admin name for branding
+    const rawAdminUsers = getAdminUsernames()
+    const isAdmin = isAdminIdentity(user)
+    const firstAdminName = rawAdminUsers[0] // Get first admin name for branding
     let shopNameOverride: string | null = null
     let shopLogoVersion: string | null = null
     try {

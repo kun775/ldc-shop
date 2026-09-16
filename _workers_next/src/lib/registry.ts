@@ -1,6 +1,7 @@
 import { getSetting, setSetting } from "@/lib/db/queries"
 import { buildShopFaviconUrl, resolveEffectiveShopLogo } from "@/lib/shop-logo"
 import { APP_VERSION } from "@/lib/version"
+import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 
 export const REGISTRY_APP_ID = "ldc-shop"
 const REGISTRY_PAGE_SIZE = 500
@@ -90,9 +91,9 @@ export async function fetchRegistryShops() {
             limit: String(REGISTRY_PAGE_SIZE),
             offset: String(offset),
         })
-        const res = await fetch(`${baseUrl}/shops?${params.toString()}`, {
+        const res = await fetchWithTimeout(`${baseUrl}/shops?${params.toString()}`, {
             next: { revalidate: 300 },
-        })
+        }, 8_000)
 
         if (!res.ok) {
             return { items, error: `registry_error_${res.status}` }

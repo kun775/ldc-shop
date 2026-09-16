@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 
 export function md5(message: string): string {
     return createHash('md5').update(message).digest('hex');
@@ -15,7 +15,5 @@ export function generateSign(params: Record<string, any>, key: string): string {
 }
 
 export function generateOrderId(): string {
-    const timestamp = Date.now().toString(36);
-    const random = Math.random().toString(36).substring(2, 8);
-    return `ORD${timestamp}${random}`.toUpperCase();
+    return `ORD${randomUUID().replaceAll('-', '').toUpperCase()}`;
 }

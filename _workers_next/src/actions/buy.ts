@@ -1,7 +1,7 @@
 'use server'
 
 import { auth } from "@/lib/auth"
-import { canUserReview, getProductReviews } from "@/lib/db/queries"
+import { canUserReview, getProductRating, getProductReviews } from "@/lib/db/queries"
 import { getEmailSettings } from "@/lib/email"
 
 interface BuyMetaReview {
@@ -44,41 +44,53 @@ function toIsoString(value: Date | string | null): string | null {
     return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
 }
 
-export async function getBuyPageMeta(productId: string): Promise<BuyPageMeta> {
-    const id = productId.trim()
-    if (!id) return { ...EMPTY_BUY_META }
-
-    const session = await auth()
-
-    const [rawReviews, emailSettings] = await Promise.all([
-        getProductReviews(id).catch(() => [] as Array<{
-            id: number
-            username: string
-            userId: string | null
-            rating: number
-            comment: string | null
-            createdAt: Date | string | null
-        }>),
-        getEmailSettings().catch(() => ({ apiKey: null, fromEmail: null, enabled: false, fromName: null })),
-    ])
-
-    const reviews: BuyMetaReview[] = rawReviews.map((review) => ({
+function mapReviews(rawReviews: Awaited<ReturnType<typeof getProductReviews>>): BuyMetaReview[] {
+    return rawReviews.map((review) => ({
         id: Number(review.id),
         username: review.username || "",
         userId: review.userId || null,
         rating: Number(review.rating || 0),
         comment: review.comment || null,
         createdAt: toIsoString(review.createdAt),
-        replies: Array.isArray((review as any).replies)
-            ? (review as any).replies.map((reply: any) => ({
-                id: Number(reply.id),
-                username: reply.username || "",
-                userId: reply.userId || null,
-                comment: reply.comment || "",
-                createdAt: toIsoString(reply.createdAt),
-            }))
-            : [],
+        replies: review.replies.map((reply) => ({
+            id: Number(reply.id),
+            username: reply.username || "",
+            userId: reply.userId || null,
+            comment: reply.comment || "",
+            createdAt: toIsoString(reply.createdAt),
+        })),
     }))
+}
+
+export async function getMoreProductReviews(
+    productId: string,
+    cursor: { createdAt: string | null; id: number },
+): Promise<BuyMetaReview[]> {
+    const id = productId.trim()
+    const cursorDate = cursor.createdAt ? new Date(cursor.createdAt) : null
+    const cursorId = Math.trunc(cursor.id)
+    if (!id || !Number.isFinite(cursorId) || (cursorDate && Number.isNaN(cursorDate.getTime()))) return []
+
+    const rawReviews = await getProductReviews(id, 20, {
+        createdAtMs: cursorDate?.getTime() ?? 0,
+        id: cursorId,
+    })
+    return mapReviews(rawReviews)
+}
+
+export async function getBuyPageMeta(productId: string): Promise<BuyPageMeta> {
+    const id = productId.trim()
+    if (!id) return { ...EMPTY_BUY_META }
+
+    const session = await auth()
+
+    const [rawReviews, ratingSummary, emailSettings] = await Promise.all([
+        getProductReviews(id, 20).catch(() => [] as Awaited<ReturnType<typeof getProductReviews>>),
+        getProductRating(id).catch(() => ({ average: 0, count: 0 })),
+        getEmailSettings().catch(() => ({ apiKey: null, fromEmail: null, enabled: false, fromName: null })),
+    ])
+
+    const reviews = mapReviews(rawReviews)
 
     let canReview = false
     let reviewOrderId: string | undefined = undefined
@@ -94,10 +106,8 @@ export async function getBuyPageMeta(productId: string): Promise<BuyPageMeta> {
         }
     }
 
-    const reviewCount = reviews.length
-    const averageRating = reviewCount > 0
-        ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviewCount
-        : 0
+    const reviewCount = Number(ratingSummary.count || 0)
+    const averageRating = Number(ratingSummary.average || 0)
 
     return {
         reviews,

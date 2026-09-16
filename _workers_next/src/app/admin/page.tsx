@@ -8,10 +8,9 @@ export default async function AdminOverviewPage() {
     void cookieStore.get('ldc_pending_order')
     unstable_noStore()
 
-    const nowMs = Date.now()
     const thresholdRaw = await getSetting('low_stock_threshold').catch(() => '5')
     const lowStockThreshold = Number.parseInt(thresholdRaw || '5', 10) || 5
-    const overview = await getAdminOverview(nowMs, lowStockThreshold)
+    const overview = await getAdminOverview(lowStockThreshold)
 
     return <AdminOverviewContent data={overview} />
 }

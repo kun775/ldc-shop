@@ -7,7 +7,7 @@ import { eq, sql, inArray, and, or, isNull, lte } from "drizzle-orm"
 import { sendBarkMessage, sendTelegramMessage } from "@/lib/notifications"
 import { revalidatePath, updateTag } from "next/cache"
 import { ensureDatabaseInitialized, getProductForAdmin, getSetting, recalcProductAggregates, recalcProductAggregatesForMany, setSetting } from "@/lib/db/queries"
-import { isAdminUsername } from "@/lib/admin-auth"
+import { isAdminIdentity } from "@/lib/admin-auth"
 import { getProductCardApiConfig, pullOneCardFromApi, saveProductCardApiConfig } from "@/lib/card-api"
 import { unstable_noStore } from "next/cache"
 import { isThemeFont } from "@/lib/theme-fonts"
@@ -27,7 +27,7 @@ import {
 export async function checkAdmin() {
     const session = await auth()
     const user = session?.user
-    if (!user || !isAdminUsername(user.username)) {
+    if (!isAdminIdentity(user)) {
         throw new Error("Unauthorized")
     }
 }
@@ -54,7 +54,10 @@ export async function saveProduct(formData: FormData) {
         }
     }
 
-    const name = formData.get('name') as string
+    const name = (formData.get('name') as string || '').trim()
+    if (!name || name.length > 200) {
+        throw new Error("Product name must be between 1 and 200 characters")
+    }
     const description = formData.get('description') as string
     const price = formData.get('price') as string
     const compareAtPrice = (formData.get('compareAtPrice') as string | null) || null

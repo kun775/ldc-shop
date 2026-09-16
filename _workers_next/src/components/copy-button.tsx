@@ -34,6 +34,7 @@ export function CopyButton({ text, label, truncate = false, maxLength = 20, ...p
     const displayText = truncate && text.length > maxLength
         ? `${text.substring(0, maxLength)}...`
         : text
+    const accessibleLabel = copied ? t('common.copied') : t('common.copy')
 
     if (props.compact) {
         return (
@@ -47,8 +48,9 @@ export function CopyButton({ text, label, truncate = false, maxLength = 20, ...p
                 <button
                     type="button"
                     onClick={handleCopy}
-                    title={t('common.copy') || '复制'}
-                    className="shrink-0 text-muted-foreground/45 transition-colors hover:text-foreground"
+                    title={accessibleLabel}
+                    aria-label={accessibleLabel}
+                    className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground sm:h-8 sm:w-8"
                 >
                     {copied ? (
                         <Check className="h-3 w-3 text-emerald-500" />
@@ -66,7 +68,9 @@ export function CopyButton({ text, label, truncate = false, maxLength = 20, ...p
                 variant="ghost"
                 size="sm"
                 onClick={handleCopy}
-                className="h-8 w-8 p-0 hover:bg-muted/20"
+                aria-label={accessibleLabel}
+                title={accessibleLabel}
+                className="h-11 w-11 p-0 hover:bg-muted/20 sm:h-9 sm:w-9"
             >
                 {copied ? (
                     <Check className="h-4 w-4 text-green-500" />
@@ -90,7 +94,9 @@ export function CopyButton({ text, label, truncate = false, maxLength = 20, ...p
                 variant="ghost"
                 size="sm"
                 onClick={handleCopy}
-                className="h-8 w-8 p-0"
+                aria-label={accessibleLabel}
+                title={accessibleLabel}
+                className="h-11 w-11 p-0 sm:h-9 sm:w-9"
             >
                 {copied ? (
                     <Check className="h-4 w-4 text-green-500" />

@@ -4,9 +4,10 @@ import { orders } from "@/lib/db/schema"
 import { eq } from "drizzle-orm"
 import { cookies } from "next/headers"
 import { NextResponse } from "next/server"
-import { isAdminUsername } from "@/lib/admin-auth"
+import { isAdminIdentity } from "@/lib/admin-auth"
 import { getDeliveryFile } from "@/lib/delivery-files"
 import { ensureDatabaseInitialized } from "@/lib/db/queries"
+import { hasOrderAccessToken, ORDER_ACCESS_COOKIE } from "@/lib/order-access"
 
 export async function GET(
     _request: Request,
@@ -35,10 +36,13 @@ export async function GET(
     const session = await auth()
     const user = session?.user
     const cookieStore = await cookies()
-    const pending = cookieStore.get("ldc_pending_order")?.value === id
-    const isOwner = !!(user && (user.id === order.userId || user.username === order.username))
-    const isAdmin = isAdminUsername(user?.username)
-    if (!isOwner && !pending && !isAdmin) {
+    const hasGuestAccess = !order.userId && hasOrderAccessToken(
+        cookieStore.get(ORDER_ACCESS_COOKIE)?.value,
+        id
+    )
+    const isOwner = !!(user?.id && user.id === order.userId)
+    const isAdmin = isAdminIdentity(user)
+    if (!isOwner && !hasGuestAccess && !isAdmin) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
@@ -47,14 +51,7 @@ export async function GET(
         return NextResponse.json({ error: "Not found" }, { status: 404 })
     }
 
-    const raw = file.body
-    const body = raw instanceof ArrayBuffer
-        ? raw
-        : raw instanceof Uint8Array
-            ? raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)
-            : new Uint8Array(raw as ArrayBuffer).buffer
-
-    return new NextResponse(body as ArrayBuffer, {
+    return new NextResponse(file.body, {
         headers: {
             "Content-Type": file.contentType || "application/octet-stream",
             "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,

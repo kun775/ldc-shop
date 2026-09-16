@@ -111,6 +111,8 @@ export function UsersContent({ data }: UsersContentProps) {
                     <div className="relative flex-1">
                         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <Input
+                            type="search"
+                            aria-label={t('admin.users.search')}
                             placeholder={t('admin.users.search')}
                             className="pl-9"
                             value={searchTerm}

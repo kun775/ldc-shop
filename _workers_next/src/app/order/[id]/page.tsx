@@ -7,6 +7,8 @@ import { cookies } from "next/headers"
 import { OrderContent } from "@/components/order-content"
 import { ensureDatabaseInitialized, getProductVariantLabels } from "@/lib/db/queries"
 import { listDeliveryFiles } from "@/lib/delivery-files"
+import { isAdminIdentity } from "@/lib/admin-auth"
+import { hasOrderAccessToken, ORDER_ACCESS_COOKIE } from "@/lib/order-access"
 
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params
@@ -20,15 +22,18 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
 
     if (!order) return notFound()
 
-    // Access Control
-    let canViewKey = false
-    const isOwner = !!(user && (user.id === order.userId || user.username === order.username))
-    if (isOwner) canViewKey = true
-
-    // Check Cookie
+    // Sensitive order data is available only to the stable account owner, an admin,
+    // or a guest holding the server-signed, short-lived capability token.
+    const isOwner = !!(user?.id && user.id === order.userId)
+    const isAdmin = isAdminIdentity(user)
     const cookieStore = await cookies()
-    const pending = cookieStore.get('ldc_pending_order')
-    if (pending?.value === id) canViewKey = true
+    const hasGuestAccess = !order.userId && hasOrderAccessToken(
+        cookieStore.get(ORDER_ACCESS_COOKIE)?.value,
+        id
+    )
+    const canViewKey = isOwner || isAdmin || hasGuestAccess
+
+    if (!canViewKey) return notFound()
 
     // Refund request status (best effort)
     let refundRequest: any = null
@@ -45,7 +50,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
 
     const labels = order.productId ? await getProductVariantLabels([order.productId]) : {}
     const productVariantLabel = order.productId ? labels[order.productId] ?? null : null
-    const deliveryFiles = (isOwner || pending?.value === id) ? await listDeliveryFiles(order.orderId) : []
+    const deliveryFiles = canViewKey ? await listDeliveryFiles(order.orderId) : []
 
     return (
         <OrderContent

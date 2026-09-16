@@ -3,6 +3,7 @@ import { settings } from "./db/schema"
 import { inArray } from "drizzle-orm"
 import { resolveEffectiveShopLogo } from "@/lib/shop-logo"
 import { parseCheckoutFieldValues, type CheckoutFieldValue } from "@/lib/checkout-fields"
+import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 
 async function getSettingsUncached(keys: string[]): Promise<Record<string, string>> {
     try {
@@ -124,13 +125,13 @@ export async function sendTelegramMessage(text: string) {
             parse_mode: 'HTML'
         }
 
-        const response = await fetch(url, {
+        const response = await fetchWithTimeout(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(body)
-        })
+        }, 8_000)
 
         if (!response.ok) {
             const error = await response.text()
@@ -185,13 +186,13 @@ export async function sendBarkMessage(
             requestUrl += `?${queryString}`
         }
 
-        const response = await fetch(requestUrl, {
+        const response = await fetchWithTimeout(requestUrl, {
             method: 'GET',
             headers: {
                 Accept: 'application/json, text/plain;q=0.9, */*;q=0.8'
             },
             cache: 'no-store'
-        })
+        }, 8_000)
 
         if (!response.ok) {
             const error = await response.text()

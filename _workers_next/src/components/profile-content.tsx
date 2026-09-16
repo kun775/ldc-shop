@@ -506,9 +506,18 @@ export function ProfileContent({
                         <CardHeader className="pb-3 pt-5 px-5 border-b border-border/50">
                             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                                 {/* Segmented Tabs */}
-                                <div className="inline-flex p-1 bg-muted/60 rounded-xl border border-border/40 self-start sm:self-auto">
+                                <div
+                                    role="tablist"
+                                    aria-label={t('profile.messages.center')}
+                                    className="inline-flex p-1 bg-muted/60 rounded-xl border border-border/40 self-start sm:self-auto"
+                                >
                                     <button
                                         type="button"
+                                        role="tab"
+                                        id="profile-inbox-tab"
+                                        aria-controls="profile-inbox-panel"
+                                        aria-selected={msgTab === 'inbox'}
+                                        tabIndex={msgTab === 'inbox' ? 0 : -1}
                                         onClick={() => setMsgTab('inbox')}
                                         className={cn(
                                             "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all",
@@ -527,6 +536,11 @@ export function ProfileContent({
                                     </button>
                                     <button
                                         type="button"
+                                        role="tab"
+                                        id="profile-sent-tab"
+                                        aria-controls="profile-sent-panel"
+                                        aria-selected={msgTab === 'sent'}
+                                        tabIndex={msgTab === 'sent' ? 0 : -1}
                                         onClick={() => setMsgTab('sent')}
                                         className={cn(
                                             "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all",
@@ -728,7 +742,13 @@ export function ProfileContent({
 
                             {/* Tab 1: Notifications Inbox */}
                             {msgTab === 'inbox' && (
-                                notifications.length === 0 ? (
+                                <div
+                                    id="profile-inbox-panel"
+                                    role="tabpanel"
+                                    aria-labelledby="profile-inbox-tab"
+                                    tabIndex={0}
+                                >
+                                {notifications.length === 0 ? (
                                     <div className="py-12 text-center space-y-2">
                                         <div className="h-12 w-12 rounded-full bg-muted/60 text-muted-foreground/60 flex items-center justify-center mx-auto mb-2">
                                             <Inbox className="h-6 w-6" />
@@ -820,9 +840,11 @@ export function ProfileContent({
                                                     {cardNode}
                                                 </Link>
                                             ) : (
-                                                <div
+                                                <button
                                                     key={n.id}
-                                                    className="cursor-pointer"
+                                                    type="button"
+                                                    className="block w-full cursor-pointer text-left"
+                                                    aria-expanded={isExpanded}
                                                     onClick={() => {
                                                         if (!n.isRead) void handleMarkRead(n.id)
                                                         setExpandedIds((prev) =>
@@ -831,65 +853,77 @@ export function ProfileContent({
                                                     }}
                                                 >
                                                     {cardNode}
-                                                </div>
+                                                </button>
                                             )
                                         })}
                                     </div>
-                                )
+                                )}
+                                </div>
                             )}
 
                             {/* Tab 2: Sent Messages */}
                             {msgTab === 'sent' && (
-                                sentMessages.length === 0 ? (
-                                    <div className="py-12 text-center space-y-2">
-                                        <div className="h-12 w-12 rounded-full bg-muted/60 text-muted-foreground/60 flex items-center justify-center mx-auto mb-2">
-                                            <Send className="h-6 w-6" />
+                                <div
+                                    id="profile-sent-panel"
+                                    role="tabpanel"
+                                    aria-labelledby="profile-sent-tab"
+                                    tabIndex={0}
+                                >
+                                    {sentMessages.length === 0 ? (
+                                        <div className="py-12 text-center space-y-2">
+                                            <div className="h-12 w-12 rounded-full bg-muted/60 text-muted-foreground/60 flex items-center justify-center mx-auto mb-2">
+                                                <Send className="h-6 w-6" />
+                                            </div>
+                                            <p className="text-sm font-medium text-foreground">{t('profile.sentEmpty')}</p>
+                                            <p className="text-xs text-muted-foreground">您向管理员发送的留言记录将展示在这里。</p>
                                         </div>
-                                        <p className="text-sm font-medium text-foreground">{t('profile.sentEmpty')}</p>
-                                        <p className="text-xs text-muted-foreground">您向管理员发送的留言记录将展示在这里。</p>
-                                    </div>
-                                ) : (
-                                    <div className="space-y-2.5">
-                                        {sentMessages.map((m) => {
-                                            const isExpanded = expandedSentIds.includes(m.id)
-                                            return (
-                                                <div
-                                                    key={m.id}
-                                                    className="rounded-xl border border-border/60 bg-card p-3.5 hover:bg-muted/30 transition-colors cursor-pointer"
-                                                    onClick={() => {
-                                                        setExpandedSentIds((prev) =>
-                                                            prev.includes(m.id) ? prev.filter((x) => x !== m.id) : [...prev, m.id]
-                                                        )
-                                                    }}
-                                                >
-                                                    <div className="flex items-start gap-3">
-                                                        <div className="h-8 w-8 rounded-lg bg-muted text-muted-foreground flex items-center justify-center shrink-0 mt-0.5">
-                                                            <Send className="h-4 w-4" />
-                                                        </div>
-                                                        <div className="min-w-0 flex-1">
-                                                            <div className="flex items-center justify-between gap-2 mb-1">
-                                                                <span className="text-xs font-semibold text-foreground truncate">
-                                                                    {m.title || t('profile.messages.noTitle')}
-                                                                </span>
-                                                                <span className="text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
-                                                                    {m.createdAt ? new Date(m.createdAt).toLocaleString() : '-'}
-                                                                </span>
+                                    ) : (
+                                        <div className="space-y-2.5">
+                                            {sentMessages.map((m) => {
+                                                const isExpanded = expandedSentIds.includes(m.id)
+                                                return (
+                                                    <button
+                                                        key={m.id}
+                                                        type="button"
+                                                        aria-expanded={isExpanded}
+                                                        className="w-full text-left"
+                                                        onClick={() => {
+                                                            setExpandedSentIds((prev) =>
+                                                                prev.includes(m.id) ? prev.filter((x) => x !== m.id) : [...prev, m.id]
+                                                            )
+                                                        }}
+                                                    >
+                                                        <div className="rounded-xl border border-border/60 bg-card p-3.5 hover:bg-muted/30 transition-colors">
+                                                            <div className="flex items-start gap-3">
+                                                                <div className="h-8 w-8 rounded-lg bg-muted text-muted-foreground flex items-center justify-center shrink-0 mt-0.5">
+                                                                    <Send className="h-4 w-4" />
+                                                                </div>
+                                                                <div className="min-w-0 flex-1">
+                                                                    <div className="flex items-center justify-between gap-2 mb-1">
+                                                                        <span className="text-xs font-semibold text-foreground truncate">
+                                                                            {m.title || t('profile.messages.noTitle')}
+                                                                        </span>
+                                                                        <span className="text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
+                                                                            {m.createdAt ? new Date(m.createdAt).toLocaleString() : '-'}
+                                                                        </span>
+                                                                    </div>
+                                                                    <p
+                                                                        className={cn(
+                                                                            "text-xs text-muted-foreground leading-relaxed break-words whitespace-pre-wrap",
+                                                                            !isExpanded ? "line-clamp-2" : ""
+                                                                        )}
+                                                                    >
+                                                                        {m.body}
+                                                                    </p>
+                                                                </div>
                                                             </div>
-                                                            <p
-                                                                className={cn(
-                                                                    "text-xs text-muted-foreground leading-relaxed break-words whitespace-pre-wrap",
-                                                                    !isExpanded ? "line-clamp-2" : ""
-                                                                )}
-                                                            >
-                                                                {m.body}
-                                                            </p>
                                                         </div>
-                                                    </div>
-                                                </div>
-                                            )
-                                        })}
-                                    </div>
-                                )
+                                                    </button>
+                                                )
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
                             )}
                         </CardContent>
                     </Card>

@@ -1,134 +1,143 @@
-import { db } from "@/lib/db";
-import { orders, cards } from "@/lib/db/schema";
-import { md5 } from "@/lib/crypto";
-import { eq, sql } from "drizzle-orm";
-import { withOrderColumnFallback } from "@/lib/db/queries";
+import { db } from "@/lib/db"
+import { orders } from "@/lib/db/schema"
+import { md5 } from "@/lib/crypto"
+import { eq } from "drizzle-orm"
+import { withOrderColumnFallback } from "@/lib/db/queries"
 
-const LOG_NOTIFY_DETAILS = process.env.NODE_ENV !== 'production';
+const LOG_NOTIFY_DETAILS = process.env.NODE_ENV !== "production"
+const SUCCESS_TRADE_STATUSES = new Set(["TRADE_SUCCESS", "TRADE_FINISHED"])
 
-function summarizeNotifyParams(params: Record<string, any>) {
+function summarizeNotifyParams(params: Record<string, string>) {
     return {
         out_trade_no: params.out_trade_no,
         trade_status: params.trade_status,
-        money: params.money
+        money: params.money,
     }
 }
 
-async function processNotify(params: Record<string, any>) {
-    if (LOG_NOTIFY_DETAILS) {
-        console.log("[Notify] Processing params:", JSON.stringify(params));
-    } else {
-        console.log("[Notify] Processing:", summarizeNotifyParams(params));
-    }
+function failure(status: number) {
+    return new Response("fail", { status })
+}
 
-    // Verify Sign
-    const sign = params.sign;
+function normalizeOrderId(rawTradeNumber: string) {
+    const trimmed = rawTradeNumber.trim()
+    if (!trimmed) return null
+    return trimmed.includes("_retry") ? trimmed.split("_retry", 1)[0] || null : trimmed
+}
+
+function validateRequiredParams(params: Record<string, string>) {
+    return Boolean(
+        params.sign &&
+        params.out_trade_no &&
+        params.trade_status &&
+        params.money,
+    )
+}
+
+function verifySignature(params: Record<string, string>, merchantKey: string) {
     const sorted = Object.keys(params)
-        .filter(k => k !== 'sign' && k !== 'sign_type' && params[k] !== '' && params[k] !== null && params[k] !== undefined)
+        .filter((key) => key !== "sign" && key !== "sign_type" && params[key] !== "")
         .sort()
-        .map(k => `${k}=${params[k]}`)
-        .join('&');
+        .map((key) => `${key}=${params[key]}`)
+        .join("&")
 
-    const mySign = md5(`${sorted}${process.env.MERCHANT_KEY}`);
+    return params.sign === md5(`${sorted}${merchantKey}`)
+}
 
+async function processNotify(params: Record<string, string>) {
     if (LOG_NOTIFY_DETAILS) {
-        console.log("[Notify] Signature check - received:", sign, "computed:", mySign);
+        console.log("[Notify] Processing params:", JSON.stringify(params))
     } else {
-        console.log("[Notify] Signature check");
+        console.log("[Notify] Processing:", summarizeNotifyParams(params))
     }
 
-    if (sign !== mySign) {
-        console.log("[Notify] Signature mismatch!");
-        return new Response('fail', { status: 400 });
+    const merchantKey = process.env.MERCHANT_KEY?.trim()
+    if (!merchantKey) {
+        console.error("[Notify] MERCHANT_KEY is not configured")
+        return failure(500)
+    }
+    if (!validateRequiredParams(params)) {
+        console.warn("[Notify] Missing required callback parameters")
+        return failure(400)
+    }
+    if (!verifySignature(params, merchantKey)) {
+        console.warn("[Notify] Signature mismatch")
+        return failure(400)
     }
 
-    console.log("[Notify] Signature verified OK. trade_status:", params.trade_status);
+    if (!SUCCESS_TRADE_STATUSES.has(params.trade_status)) {
+        // Acknowledge valid non-success state notifications; no fulfillment is needed.
+        return new Response("success")
+    }
 
-    if (params.trade_status === 'TRADE_SUCCESS') {
-        let orderId = params.out_trade_no;
-        // Strip retry suffix if present (e.g. ORDER123_retry173654)
-        if (orderId.includes('_retry')) {
-            orderId = orderId.split('_retry')[0];
+    const orderId = normalizeOrderId(params.out_trade_no)
+    const notifyMoney = Number.parseFloat(params.money)
+    if (!orderId || !Number.isFinite(notifyMoney)) {
+        return failure(400)
+    }
+
+    const order = await withOrderColumnFallback(async () => {
+        return await db.query.orders.findFirst({
+            where: eq(orders.orderId, orderId),
+            columns: { orderId: true, amount: true, status: true },
+        })
+    })
+    if (!order) {
+        console.error(`[Notify] Order not found: ${orderId}`)
+        return failure(404)
+    }
+
+    const orderMoney = Number.parseFloat(order.amount)
+    if (!Number.isFinite(orderMoney) || Math.abs(notifyMoney - orderMoney) > 0.01) {
+        console.error(`[Notify] Amount mismatch! Order: ${orderMoney}, Notify: ${notifyMoney}`)
+        return failure(400)
+    }
+
+    const tradeNo = params.trade_no?.trim() || params.out_trade_no
+
+    try {
+        const { processOrderFulfillment } = await import("@/lib/order-processing")
+        const result = await processOrderFulfillment(orderId, notifyMoney, tradeNo)
+        if (result.status === "processing") {
+            // Another request owns the short-lived claim. Ask the gateway to retry so a
+            // simultaneous worker failure cannot turn into a permanently acknowledged order.
+            return failure(503)
         }
-
-        const tradeNo = params.trade_no;
-
-        console.log("[Notify] Processing order:", orderId);
-
-        // Find Order
-        const order = await withOrderColumnFallback(async () => {
-            return await db.query.orders.findFirst({
-                where: eq(orders.orderId, orderId)
-            });
-        });
-
-        console.log("[Notify] Order found:", order ? "YES" : "NO", "status:", order?.status);
-
-        if (order) {
-            // Verify Amount (Prevent penny-dropping)
-            const notifyMoney = parseFloat(params.money);
-            const orderMoney = parseFloat(order.amount);
-
-            // Allow small float epsilon difference
-            if (Math.abs(notifyMoney - orderMoney) > 0.01) {
-                console.error(`[Notify] Amount mismatch! Order: ${orderMoney}, Notify: ${notifyMoney}`);
-                return new Response('fail', { status: 400 });
-            }
-
-            if (order.status === 'pending' || order.status === 'cancelled') {
-                try {
-                    const { processOrderFulfillment } = await import("@/lib/order-processing");
-                    await processOrderFulfillment(orderId, notifyMoney, tradeNo);
-                } catch (e: any) {
-                    console.error("[Notify] Fulfillment error:", e);
-                    // Don't error the callback if it's already processed or internal error, 
-                    // otherwise payment gateway retries. 
-                    // Ideally we should differentiate idempotent errors vs hard errors.
-                    // But for now, if fulfillment fails, maybe log it.
-                    // If shared validation fails (amount mismatch), processOrderFulfillment throws.
-                    if (e.message.includes('Amount mismatch')) {
-                        return new Response('fail', { status: 400 });
-                    }
-                }
-            }
-        }
+        return new Response("success")
+    } catch (error) {
+        console.error("[Notify] Fulfillment error:", error)
+        return failure(500)
     }
-
-    return new Response('success');
 }
 
-// Handle GET requests (Linux DO Credit sends GET)
+function paramsFromSearchParams(searchParams: URLSearchParams) {
+    const params: Record<string, string> = {}
+    searchParams.forEach((value, key) => {
+        params[key] = value
+    })
+    return params
+}
+
 export async function GET(request: Request) {
-    console.log("[Notify] Received GET callback");
-
     try {
-        const url = new URL(request.url);
-        const params: Record<string, any> = {};
-        url.searchParams.forEach((value, key) => {
-            params[key] = value;
-        });
-
-        return await processNotify(params);
-    } catch (e) {
-        console.error("[Notify] Error:", e);
-        return new Response('error', { status: 500 });
+        const url = new URL(request.url)
+        return await processNotify(paramsFromSearchParams(url.searchParams))
+    } catch (error) {
+        console.error("[Notify] Error:", error)
+        return failure(500)
     }
 }
 
-// Also handle POST requests for compatibility
 export async function POST(request: Request) {
-    console.log("[Notify] Received POST callback");
-
     try {
-        const formData = await request.formData();
-        const params: Record<string, any> = {};
+        const formData = await request.formData()
+        const params: Record<string, string> = {}
         formData.forEach((value, key) => {
-            params[key] = value;
-        });
-
-        return await processNotify(params);
-    } catch (e) {
-        console.error("[Notify] Error:", e);
-        return new Response('error', { status: 500 });
+            if (typeof value === "string") params[key] = value
+        })
+        return await processNotify(params)
+    } catch (error) {
+        console.error("[Notify] Error:", error)
+        return failure(500)
     }
 }

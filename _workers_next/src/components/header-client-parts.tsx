@@ -144,7 +144,8 @@ export function HeaderUnreadBadge({ initialCount = 0, desktopEnabled = false, cl
     }, [desktopEnabled, t])
 
     useEffect(() => {
-        refresh()
+        const timeoutId = window.setTimeout(() => void refresh(), 0)
+        return () => window.clearTimeout(timeoutId)
     }, [pathname, refresh])
 
     useEffect(() => {

@@ -6,15 +6,16 @@ import { processOrderFulfillment } from "@/lib/order-processing"
 import { revalidatePath } from "next/cache"
 import { db } from "@/lib/db"
 import { orders, cards } from "@/lib/db/schema"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { withOrderColumnFallback, recalcProductAggregates } from "@/lib/db/queries"
 import { cookies } from "next/headers"
 import { updateTag } from "next/cache"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
+import { isAdminIdentity } from "@/lib/admin-auth"
+import { hasOrderAccessToken, ORDER_ACCESS_COOKIE } from "@/lib/order-access"
 
 export async function checkOrderStatus(orderId: string) {
     const session = await auth()
-    if (!session?.user) return { success: false, error: 'Unauthorized' }
 
     // Check ownership
     const order = await withOrderColumnFallback(async () => {
@@ -25,21 +26,21 @@ export async function checkOrderStatus(orderId: string) {
     })
 
     if (!order) return { success: false, error: 'Order not found' }
-    if (order.status === 'paid' || order.status === 'delivered') {
-        return { success: true, status: order.status }
-    }
 
     const cookieStore = await cookies()
-    const pending = cookieStore.get('ldc_pending_order')?.value
-    const hasPendingCookie = pending === orderId
+    const hasGuestAccess = !order.userId && hasOrderAccessToken(
+        cookieStore.get(ORDER_ACCESS_COOKIE)?.value,
+        orderId
+    )
+    const isOwner = !!(session?.user?.id && order.userId === session.user.id)
+    const isAdmin = isAdminIdentity(session?.user)
 
-    // Allow checking if user owns it OR if they have the pending cookie
-    if (order.userId) {
-        if (order.userId !== session.user.id && !hasPendingCookie) {
-            return { success: false, error: 'Unauthorized' }
-        }
-    } else if (!hasPendingCookie) {
+    if (!isOwner && !hasGuestAccess && !isAdmin) {
         return { success: false, error: 'Unauthorized' }
+    }
+
+    if (order.status === 'paid' || order.status === 'delivered') {
+        return { success: true, status: order.status }
     }
 
     try {
@@ -54,10 +55,13 @@ export async function checkOrderStatus(orderId: string) {
             const tradeNo = result.data?.trade_no || result.data?.transaction_id || `MANUAL_CHECK_${Date.now()}`
             const paidAmount = parseFloat(result.data?.money || order.amount)
 
-            await processOrderFulfillment(orderId, paidAmount, tradeNo)
+            const fulfillment = await processOrderFulfillment(orderId, paidAmount, tradeNo)
 
             revalidatePath(`/order/${orderId}`)
-            return { success: true, status: 'paid' } // or 'delivered' implicitly via revalidate
+            if (fulfillment.status === 'processing') {
+                return { success: false, status: 'pending' }
+            }
+            return { success: true, status: fulfillment.orderStatus || 'paid' }
         }
 
         return { success: false, status: 'pending' }
@@ -92,6 +96,16 @@ export async function cancelPendingOrder(orderId: string) {
     if (order.status !== 'pending') return { success: false, error: 'order.cannotCancel' }
 
     try {
+        const cancelled = await db.update(orders)
+            .set({ status: 'cancelled' })
+            .where(and(
+                eq(orders.orderId, orderId),
+                eq(orders.userId, session.user.id),
+                eq(orders.status, 'pending'),
+            ))
+            .returning({ orderId: orders.orderId })
+        if (!cancelled.length) return { success: false, error: 'order.cannotCancel' }
+
         if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
             await ensurePointLedgerUserRecord({
                 userId: order.userId,
@@ -118,11 +132,6 @@ export async function cancelPendingOrder(orderId: string) {
         await db.update(cards)
             .set({ reservedOrderId: null, reservedAt: null })
             .where(eq(cards.reservedOrderId, orderId))
-
-        // Update order status
-        await db.update(orders)
-            .set({ status: 'cancelled' })
-            .where(eq(orders.orderId, orderId))
 
         revalidatePath(`/order/${orderId}`)
         revalidatePath('/orders')

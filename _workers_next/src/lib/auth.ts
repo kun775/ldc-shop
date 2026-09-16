@@ -441,12 +441,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         async session({ session, token }) {
             if (token) {
                 session.user.id = token.id as string
-                // @ts-ignore
-                session.user.username = token.username
-                // @ts-ignore
-                session.user.trustLevel = token.trustLevel
-                // @ts-ignore
-                session.user.avatar_url = token.avatar_url
+                session.user.username = typeof token.username === "string" ? token.username : undefined
+                session.user.trustLevel = typeof token.trustLevel === "number" ? token.trustLevel : undefined
+                session.user.avatar_url = typeof token.avatar_url === "string" ? token.avatar_url : undefined
             }
             return session
         }

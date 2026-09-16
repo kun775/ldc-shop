@@ -1,6 +1,6 @@
 "use client"
 
-import { useDeferredValue, useEffect, useMemo, useState } from "react"
+import { useDeferredValue, useMemo, useState } from "react"
 import Link from "next/link"
 import Image from "next/image"
 import { ArrowRight, Search, Zap, PackageOpen, X, Check, Clock, ChevronRight, Inbox } from "lucide-react"
@@ -75,12 +75,22 @@ export function HomeContent({
     const [searchTerm, setSearchTerm] = useState(filters.q || "")
     const [sortKey, setSortKey] = useState(filters.sort || "default")
     const [fulfillmentFilter, setFulfillmentFilter] = useState<'all' | 'auto' | 'manual' | 'inStock'>('all')
-    const [page, setPage] = useState(pagination.page || 1)
+    const [paginationState, setPaginationState] = useState(() => ({
+        key: `${filters.category || ''}|${filters.q || ''}|${filters.sort || 'default'}|all`,
+        page: pagination.page || 1,
+    }))
     const deferredSearch = useDeferredValue(searchTerm)
-
-    useEffect(() => {
-        setPage(1)
-    }, [selectedCategory, sortKey, deferredSearch, fulfillmentFilter])
+    const filterKey = `${selectedCategory || ''}|${deferredSearch}|${sortKey}|${fulfillmentFilter}`
+    const page = paginationState.key === filterKey ? paginationState.page : 1
+    const setPage = (update: number | ((current: number) => number)) => {
+        setPaginationState((current) => {
+            const currentPage = current.key === filterKey ? current.page : 1
+            return {
+                key: filterKey,
+                page: typeof update === 'function' ? update(currentPage) : update,
+            }
+        })
+    }
 
     // Convert any active announcement (popup or banner) into modal popup
     const popupData = useMemo<AnnouncementPopupData>(() => {
@@ -185,6 +195,8 @@ export function HomeContent({
                         <div className="relative w-full md:w-72 shrink-0">
                             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" />
                             <Input
+                                type="search"
+                                aria-label={t("common.searchPlaceholder")}
                                 placeholder={t("common.searchPlaceholder")}
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}

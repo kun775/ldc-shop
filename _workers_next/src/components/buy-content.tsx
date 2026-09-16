@@ -24,7 +24,7 @@ import { ProductImagePlaceholder } from "@/components/product-image-placeholder"
 import { toast } from "sonner"
 import Image from "next/image"
 import { INFINITE_STOCK } from "@/lib/constants"
-import { getBuyPageMeta } from "@/actions/buy"
+import { getBuyPageMeta, getMoreProductReviews } from "@/actions/buy"
 import type { ProductVariantRow } from "@/lib/db/queries"
 import { buildProductImageGallery } from "@/lib/product-images"
 import { getProductPointDiscountBadge } from "@/lib/points/product-point-discount"
@@ -110,6 +110,7 @@ export function BuyContent({
     const [reviewOrderIdState, setReviewOrderIdState] = useState<string | undefined>(reviewOrderId)
     const [emailConfiguredState, setEmailConfiguredState] = useState(emailConfigured)
     const [metaLoading, setMetaLoading] = useState(true)
+    const [reviewsLoadingMore, setReviewsLoadingMore] = useState(false)
     const [metaRefreshSeq, setMetaRefreshSeq] = useState(0)
 
     const [questionAnswers, setQuestionAnswers] = useState<string[]>([])
@@ -270,6 +271,27 @@ export function BuyContent({
             cancelled = true
         }
     }, [displayProduct.id, metaRefreshSeq])
+
+    const handleLoadMoreReviews = async () => {
+        if (reviewsLoadingMore || reviewsState.length >= reviewCountState) return
+        setReviewsLoadingMore(true)
+        try {
+            const lastReview = reviewsState.at(-1)
+            if (!lastReview) return
+            const nextReviews = await getMoreProductReviews(displayProduct.id, {
+                createdAt: lastReview.createdAt ? new Date(lastReview.createdAt).toISOString() : null,
+                id: lastReview.id,
+            })
+            setReviewsState((current) => {
+                const knownIds = new Set(current.map((review) => review.id))
+                return [...current, ...nextReviews.filter((review) => !knownIds.has(review.id))]
+            })
+        } catch {
+            toast.error(t('common.error'))
+        } finally {
+            setReviewsLoadingMore(false)
+        }
+    }
 
     const shareLinks = useMemo(() => {
         if (!shareUrl) return null
@@ -994,14 +1016,30 @@ export function BuyContent({
                                 <span>{t('common.loading')}</span>
                             </div>
                         ) : (
-                            <ReviewList
-                                reviews={reviewsState}
-                                averageRating={averageRatingState}
-                                totalCount={reviewCountState}
-                                productId={displayProduct.id}
-                                isLoggedIn={isLoggedIn}
-                                onReplySubmitted={() => setMetaRefreshSeq((prev) => prev + 1)}
-                            />
+                            <>
+                                <ReviewList
+                                    reviews={reviewsState}
+                                    averageRating={averageRatingState}
+                                    totalCount={reviewCountState}
+                                    productId={displayProduct.id}
+                                    isLoggedIn={isLoggedIn}
+                                    onReplySubmitted={() => setMetaRefreshSeq((prev) => prev + 1)}
+                                />
+                                {reviewsState.length < reviewCountState && (
+                                    <div className="flex justify-center pt-2">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() => void handleLoadMoreReviews()}
+                                            disabled={reviewsLoadingMore}
+                                            aria-label={t('common.loadMore')}
+                                        >
+                                            {reviewsLoadingMore && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                            {t('common.loadMore')}
+                                        </Button>
+                                    </div>
+                                )}
+                            </>
                         )}
                     </CardContent>
                 </Card>

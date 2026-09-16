@@ -11,7 +11,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 23;
+const CURRENT_SCHEMA_VERSION = 24;
 const dbInitializationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
@@ -311,6 +311,8 @@ export async function ensureDatabaseInitialized() {
             checkout_field_values TEXT,
             fulfillment_mode TEXT DEFAULT 'auto',
             delivery_note TEXT,
+            fulfillment_claim_id TEXT,
+            fulfillment_claimed_at INTEGER,
             created_at INTEGER DEFAULT (unixepoch() * 1000)
         );
 
@@ -524,6 +526,8 @@ async function ensureOrdersColumns() {
         await safeAddColumn('orders', 'checkout_field_values', 'TEXT');
         await safeAddColumn('orders', 'fulfillment_mode', "TEXT DEFAULT 'auto'");
         await safeAddColumn('orders', 'delivery_note', 'TEXT');
+        await safeAddColumn('orders', 'fulfillment_claim_id', 'TEXT');
+        await safeAddColumn('orders', 'fulfillment_claimed_at', 'INTEGER');
     });
 }
 
@@ -991,11 +995,14 @@ export async function getActiveProducts(options?: { isLoggedIn?: boolean; trustL
         return await db.select({
             id: products.id,
             name: products.name,
-            description: products.description,
+            description: sql<string | null>`CASE
+                WHEN ${products.description} IS NULL THEN NULL
+                WHEN length(${products.description}) > 1000 THEN substr(${products.description}, 1, 1000)
+                ELSE ${products.description}
+            END`,
             price: products.price,
             compareAtPrice: products.compareAtPrice,
             image: products.image,
-            productImages: products.productImages,
             category: products.category,
             isHot: products.isHot,
             isShared: products.isShared,
@@ -1444,7 +1451,8 @@ function formatLocalDate(ms: number) {
     return `${year}-${month}-${day}`
 }
 
-export async function getAdminOverview(nowMs: number, lowStockThreshold = 5) {
+export async function getAdminOverview(lowStockThreshold = 5) {
+    const nowMs = Date.now()
     const todayStartMs = startOfLocalDay(nowMs)
     const yesterdayStartMs = startOfLocalDay(nowMs, 1)
     const trendStartMs = startOfLocalDay(nowMs, 6)
@@ -1962,12 +1970,24 @@ export async function getActiveProductCategories(options?: { isLoggedIn?: boolea
 }
 
 // Reviews
-export async function getProductReviews(productId: string) {
+export async function getProductReviews(
+    productId: string,
+    limit = 20,
+    cursor?: { createdAtMs: number; id: number } | null,
+) {
     await ensureReviewRepliesTable()
+    const safeLimit = Math.min(Math.max(Math.trunc(limit) || 20, 1), 100)
+    const cursorCondition = cursor
+        ? sql`(
+            COALESCE(${reviews.createdAt}, 0) < ${cursor.createdAtMs}
+            OR (COALESCE(${reviews.createdAt}, 0) = ${cursor.createdAtMs} AND ${reviews.id} < ${cursor.id})
+        )`
+        : undefined
     const reviewRows = await db.select()
         .from(reviews)
-        .where(eq(reviews.productId, productId))
-        .orderBy(desc(reviews.createdAt));
+        .where(and(eq(reviews.productId, productId), cursorCondition))
+        .orderBy(sql`COALESCE(${reviews.createdAt}, 0) DESC`, desc(reviews.id))
+        .limit(safeLimit);
 
     if (!reviewRows.length) return reviewRows.map((review) => ({ ...review, replies: [] }));
 
@@ -2982,9 +3002,20 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
         const orderIds = candidates.map((row) => row.orderId).filter(Boolean);
         if (!orderIds.length) return orderIds;
 
+        const actuallyCancelled: typeof candidates = [];
         for (const expired of candidates) {
             const expiredOrderId = expired.orderId;
             if (!expiredOrderId) continue;
+            const cancelled = await db.update(orders)
+                .set({ status: 'cancelled' })
+                .where(and(
+                    eq(orders.orderId, expiredOrderId),
+                    eq(orders.status, 'pending')
+                ))
+                .returning({ orderId: orders.orderId });
+            if (!cancelled.length) continue;
+            actuallyCancelled.push(expired);
+
             if (expired.userId && expired.pointsUsed && expired.pointsUsed > 0) {
                 await ensurePointLedgerUserRecord({
                     userId: expired.userId,
@@ -3014,12 +3045,9 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
             } catch (error: any) {
                 if (!isMissingTableOrColumn(error)) throw error;
             }
-            await db.update(orders)
-                .set({ status: 'cancelled' })
-                .where(eq(orders.orderId, expiredOrderId));
         }
 
-        const productIds = Array.from(new Set(candidates.map((row) => row.productId).filter(Boolean)));
+        const productIds = Array.from(new Set(actuallyCancelled.map((row) => row.productId).filter(Boolean)));
         for (const pid of productIds) {
             try {
                 await recalcProductAggregates(pid);
@@ -3037,7 +3065,7 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
             revalidatePath('/orders');
             revalidatePath('/admin/orders');
             revalidatePath('/admin/users');
-            for (const expired of candidates) {
+            for (const expired of actuallyCancelled) {
                 if (expired.orderId) {
                     revalidatePath(`/order/${expired.orderId}`);
                 }
@@ -3049,7 +3077,7 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
             // best effort
         }
 
-        return orderIds;
+        return actuallyCancelled.map((row) => row.orderId).filter(Boolean);
     } catch (error: any) {
         if (isMissingTableOrColumn(error)) return [];
         throw error;

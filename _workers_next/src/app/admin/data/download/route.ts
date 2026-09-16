@@ -22,12 +22,10 @@ import {
 } from "@/lib/db/schema"
 import { and, desc, eq, or, sql } from "drizzle-orm"
 import { getProducts, normalizeTimestampMs } from "@/lib/db/queries"
+import { isAdminIdentity } from "@/lib/admin-auth"
 
-function requireAdminUsername(username?: string | null) {
-  const adminUsers = process.env.ADMIN_USERS?.toLowerCase().split(",") || []
-  if (!username || !adminUsers.includes(username.toLowerCase())) {
-    throw new Error("Unauthorized")
-  }
+function requireAdminIdentity(user?: { id?: string | null; username?: string | null } | null) {
+  if (!isAdminIdentity(user)) throw new Error("Unauthorized")
 }
 
 function isMissingTable(error: any) {
@@ -91,7 +89,7 @@ function rowToInsertOrIgnore(table: string, row: Record<string, any>): string {
 
 export async function GET(req: Request) {
   const session = await auth()
-  requireAdminUsername(session?.user?.username ?? null)
+  requireAdminIdentity(session?.user)
 
   const { searchParams } = new URL(req.url)
   const type = (searchParams.get("type") || "").toLowerCase()

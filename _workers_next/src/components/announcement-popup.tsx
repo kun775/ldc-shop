@@ -67,14 +67,10 @@ export function AnnouncementPopup({ popup }: { popup: AnnouncementPopupData }) {
     }, [content, signature])
 
     useEffect(() => {
-        if (!content) {
-            setOpen(false)
-            return
-        }
-
-        if (checkShouldOpen()) {
-            setOpen(true)
-        }
+        const timeoutId = window.setTimeout(() => {
+            setOpen(Boolean(content) && checkShouldOpen())
+        }, 0)
+        return () => window.clearTimeout(timeoutId)
     }, [content, checkShouldOpen])
 
     useEffect(() => {
