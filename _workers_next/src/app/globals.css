@@ -468,6 +468,16 @@ body:has([data-admin-root]) {
   overflow: hidden;
 }
 
+/* 高度链路兜底：任何直接包裹 [data-admin-root] 的中间层都必须成为
+   flex 高度传导体。根级与后台级 template.tsx 历史上各断过一次链路，
+   这里用 :has() 直接兜住父层，避免以后新增包裹层再次复发。 */
+body:has([data-admin-root]) :has(> [data-admin-root]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  min-height: 0;
+}
+
 /* 降级保护：浏览器不支持 :has() 时，后台退回文档自然滚动，
    避免因视口锁定失效导致内容被裁切且完全无法滚动。 */
 @supports not (selector(:has(*))) {

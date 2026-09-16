@@ -48,3 +48,6 @@ next-env.d.ts
 # database
 postgres-data/
 
+# 本地布局验证脚手架（离线 Chromium 复现后台高度链路问题）
+_workers_next/.probe/
+
