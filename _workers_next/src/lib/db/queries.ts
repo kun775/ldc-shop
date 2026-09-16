@@ -101,10 +101,12 @@ async function safeAddColumn(table: string, column: string, definition: string) 
     try {
         await db.run(sql.raw(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`));
     } catch (e: any) {
-        // Ignore "duplicate column" errors in SQLite
-        // Use JSON.stringify AND String(e) to be safe across different environments
-        const errorString = (JSON.stringify(e) + String(e)).toLowerCase();
-        if (!errorString.includes('duplicate column')) throw e;
+        // Ignore "duplicate column" errors in SQLite / Cloudflare D1
+        const errorString = ((e?.message || '') + ' ' + String(e || '')).toLowerCase();
+        if (errorString.includes('duplicate column') || errorString.includes('already exists') || errorString.includes('duplicate')) {
+            return;
+        }
+        throw e;
     }
 }
 
@@ -2796,14 +2798,33 @@ export async function getLoginUserEmail(userId: string): Promise<string | null> 
 
 export async function updateLoginUserEmail(userId: string, email: string | null) {
     if (!userId) return;
+    const doUpdate = async () => {
+        const existing = await db.select({ userId: loginUsers.userId })
+            .from(loginUsers)
+            .where(eq(loginUsers.userId, userId))
+            .limit(1);
+
+        if (existing.length > 0) {
+            await db.update(loginUsers)
+                .set({ email: email || null, lastLoginAt: new Date() })
+                .where(eq(loginUsers.userId, userId));
+        } else {
+            await db.insert(loginUsers).values({
+                userId,
+                email: email || null,
+                lastLoginAt: new Date(),
+            });
+        }
+    };
+
     try {
-        await ensureLoginUsersTable();
-        await safeAddColumn('login_users', 'email', 'TEXT');
-        await db.update(loginUsers)
-            .set({ email: email || null, lastLoginAt: new Date() })
-            .where(eq(loginUsers.userId, userId));
+        await doUpdate();
     } catch (error: any) {
-        if (isMissingTableOrColumn(error)) return;
+        if (isMissingTableOrColumn(error)) {
+            await ensureLoginUsersSchema();
+            await doUpdate();
+            return;
+        }
         throw error;
     }
 }

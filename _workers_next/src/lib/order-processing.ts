@@ -370,7 +370,7 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                 console.error('[Notification] User delivery notify failed:', err);
             }
 
-            after(async () => {
+            try {
                 const product = await db.query.products.findFirst({
                     where: eq(products.id, order.productId),
                     columns: { name: true }
@@ -395,13 +395,22 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                     console.error('[Notification] Delivery notify failed:', err);
                 }
 
-                let recipientEmail = order.email?.trim()
-                if (!recipientEmail && order.userId) {
+                let recipientEmail = (order.email || '').trim()
+                let profileEmail = ''
+                if (order.userId) {
                     try {
-                        recipientEmail = (await getLoginUserEmail(order.userId)) || ''
+                        profileEmail = ((await getLoginUserEmail(order.userId)) || '').trim()
                     } catch {
                         // best effort
                     }
+                }
+
+                if (profileEmail && isValidEmail(profileEmail)) {
+                    if (!recipientEmail || recipientEmail.toLowerCase().endsWith('@privaterelay.linux.do')) {
+                        recipientEmail = profileEmail
+                    }
+                } else if (!recipientEmail && profileEmail) {
+                    recipientEmail = profileEmail
                 }
                 if (recipientEmail && isValidEmail(recipientEmail)) {
                     await sendOrderEmail({
@@ -411,7 +420,9 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                         cardKeys: joinedKeys
                     }).catch(err => console.error('[Email] Send failed:', err));
                 }
-            })
+            } catch (err) {
+                console.error('[Fulfill] Post-delivery background tasks failed:', err);
+            }
             await autoReplenishByApi(order.productId, `order:${orderId}`)
         } else {
             // Paid but no stock
@@ -420,31 +431,29 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                 .where(eq(orders.orderId, orderId));
             console.log(`[Fulfill] Order ${orderId} marked as paid (no stock)`);
 
-            after(async () => {
-                try {
-                    const user = await db.query.loginUsers.findFirst({
-                        where: eq(users.userId, order.userId || ''),
-                        columns: { username: true }
-                    }).catch(() => null);
+            try {
+                const user = await db.query.loginUsers.findFirst({
+                    where: eq(users.userId, order.userId || ''),
+                    columns: { username: true }
+                }).catch(() => null);
 
-                    const product = await db.query.products.findFirst({
-                        where: eq(products.id, order.productId),
-                        columns: { name: true }
-                    });
+                const product = await db.query.products.findFirst({
+                    where: eq(products.id, order.productId),
+                    columns: { name: true }
+                });
 
-                    await notifyAdminPaymentSuccess({
-                        orderId: orderId,
-                        productName: product?.name || 'Unknown Product',
-                        amount: order.amount,
-                        username: user?.username,
-                        email: order.email,
-                        tradeNo: tradeNo,
-                        checkoutFieldValues: order.checkoutFieldValues
-                    });
-                } catch (err) {
-                    console.error('[Notification] No-stock notify failed:', err);
-                }
-            })
+                await notifyAdminPaymentSuccess({
+                    orderId: orderId,
+                    productName: product?.name || 'Unknown Product',
+                    amount: order.amount,
+                    username: user?.username,
+                    email: order.email,
+                    tradeNo: tradeNo,
+                    checkoutFieldValues: order.checkoutFieldValues
+                });
+            } catch (err) {
+                console.error('[Notification] No-stock notify failed:', err);
+            }
         }
         await refreshAggregates();
         return { success: true, status: 'processed' };

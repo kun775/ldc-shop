@@ -2,6 +2,7 @@
 
 import { auth } from "@/lib/auth"
 import { updateLoginUserEmail, updateLoginUserDesktopNotificationsEnabled } from "@/lib/db/queries"
+import { revalidatePath } from "next/cache"
 
 function isValidEmail(value: string) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
@@ -19,8 +20,14 @@ export async function updateProfileEmail(emailInput: string) {
         return { success: false, error: 'profile.emailInvalid' }
     }
 
-    await updateLoginUserEmail(userId, email || null)
-    return { success: true }
+    try {
+        await updateLoginUserEmail(userId, email || null)
+        revalidatePath('/profile')
+        return { success: true }
+    } catch (error) {
+        console.error('[Profile] updateProfileEmail failed:', error)
+        return { success: false, error: 'common.error' }
+    }
 }
 
 export async function updateDesktopNotifications(enabled: boolean) {

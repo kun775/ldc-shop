@@ -1,6 +1,5 @@
 'use server'
 
-import { after } from "next/server"
 import { db } from "@/lib/db"
 import { cards, orders, refundRequests } from "@/lib/db/schema"
 import { and, eq, sql } from "drizzle-orm"
@@ -89,30 +88,40 @@ export async function markOrderDelivered(orderId: string, formData?: FormData) {
 
   if (manual) {
     const finalNote = deliveryNote || order.deliveryNote || null
-    after(async () => {
-      try {
-        let recipientEmail = (order.email || '').trim()
-        if (!recipientEmail && order.userId) {
-          try {
-            recipientEmail = (await getLoginUserEmail(order.userId)) || ''
-          } catch {
-            // best effort
-          }
+    try {
+      let recipientEmail = (order.email || '').trim()
+      let profileEmail = ''
+      if (order.userId) {
+        try {
+          profileEmail = ((await getLoginUserEmail(order.userId)) || '').trim()
+        } catch {
+          // best effort
         }
-        if (recipientEmail && isValidEmail(recipientEmail)) {
-          const hasAttachments = files.length > 0 || (await listDeliveryFiles(orderId)).length > 0
-          await sendManualDeliveryEmail({
-            to: recipientEmail,
-            orderId: order.orderId,
-            productName: order.productName || 'Product',
-            deliveryNote: finalNote,
-            hasAttachments,
-          })
-        }
-      } catch (err) {
-        console.error('[Email] Manual delivery email failed:', err)
       }
-    })
+
+      if (profileEmail && isValidEmail(profileEmail)) {
+        if (!recipientEmail || recipientEmail.toLowerCase().endsWith('@privaterelay.linux.do')) {
+          recipientEmail = profileEmail
+        }
+      } else if (!recipientEmail && profileEmail) {
+        recipientEmail = profileEmail
+      }
+      if (recipientEmail && isValidEmail(recipientEmail)) {
+        const hasAttachments = files.length > 0 || (await listDeliveryFiles(orderId)).length > 0
+        const emailResult = await sendManualDeliveryEmail({
+          to: recipientEmail,
+          orderId: order.orderId,
+          productName: order.productName || 'Product',
+          deliveryNote: finalNote,
+          hasAttachments,
+        })
+        console.log('[Email] sendManualDeliveryEmail result:', emailResult)
+      } else {
+        console.log('[Email] Skipped sending manual delivery email: no valid email found for order', orderId)
+      }
+    } catch (err) {
+      console.error('[Email] Manual delivery email failed:', err)
+    }
   }
 
   if (order.productId && order.cardIds) {

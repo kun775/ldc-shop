@@ -149,15 +149,16 @@ export async function createOrder(productId: string, quantity: number = 1, email
     const fulfillmentMode = parseFulfillmentMode(product.fulfillmentMode)
     const manualFulfillment = isManualFulfillment(fulfillmentMode)
     const rawContact = (email || '').trim()
-    let fallbackEmail = (user?.email || '').trim()
-    if (!fallbackEmail && user?.id) {
+    let customProfileEmail = ''
+    if (user?.id) {
         try {
-            fallbackEmail = (await getLoginUserEmail(user.id)) || ''
+            customProfileEmail = ((await getLoginUserEmail(user.id)) || '').trim()
         } catch {
             // best effort
         }
     }
-    const contactInfo = rawContact || fallbackEmail
+    const oauthEmail = (user?.email || '').trim()
+    const contactInfo = rawContact || customProfileEmail || oauthEmail
     const resolvedContactInfo = contactInfo || null
     const resolvedDeliveryEmail = isValidEmail(contactInfo) ? contactInfo : null
 
