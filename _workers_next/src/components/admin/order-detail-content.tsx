@@ -1,7 +1,7 @@
 'use client'
 
 import Link from "next/link"
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useI18n } from "@/lib/i18n/context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -14,7 +14,7 @@ import { ClientDate } from "@/components/client-date"
 import { RefundButton } from "@/components/admin/refund-button"
 import { AdminPageShell } from "@/components/admin/admin-page-shell"
 import { toast } from "sonner"
-import { markOrderDelivered, markOrderPaid, cancelOrder, updateOrderEmail, deleteOrder } from "@/actions/admin-orders"
+import { markOrderDelivered, markOrderPaid, cancelOrder, updateOrderEmail, deleteOrder, type OrderActionResult } from "@/actions/admin-orders"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
 import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
@@ -35,14 +35,22 @@ import {
   Check, 
   ArrowLeft, 
   Send,
-  Loader2,
-  ShieldCheck,
-  User,
-  CreditCard,
-  Package
+  Loader2
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
+
+/**
+ * 提交状态机：同一时刻只允许一个显式状态，禁止再用多个互不关联的布尔值
+ * 控制同一个遮罩（历史上并存的 loading/disabled 布尔值正是遮罩卡死的成因）。
+ *
+ *   idle → submitting → success | error → idle
+ *
+ * success 只是瞬时状态，用于播报成功反馈后立即回到 idle；
+ * error 会保留在界面上直到管理员处理（重试或修改输入），因此必须同时
+ * 解除按钮禁用与遮罩，保证页面可以继续操作。
+ */
+type SubmitPhase = 'idle' | 'submitting' | 'success' | 'error'
 
 function formatFileSize(bytes: number) {
   if (!bytes || bytes <= 0) return '0 B'
@@ -86,90 +94,172 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
   const checkoutFieldValues = parseCheckoutFieldValues(order.checkoutFieldValues)
   const [email, setEmail] = useState(order.email || '')
   const [savingEmail, setSavingEmail] = useState(false)
-  const [actionLoading, setActionLoading] = useState(false)
+  const [phase, setPhase] = useState<SubmitPhase>('idle')
+  const [submitError, setSubmitError] = useState<{ key: string; errorId: string } | null>(null)
   const [deliveryNote, setDeliveryNote] = useState(order.deliveryNote || '')
-  const actionLock = useRef(false)
+  // 同步锁：setState 是异步的，连续快速点击仍可能穿过 phase 判断，必须用 ref 兜住
+  const submitLock = useRef(false)
+  // 组件卸载后忽略迟到响应，避免对已卸载界面写状态
+  const mountedRef = useRef(true)
   const deliveryFormRef = useRef<HTMLFormElement | null>(null)
   const isManual = isManualFulfillment(order.fulfillmentMode)
   const deliveryFiles = Array.isArray(order.deliveryFiles) ? order.deliveryFiles : []
 
+  const isSubmitting = phase === 'submitting'
   const status = order.status || 'pending'
   const canMarkPaid = status === 'pending'
   const canMarkDelivered = status === 'paid' && (isManual || !!order.cardKey)
   const canCancel = status === 'pending'
   const canDelete = true
 
-  const handleStatus = async (action: 'paid' | 'delivered' | 'cancel') => {
-    if (actionLock.current) return
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  /** 统一的提交执行器：成功、业务失败、网络失败、异常抛出后都必须释放状态 */
+  const runSubmit = async (runner: () => Promise<OrderActionResult>) => {
+    if (submitLock.current) return
+    submitLock.current = true
+    setSubmitError(null)
+    setPhase('submitting')
     try {
-      if (action === 'paid') {
-        const ok = await confirm({
-          title: t('admin.orders.markPaid') || "标记订单为已支付",
-          description: t('admin.orders.confirmMarkPaid'),
-          variant: 'default',
-          icon: 'check',
-          confirmText: t('common.confirm'),
-          cancelText: t('common.cancel'),
-        })
-        if (!ok) return
-        actionLock.current = true
-        setActionLoading(true)
-        await markOrderPaid(order.orderId)
-        toast.success(t('common.success'))
-        return
+      const result = await runner()
+      if (!mountedRef.current) return
+      if (result.ok) {
+        setPhase('success')
+      } else {
+        setPhase('error')
+        setSubmitError({ key: result.errorKey, errorId: result.errorId })
+        if (result.errorId) {
+          toast.error(`${t(result.errorKey)} · ${t('common.errorIdLabel')} ${result.errorId}`)
+        } else {
+          toast.error(t(result.errorKey))
+        }
       }
-      if (action === 'delivered') {
-        const ok = await confirm({
-          title: t('admin.orders.markDelivered') || "标记订单为已发货",
-          description: t('admin.orders.confirmMarkDelivered'),
-          variant: 'default',
-          icon: 'check',
-          confirmText: t('common.confirm'),
-          cancelText: t('common.cancel'),
-        })
-        if (!ok) return
-        actionLock.current = true
-        setActionLoading(true)
-        const formData = isManual ? new FormData(deliveryFormRef.current || undefined) : undefined
-        if (isManual) formData?.set('deliveryNote', deliveryNote)
-        await markOrderDelivered(order.orderId, formData)
-        toast.success(t('common.success'))
-        router.refresh()
-        return
-      }
-      if (action === 'cancel') {
-        const ok = await confirm({
-          title: t('admin.orders.cancelOrder') || "取消订单",
-          description: t('admin.orders.confirmCancel'),
-          variant: 'destructive',
-          icon: 'alert',
-          confirmText: t('common.confirm'),
-          cancelText: t('common.cancel'),
-        })
-        if (!ok) return
-        actionLock.current = true
-        setActionLoading(true)
-        await cancelOrder(order.orderId)
-        toast.success(t('common.success'))
-      }
-    } catch (e: any) {
-      toast.error(t(resolveClientActionErrorKey(e)))
+    } catch (error) {
+      // Server Action 抛出的异常（网络中断、Action 未捕获的异常）也必须落到 error 态，
+      // 否则遮罩会永久停留。
+      if (!mountedRef.current) return
+      const errorKey = resolveClientActionErrorKey(error)
+      setPhase('error')
+      setSubmitError({ key: errorKey, errorId: '' })
+      toast.error(t(errorKey))
     } finally {
-      setActionLoading(false)
-      actionLock.current = false
+      submitLock.current = false
+      if (mountedRef.current) {
+        setPhase((current) => (current === 'submitting' ? 'idle' : current))
+      }
     }
   }
 
+  const handleStatus = async (action: 'paid' | 'delivered' | 'cancel') => {
+    if (submitLock.current) return
+
+    if (action === 'paid') {
+      const ok = await confirm({
+        title: t('admin.orders.markPaid') || "标记订单为已支付",
+        description: t('admin.orders.confirmMarkPaid'),
+        variant: 'default',
+        icon: 'check',
+        confirmText: t('common.confirm'),
+        cancelText: t('common.cancel'),
+      })
+      if (!ok) return
+      await runSubmit(async () => {
+        const result = await markOrderPaid(order.orderId)
+        if (result.ok) {
+          toast.success(t('common.success'))
+          router.refresh()
+        }
+        return result
+      })
+      return
+    }
+
+    if (action === 'delivered') {
+      const ok = await confirm({
+        title: t('admin.orders.markDelivered') || "标记订单为已发货",
+        description: t('admin.orders.confirmMarkDelivered'),
+        variant: 'default',
+        icon: 'check',
+        confirmText: t('common.confirm'),
+        cancelText: t('common.cancel'),
+      })
+      if (!ok) return
+      await runSubmit(async () => {
+        // 手动发货必须带上正文与附件；失败时保留 deliveryNote state，不清空输入
+        const formData = isManual ? new FormData(deliveryFormRef.current || undefined) : undefined
+        if (isManual) formData?.set('deliveryNote', deliveryNote)
+        const result = await markOrderDelivered(order.orderId, formData)
+        if (result.ok) {
+          toast.success(t('admin.orders.deliverySuccess'))
+          router.refresh()
+        }
+        return result
+      })
+      return
+    }
+
+    const ok = await confirm({
+      title: t('admin.orders.cancelOrder') || "取消订单",
+      description: t('admin.orders.confirmCancel'),
+      variant: 'destructive',
+      icon: 'alert',
+      confirmText: t('common.confirm'),
+      cancelText: t('common.cancel'),
+    })
+    if (!ok) return
+    await runSubmit(async () => {
+      const result = await cancelOrder(order.orderId)
+      if (result.ok) {
+        toast.success(t('common.success'))
+        router.refresh()
+      }
+      return result
+    })
+  }
+
   const handleSaveEmail = async () => {
+    if (savingEmail) return
     setSavingEmail(true)
     try {
-      await updateOrderEmail(order.orderId, email)
-      toast.success(t('common.success'))
-    } catch (e: any) {
-      toast.error(t(resolveClientActionErrorKey(e)))
+      const result = await updateOrderEmail(order.orderId, email)
+      if (!mountedRef.current) return
+      if (result.ok) {
+        toast.success(t('common.success'))
+      } else {
+        toast.error(result.errorId ? `${t(result.errorKey)} · ${result.errorId}` : t(result.errorKey))
+      }
+    } catch (error) {
+      if (!mountedRef.current) return
+      toast.error(t(resolveClientActionErrorKey(error)))
     } finally {
-      setSavingEmail(false)
+      if (mountedRef.current) setSavingEmail(false)
     }
+  }
+
+  const handleDelete = async () => {
+    if (submitLock.current) return
+    const ok = await confirm({
+      title: t('admin.orders.delete') || "删除订单",
+      description: t('admin.orders.confirmDelete'),
+      variant: 'destructive',
+      icon: 'trash',
+      confirmText: t('common.delete'),
+      cancelText: t('common.cancel'),
+    })
+    if (!ok) return
+    await runSubmit(async () => {
+      const result = await deleteOrder(order.orderId)
+      if (result.ok) {
+        toast.success(t('common.success'))
+        router.push('/admin/orders')
+      }
+      return result
+    })
   }
 
   return (
@@ -205,9 +295,9 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                 size="sm" 
                 className="rounded-xl gap-1.5 text-xs font-medium" 
                 onClick={() => handleStatus('paid')} 
-                disabled={actionLoading}
+                disabled={isSubmitting}
               >
-                <Check className="h-3.5 w-3.5" />
+                {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                 <span>{t('admin.orders.markPaid')}</span>
               </Button>
             )}
@@ -217,7 +307,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                 size="sm" 
                 className="rounded-xl gap-1.5 text-xs font-medium" 
                 onClick={() => handleStatus('delivered')} 
-                disabled={actionLoading}
+                disabled={isSubmitting}
               >
                 <Zap className="h-3.5 w-3.5 text-primary" />
                 <span>{t('admin.orders.markDelivered')}</span>
@@ -229,7 +319,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                 size="sm" 
                 className="rounded-xl text-destructive hover:bg-destructive/10 text-xs font-medium" 
                 onClick={() => handleStatus('cancel')} 
-                disabled={actionLoading}
+                disabled={isSubmitting}
               >
                 {t('admin.orders.cancel')}
               </Button>
@@ -240,31 +330,8 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                 variant="ghost"
                 size="sm"
                 className="rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 text-xs"
-                onClick={async () => {
-                  if (actionLock.current) return
-                  const ok = await confirm({
-                    title: t('admin.orders.delete') || "删除订单",
-                    description: t('admin.orders.confirmDelete'),
-                    variant: 'destructive',
-                    icon: 'trash',
-                    confirmText: t('common.delete'),
-                    cancelText: t('common.cancel'),
-                  })
-                  if (!ok) return
-                  actionLock.current = true
-                  setActionLoading(true)
-                  try {
-                    await deleteOrder(order.orderId)
-                    toast.success(t('common.success'))
-                    router.push('/admin/orders')
-                  } catch (e: any) {
-                    toast.error(t(resolveClientActionErrorKey(e)))
-                  } finally {
-                    setActionLoading(false)
-                    actionLock.current = false
-                  }
-                }}
-                disabled={actionLoading}
+                onClick={handleDelete}
+                disabled={isSubmitting}
                 title={t('admin.orders.delete')}
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -408,7 +475,22 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
             </div>
 
             {isManual && status === 'paid' && (
-              <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-4">
+              <div className="relative rounded-xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-4">
+                {/* 提交遮罩限定在当前业务卡片内，使用 absolute 而非 fixed：
+                    不会盖住页面级 Loading（z-[90]），也不会在视觉消失后残留拦截点击。
+                    错误态下自动收起，管理员可以立即修改内容重试。 */}
+                {isSubmitting && (
+                  <div
+                    data-delivery-overlay="true"
+                    role="status"
+                    aria-live="polite"
+                    aria-busy="true"
+                    className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-xl bg-background/80 backdrop-blur-[2px] motion-reduce:backdrop-blur-none"
+                  >
+                    <Loader2 className="h-5 w-5 animate-spin text-primary motion-reduce:animate-none" />
+                    <span className="text-xs text-muted-foreground">{t('admin.orders.delivering')}</span>
+                  </div>
+                )}
                 <div className="flex items-center gap-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
                   <PackageOpen className="h-4 w-4" />
                   <span>手动发货履约工作台 · 待商家交付</span>
@@ -425,6 +507,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                       onChange={(event) => setDeliveryNote(event.target.value)}
                       placeholder={t('admin.orders.deliveryNotePlaceholder')}
                       className="min-h-24 rounded-xl text-sm"
+                      disabled={isSubmitting}
                     />
                   </div>
                   <div className="space-y-2">
@@ -439,18 +522,32 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                         multiple 
                         accept=".pdf,.png,.jpg,.jpeg,.webp,.zip,.7z" 
                         className="cursor-pointer file:cursor-pointer rounded-lg text-xs"
+                        disabled={isSubmitting}
                       />
                       <p className="text-xs text-muted-foreground">{t('admin.orders.deliveryFilesHint')}</p>
                     </div>
                   </div>
+                  {submitError && (
+                    <div
+                      role="alert"
+                      className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive space-y-1"
+                    >
+                      <p className="font-medium">{t(submitError.key)}</p>
+                      {submitError.errorId && (
+                        <p className="font-mono text-[11px] text-destructive/80">
+                          {t('common.errorIdLabel')}: {submitError.errorId}
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <Button 
                     type="button" 
                     onClick={() => handleStatus('delivered')} 
-                    disabled={actionLoading}
+                    disabled={isSubmitting}
                     className="rounded-xl bg-primary font-semibold text-primary-foreground hover:bg-primary/90 gap-1.5"
                   >
-                    {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                    <span>{t('admin.orders.deliverNow')}</span>
+                    {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    <span>{isSubmitting ? t('admin.orders.delivering') : t('admin.orders.deliverNow')}</span>
                   </Button>
                 </form>
               </div>

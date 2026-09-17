@@ -87,6 +87,42 @@ export async function deleteDeliveryFiles(orderId: string) {
     await db.delete(orderDeliveryFiles).where(eq(orderDeliveryFiles.orderId, orderId))
 }
 
+/**
+ * deleteDeliveryFileIds 只删除指定 id 的交付附件。
+ *
+ * 用途：手动发货在「附件已落库、但后续订单状态更新失败」时回滚本次上传，
+ * 避免留下没人引用的孤儿附件。回滚是 best-effort —— 即使清理失败也不能
+ * 覆盖原始错误，否则管理员看到的原因会被误导。
+ */
+export async function deleteDeliveryFileIds(orderId: string, fileIds: number[]) {
+    const ids = fileIds.filter((id) => Number.isFinite(id))
+    if (!ids.length) return
+
+    try {
+        const rows = await db.select({
+            id: orderDeliveryFiles.id,
+            storage: orderDeliveryFiles.storage,
+            objectKey: orderDeliveryFiles.objectKey,
+        })
+            .from(orderDeliveryFiles)
+            .where(and(eq(orderDeliveryFiles.orderId, orderId), inArray(orderDeliveryFiles.id, ids)))
+
+        const bucket = await getFilesBucket()
+        const r2Keys = rows
+            .filter((row) => row.storage === "r2" && row.objectKey)
+            .map((row) => row.objectKey as string)
+        if (bucket && r2Keys.length) {
+            await bucket.delete(r2Keys)
+        }
+        if (rows.length) {
+            await db.delete(orderDeliveryFiles)
+                .where(and(eq(orderDeliveryFiles.orderId, orderId), inArray(orderDeliveryFiles.id, rows.map((row) => row.id))))
+        }
+    } catch (error) {
+        console.error('[DeliveryFiles] Rollback of saved files failed:', error)
+    }
+}
+
 export async function listDeliveryFiles(orderId: string): Promise<DeliveryFileMeta[]> {
     try {
         const rows = await db.select({

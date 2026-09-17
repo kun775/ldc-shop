@@ -119,6 +119,15 @@ export function AdminOrdersContent({
     const [deleting, setDeleting] = useState(false)
     const [refreshing, setRefreshing] = useState(false)
     const deleteLock = useRef(false)
+    // 组件卸载后忽略迟到响应，避免对已卸载界面写状态
+    const mountedRef = useRef(true)
+
+    useEffect(() => {
+        mountedRef.current = true
+        return () => {
+            mountedRef.current = false
+        }
+    }, [])
 
     useEffect(() => {
         setQueryValue(query || "")
@@ -219,15 +228,23 @@ export function AdminOrdersContent({
         deleteLock.current = true
         setDeleting(true)
         try {
-            await deleteOrders(selectedIds)
-            toast.success(t('common.success'))
-            setSelected({})
-            router.refresh()
+            const result = await deleteOrders(selectedIds)
+            if (!mountedRef.current) return
+            if (result.ok) {
+                toast.success(t('common.success'))
+                setSelected({})
+                router.refresh()
+            } else if (result.errorId) {
+                toast.error(`${t(result.errorKey)} · ${t('common.errorIdLabel')} ${result.errorId}`)
+            } else {
+                toast.error(t(result.errorKey))
+            }
         } catch (e: any) {
+            if (!mountedRef.current) return
             toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
-            setDeleting(false)
             deleteLock.current = false
+            if (mountedRef.current) setDeleting(false)
         }
     }
 

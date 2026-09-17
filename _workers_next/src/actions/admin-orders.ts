@@ -8,247 +8,325 @@ import { checkAdmin } from "@/actions/admin"
 import { createUserNotification, ensureDatabaseInitialized, getLoginUserEmail, recalcProductAggregates, recalcProductAggregatesForMany } from "@/lib/db/queries"
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
-import { DELIVERY_FILE_LIMITS, deleteDeliveryFiles, listDeliveryFiles, saveDeliveryFiles } from "@/lib/delivery-files"
+import { DELIVERY_FILE_LIMITS, deleteDeliveryFileIds, deleteDeliveryFiles, listDeliveryFiles, saveDeliveryFiles } from "@/lib/delivery-files"
 import { isManualFulfillment } from "@/lib/fulfillment"
 import { isValidEmail, sendManualDeliveryEmail } from "@/lib/email"
 import { consumeCouponReservations, releaseCouponUsages } from "@/lib/coupons/reservation"
-import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
+import {
+    logServerError,
+    resolveClientActionErrorKey,
+    resolveClientErrorKey,
+    sanitizeClientErrorMessage,
+} from "@/lib/errors/safe-error"
+import { ORDER_ERROR_KEY_MAP } from "@/lib/orders/order-errors"
 
-export async function markOrderPaid(orderId: string) {
-  await checkAdmin()
-  if (!orderId) throw new Error("Missing order id")
+/**
+ * 订单写操作的统一返回协议。
+ *
+ * 为什么不继续 throw：
+ *   Server Action 的返回值不会被 Next.js 脱敏，只有 throw 才会。反过来说，
+ *   throw 出去的错误在客户端只能拿到被 Next.js 替换过的通用消息（或 digest），
+ *   业务错误与系统错误无法区分。因此这里统一改为「显式 return」，
+ *   由服务端完成脱敏并附带可对账的 errorId。
+ */
+export type OrderActionResult =
+    | { ok: true }
+    | { ok: false; errorKey: string; errorId: string }
 
-  const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId), columns: { productId: true } })
-  await db.update(orders).set({
-    status: 'paid',
-    paidAt: new Date(),
-  }).where(eq(orders.orderId, orderId))
-
-  // 管理员手工标记已支付同样要核销优惠券预占，避免次数泄漏
-  try {
-    await consumeCouponReservations(orderId)
-  } catch (error) {
-    console.error('[Coupon] Consume on admin mark paid failed:', error)
-  }
-
-  revalidatePath('/admin/orders')
-  revalidatePath(`/admin/orders/${orderId}`)
-  revalidatePath(`/order/${orderId}`)
-  if (order?.productId) {
-    try {
-      await recalcProductAggregates(order.productId)
-    } catch {
-      // best effort
-    }
-  }
-  try {
-    updateTag('home:products')
-  } catch {
-    // best effort
-  }
+function failure(scope: string, error: unknown): OrderActionResult {
+    const errorId = logServerError(scope, error)
+    const errorKey = resolveClientErrorKey(error, ORDER_ERROR_KEY_MAP, 'common.error')
+    return { ok: false, errorKey, errorId }
 }
 
-export async function markOrderDelivered(orderId: string, formData?: FormData) {
-  await checkAdmin()
-  await ensureDatabaseInitialized()
-  if (!orderId) throw new Error("Missing order id")
-
-  const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
-  if (!order) throw new Error("Order not found")
-  const manual = isManualFulfillment(order.fulfillmentMode)
-  const deliveryNote = String(formData?.get('deliveryNote') || '').trim()
-  const files = formData ? formData.getAll('deliveryFiles').filter((item): item is File => item instanceof File && item.size > 0) : []
-  if (manual) {
-    if (deliveryNote.length > DELIVERY_FILE_LIMITS.maxNoteLength) {
-      throw new Error("admin.orders.deliveryNoteTooLong")
+/** 兼容「按 name 匹配 i18n key」的服务端错误：name 优先于 message */
+function resolveOrderErrorKey(error: unknown): string {
+    const name = String((error as { name?: unknown })?.name ?? '').trim()
+    if (name && /^[a-z][a-z0-9_-]*(?:\.[A-Za-z0-9_-]+)+$/.test(name)) {
+        return name
     }
-    if (!deliveryNote && files.length === 0) {
-      throw new Error("admin.orders.deliveryContentRequired")
-    }
-  } else if (!order.cardKey) {
-    throw new Error("Missing card key; cannot mark delivered")
-  }
+    return resolveClientActionErrorKey(error)
+}
 
-  if (files.length) {
-    await saveDeliveryFiles(orderId, files)
-  }
-
-  await db.update(orders).set({
-    status: 'delivered',
-    deliveredAt: new Date(),
-    ...(manual ? { deliveryNote: deliveryNote || order.deliveryNote || null } : {}),
-  }).where(eq(orders.orderId, orderId))
-
-  if (order.userId) {
-    await createUserNotification({
-      userId: order.userId,
-      type: 'order_delivered',
-      titleKey: 'profile.notifications.orderDeliveredTitle',
-      contentKey: 'profile.notifications.orderDeliveredBody',
-      data: {
-        params: {
-          orderId: order.orderId,
-          productName: order.productName || 'Product'
-        },
-        href: `/order/${order.orderId}`
-      }
-    })
-  }
-
-  if (manual) {
-    const finalNote = deliveryNote || order.deliveryNote || null
+export async function markOrderPaid(orderId: string): Promise<OrderActionResult> {
     try {
-      let recipientEmail = (order.email || '').trim()
-      let profileEmail = ''
-      if (order.userId) {
+        await checkAdmin()
+        if (!orderId) throw new Error("Missing order id")
+
+        const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId), columns: { productId: true } })
+        await db.update(orders).set({
+            status: 'paid',
+            paidAt: new Date(),
+        }).where(eq(orders.orderId, orderId))
+
+        // 管理员手工标记已支付同样要核销优惠券预占，避免次数泄漏
         try {
-          profileEmail = ((await getLoginUserEmail(order.userId)) || '').trim()
+            await consumeCouponReservations(orderId)
+        } catch (error) {
+            console.error('[Coupon] Consume on admin mark paid failed:', error)
+        }
+
+        revalidatePath('/admin/orders')
+        revalidatePath(`/admin/orders/${orderId}`)
+        revalidatePath(`/order/${orderId}`)
+        if (order?.productId) {
+            try {
+                await recalcProductAggregates(order.productId)
+            } catch {
+                // best effort
+            }
+        }
+        try {
+            updateTag('home:products')
         } catch {
-          // best effort
+            // best effort
         }
-      }
+        return { ok: true }
+    } catch (error) {
+        return failure('admin.markOrderPaid', error)
+    }
+}
 
-      if (profileEmail && isValidEmail(profileEmail)) {
-        if (!recipientEmail || recipientEmail.toLowerCase().endsWith('@privaterelay.linux.do')) {
-          recipientEmail = profileEmail
+export async function markOrderDelivered(orderId: string, formData?: FormData): Promise<OrderActionResult> {
+    let savedFileIds: number[] = []
+    try {
+        await checkAdmin()
+        await ensureDatabaseInitialized()
+        if (!orderId) throw new Error("admin.orders.orderMissing")
+
+        const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
+        if (!order) throw new Error("admin.orders.orderMissing")
+        const manual = isManualFulfillment(order.fulfillmentMode)
+
+        // 幂等/状态保护：只有已支付且未发货的订单允许发货。
+        // 并发或重复提交时，后到的请求命中这里并直接返回失败，
+        // 不会产生第二次通知、第二封邮件或重复附件。
+        if (order.status !== 'paid') {
+            throw new Error("admin.orders.deliveryStatusInvalid")
         }
-      } else if (!recipientEmail && profileEmail) {
-        recipientEmail = profileEmail
-      }
-      if (recipientEmail && isValidEmail(recipientEmail)) {
-        const hasAttachments = files.length > 0 || (await listDeliveryFiles(orderId)).length > 0
-        const emailResult = await sendManualDeliveryEmail({
-          to: recipientEmail,
-          orderId: order.orderId,
-          productName: order.productName || 'Product',
-          deliveryNote: finalNote,
-          hasAttachments,
+
+        const deliveryNote = String(formData?.get('deliveryNote') || '').trim()
+        const files = formData ? formData.getAll('deliveryFiles').filter((item): item is File => item instanceof File && item.size > 0) : []
+        if (manual) {
+            if (deliveryNote.length > DELIVERY_FILE_LIMITS.maxNoteLength) {
+                throw new Error("admin.orders.deliveryNoteTooLong")
+            }
+            if (!deliveryNote && files.length === 0) {
+                throw new Error("admin.orders.deliveryContentRequired")
+            }
+        } else if (!order.cardKey) {
+            throw new Error("admin.orders.deliveryCardKeyMissing")
+        }
+
+        if (files.length) {
+            const saved = await saveDeliveryFiles(orderId, files)
+            savedFileIds = saved.map((file) => file.id)
+        }
+
+        const updated = await db.update(orders).set({
+            status: 'delivered',
+            deliveredAt: new Date(),
+            ...(manual ? { deliveryNote: deliveryNote || order.deliveryNote || null } : {}),
         })
-        console.log('[Email] sendManualDeliveryEmail result:', emailResult)
-      } else {
-        console.log('[Email] Skipped sending manual delivery email: no valid email found for order', orderId)
-      }
-    } catch (err) {
-      console.error('[Email] Manual delivery email failed:', err)
-    }
-  }
+            .where(and(eq(orders.orderId, orderId), eq(orders.status, 'paid')))
+            .returning({ orderId: orders.orderId })
 
-  if (order.productId && order.cardIds) {
-    try {
-      const result = await pullOneCardFromApi(order.productId)
-      if (result.ok) {
-        console.log(`[Card API] Auto replenished for product ${order.productId}, reason=admin_mark_delivered:${orderId}`)
-      } else if (result.skipped) {
-        console.info(`[Card API] Auto replenish skipped for product ${order.productId}, reason=admin_mark_delivered:${orderId}, detail=${result.error || "skipped"}`)
-      } else {
-        console.warn(`[Card API] Auto replenish failed for product ${order.productId}, reason=admin_mark_delivered:${orderId}, detail=${result.error || "unknown_error"}`)
-      }
-    } catch (error: any) {
-      console.warn(`[Card API] Auto replenish exception for product ${order.productId}, reason=admin_mark_delivered:${orderId}, detail=${error?.message || "unknown_error"}`)
-    }
-  }
+        if (!updated.length) {
+            // 状态在本次请求过程中被其它请求改写（并发发货/取消）：回滚本次上传的附件
+            await deleteDeliveryFileIds(orderId, savedFileIds)
+            savedFileIds = []
+            throw new Error("admin.orders.deliveryStatusInvalid")
+        }
 
-  revalidatePath('/admin/orders')
-  revalidatePath(`/admin/orders/${orderId}`)
-  revalidatePath(`/order/${orderId}`)
-  if (order?.productId) {
+        if (order.userId) {
+            await createUserNotification({
+                userId: order.userId,
+                type: 'order_delivered',
+                titleKey: 'profile.notifications.orderDeliveredTitle',
+                contentKey: 'profile.notifications.orderDeliveredBody',
+                data: {
+                    params: {
+                        orderId: order.orderId,
+                        productName: order.productName || 'Product'
+                    },
+                    href: `/order/${order.orderId}`
+                }
+            })
+        }
+
+        if (manual) {
+            const finalNote = deliveryNote || order.deliveryNote || null
+            try {
+                let recipientEmail = (order.email || '').trim()
+                let profileEmail = ''
+                if (order.userId) {
+                    try {
+                        profileEmail = ((await getLoginUserEmail(order.userId)) || '').trim()
+                    } catch {
+                        // best effort
+                    }
+                }
+
+                if (profileEmail && isValidEmail(profileEmail)) {
+                    if (!recipientEmail || recipientEmail.toLowerCase().endsWith('@privaterelay.linux.do')) {
+                        recipientEmail = profileEmail
+                    }
+                } else if (!recipientEmail && profileEmail) {
+                    recipientEmail = profileEmail
+                }
+                if (recipientEmail && isValidEmail(recipientEmail)) {
+                    const hasAttachments = savedFileIds.length > 0 || (await listDeliveryFiles(orderId)).length > 0
+                    const emailResult = await sendManualDeliveryEmail({
+                        to: recipientEmail,
+                        orderId: order.orderId,
+                        productName: order.productName || 'Product',
+                        deliveryNote: finalNote,
+                        hasAttachments,
+                    })
+                    console.log('[Email] sendManualDeliveryEmail result:', emailResult)
+                } else {
+                    console.log('[Email] Skipped sending manual delivery email: no valid email found for order', orderId)
+                }
+            } catch (err) {
+                console.error('[Email] Manual delivery email failed:', err)
+            }
+        }
+
+        if (order.productId && order.cardIds) {
+            try {
+                const result = await pullOneCardFromApi(order.productId)
+                if (result.ok) {
+                    console.log(`[Card API] Auto replenished for product ${order.productId}, reason=admin_mark_delivered:${orderId}`)
+                } else if (result.skipped) {
+                    console.info(`[Card API] Auto replenish skipped for product ${order.productId}, reason=admin_mark_delivered:${orderId}, detail=${result.error || "skipped"}`)
+                } else {
+                    console.warn(`[Card API] Auto replenish failed for product ${order.productId}, reason=admin_mark_delivered:${orderId}, detail=${result.error || "unknown_error"}`)
+                }
+            } catch (error: any) {
+                console.warn(`[Card API] Auto replenish exception for product ${order.productId}, reason=admin_mark_delivered:${orderId}, detail=${error?.message || "unknown_error"}`)
+            }
+        }
+
+        revalidatePath('/admin/orders')
+        revalidatePath(`/admin/orders/${orderId}`)
+        revalidatePath(`/order/${orderId}`)
+        if (order?.productId) {
+            try {
+                await recalcProductAggregates(order.productId)
+            } catch {
+                // best effort
+            }
+        }
+        try {
+            updateTag('home:products')
+        } catch {
+            // best effort
+        }
+        return { ok: true }
+    } catch (error) {
+        // 订单写入失败时回滚本次上传的附件，避免留下孤儿文件
+        if (savedFileIds.length) {
+            await deleteDeliveryFileIds(orderId, savedFileIds)
+        }
+        const errorId = logServerError('admin.markOrderDelivered', error)
+        return { ok: false, errorKey: resolveOrderErrorKey(error), errorId }
+    }
+}
+
+export async function cancelOrder(orderId: string): Promise<OrderActionResult> {
+  try {
+    await checkAdmin()
+    if (!orderId) throw new Error("admin.orders.orderMissing")
+
+    // No transaction - D1 doesn't support SQL transactions
+    // 1. Refund points if used
+    const order = await db.query.orders.findFirst({
+      where: eq(orders.orderId, orderId),
+      columns: { userId: true, pointsUsed: true, productId: true, status: true }
+    })
+    if (!order) throw new Error("admin.orders.orderMissing")
+    if (order.status === 'processing') throw new Error("admin.orders.cancelProcessing")
+
+    const cancelled = await db.update(orders)
+      .set({ status: 'cancelled', fulfillmentClaimId: null, fulfillmentClaimedAt: null })
+      .where(and(
+        eq(orders.orderId, orderId),
+        sql`${orders.status} NOT IN ('paid', 'delivered', 'processing', 'refunded')`
+      ))
+      .returning({ orderId: orders.orderId })
+    if (!cancelled.length) throw new Error("admin.orders.cancelNotAllowed")
+
+    if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
+      await ensurePointLedgerUserRecord({
+        userId: order.userId,
+      })
+      await applyUserAutomaticPointEvent({
+        userId: order.userId,
+        eventType: "refund_return",
+        delta: order.pointsUsed,
+        businessKey: `refund_return:${orderId}`,
+        sourceType: "order",
+        sourceId: orderId,
+        reason: `订单 ${orderId} 取消返还积分`,
+        metadata: JSON.stringify({
+          action: "cancel",
+        }),
+      })
+    }
+
     try {
-      await recalcProductAggregates(order.productId)
+      await db.run(sql.raw(`ALTER TABLE cards ADD COLUMN reserved_order_id TEXT`));
+    } catch { /* duplicate column */ }
+    try {
+      await db.run(sql.raw(`ALTER TABLE cards ADD COLUMN reserved_at INTEGER`));
+    } catch { /* duplicate column */ }
+    await db.update(cards).set({ reservedOrderId: null, reservedAt: null })
+      .where(sql`${cards.reservedOrderId} = ${orderId} AND ${cards.isUsed} = false`)
+
+    // 释放优惠券预占次数（幂等）
+    try {
+      await releaseCouponUsages(orderId, 'admin_cancel')
+    } catch (error) {
+      console.error('[Coupon] Release on cancel failed:', error)
+    }
+
+    revalidatePath('/admin/orders')
+    revalidatePath('/admin/users')
+    if (order?.userId) {
+      revalidatePath(`/admin/users/${order.userId}`)
+    }
+    revalidatePath(`/admin/orders/${orderId}`)
+    revalidatePath(`/order/${orderId}`)
+    if (order?.productId) {
+      try {
+        await recalcProductAggregates(order.productId)
+      } catch {
+        // best effort
+      }
+    }
+    try {
+      updateTag('home:products')
     } catch {
       // best effort
     }
-  }
-  try {
-    updateTag('home:products')
-  } catch {
-    // best effort
-  }
-}
-
-export async function cancelOrder(orderId: string) {
-  await checkAdmin()
-  if (!orderId) throw new Error("Missing order id")
-
-  // No transaction - D1 doesn't support SQL transactions
-  // 1. Refund points if used
-  const order = await db.query.orders.findFirst({
-    where: eq(orders.orderId, orderId),
-    columns: { userId: true, pointsUsed: true, productId: true, status: true }
-  })
-  if (!order) throw new Error("Order not found")
-  if (order.status === 'processing') throw new Error("Order fulfillment is in progress")
-
-  const cancelled = await db.update(orders)
-    .set({ status: 'cancelled', fulfillmentClaimId: null, fulfillmentClaimedAt: null })
-    .where(and(
-      eq(orders.orderId, orderId),
-      sql`${orders.status} NOT IN ('paid', 'delivered', 'processing', 'refunded')`
-    ))
-    .returning({ orderId: orders.orderId })
-  if (!cancelled.length) throw new Error("Order cannot be cancelled")
-
-  if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
-    await ensurePointLedgerUserRecord({
-      userId: order.userId,
-    })
-    await applyUserAutomaticPointEvent({
-      userId: order.userId,
-      eventType: "refund_return",
-      delta: order.pointsUsed,
-      businessKey: `refund_return:${orderId}`,
-      sourceType: "order",
-      sourceId: orderId,
-      reason: `订单 ${orderId} 取消返还积分`,
-      metadata: JSON.stringify({
-        action: "cancel",
-      }),
-    })
-  }
-
-  try {
-    await db.run(sql.raw(`ALTER TABLE cards ADD COLUMN reserved_order_id TEXT`));
-  } catch { /* duplicate column */ }
-  try {
-    await db.run(sql.raw(`ALTER TABLE cards ADD COLUMN reserved_at INTEGER`));
-  } catch { /* duplicate column */ }
-  await db.update(cards).set({ reservedOrderId: null, reservedAt: null })
-    .where(sql`${cards.reservedOrderId} = ${orderId} AND ${cards.isUsed} = false`)
-
-  // 释放优惠券预占次数（幂等）
-  try {
-    await releaseCouponUsages(orderId, 'admin_cancel')
+    return { ok: true }
   } catch (error) {
-    console.error('[Coupon] Release on cancel failed:', error)
-  }
-
-  revalidatePath('/admin/orders')
-  revalidatePath('/admin/users')
-  if (order?.userId) {
-    revalidatePath(`/admin/users/${order.userId}`)
-  }
-  revalidatePath(`/admin/orders/${orderId}`)
-  revalidatePath(`/order/${orderId}`)
-  if (order?.productId) {
-    try {
-      await recalcProductAggregates(order.productId)
-    } catch {
-      // best effort
-    }
-  }
-  try {
-    updateTag('home:products')
-  } catch {
-    // best effort
+    return failure('admin.cancelOrder', error)
   }
 }
 
-export async function updateOrderEmail(orderId: string, email: string | null) {
-  await checkAdmin()
-  if (!orderId) throw new Error("Missing order id")
-  const next = (email || '').trim()
-  await db.update(orders).set({ email: next || null }).where(eq(orders.orderId, orderId))
-  revalidatePath('/admin/orders')
-  revalidatePath(`/admin/orders/${orderId}`)
+export async function updateOrderEmail(orderId: string, email: string | null): Promise<OrderActionResult> {
+  try {
+    await checkAdmin()
+    if (!orderId) throw new Error("admin.orders.orderMissing")
+    const next = (email || '').trim()
+    await db.update(orders).set({ email: next || null }).where(eq(orders.orderId, orderId))
+    revalidatePath('/admin/orders')
+    revalidatePath(`/admin/orders/${orderId}`)
+    return { ok: true }
+  } catch (error) {
+    return failure('admin.updateOrderEmail', error)
+  }
 }
 
 async function deleteOneOrder(orderId: string) {
@@ -307,60 +385,70 @@ async function deleteOneOrder(orderId: string) {
   await db.delete(orders).where(eq(orders.orderId, orderId))
 }
 
-export async function deleteOrder(orderId: string) {
-  await checkAdmin()
-  if (!orderId) throw new Error("Missing order id")
+export async function deleteOrder(orderId: string): Promise<OrderActionResult> {
+  try {
+    await checkAdmin()
+    if (!orderId) throw new Error("admin.orders.orderMissing")
 
-  const order = await db.query.orders.findFirst({
-    where: eq(orders.orderId, orderId),
-    columns: { productId: true, userId: true }
-  })
-  await deleteOneOrder(orderId)
+    const order = await db.query.orders.findFirst({
+      where: eq(orders.orderId, orderId),
+      columns: { productId: true, userId: true }
+    })
+    await deleteOneOrder(orderId)
 
-  revalidatePath('/admin/orders')
-  revalidatePath('/admin/users')
-  if (order?.userId) {
-    revalidatePath(`/admin/users/${order.userId}`)
-  }
-  revalidatePath(`/admin/orders/${orderId}`)
-  if (order?.productId) {
+    revalidatePath('/admin/orders')
+    revalidatePath('/admin/users')
+    if (order?.userId) {
+      revalidatePath(`/admin/users/${order.userId}`)
+    }
+    revalidatePath(`/admin/orders/${orderId}`)
+    if (order?.productId) {
+      try {
+        await recalcProductAggregates(order.productId)
+      } catch {
+        // best effort
+      }
+    }
     try {
-      await recalcProductAggregates(order.productId)
+      updateTag('home:products')
     } catch {
       // best effort
     }
-  }
-  try {
-    updateTag('home:products')
-  } catch {
-    // best effort
+    return { ok: true }
+  } catch (error) {
+    return failure('admin.deleteOrder', error)
   }
 }
 
-export async function deleteOrders(orderIds: string[]) {
-  await checkAdmin()
-  const ids = (orderIds || []).map((s) => String(s).trim()).filter(Boolean)
-  if (!ids.length) return
-
-  const touchedProducts: string[] = []
-
-  for (const id of ids) {
-    const order = await db.query.orders.findFirst({ where: eq(orders.orderId, id), columns: { productId: true } })
-    if (order?.productId) touchedProducts.push(order.productId)
-    await deleteOneOrder(id)
-  }
-
-  revalidatePath('/admin/orders')
-  revalidatePath('/admin/users')
+export async function deleteOrders(orderIds: string[]): Promise<OrderActionResult> {
   try {
-    await recalcProductAggregatesForMany(touchedProducts)
-  } catch {
-    // best effort
-  }
-  try {
-    updateTag('home:products')
-  } catch {
-    // best effort
+    await checkAdmin()
+    const ids = (orderIds || []).map((s) => String(s).trim()).filter(Boolean)
+    if (!ids.length) return { ok: true }
+
+    const touchedProducts: string[] = []
+
+    for (const id of ids) {
+      const order = await db.query.orders.findFirst({ where: eq(orders.orderId, id), columns: { productId: true } })
+      if (order?.productId) touchedProducts.push(order.productId)
+      await deleteOneOrder(id)
+    }
+
+    revalidatePath('/admin/orders')
+    revalidatePath('/admin/users')
+    try {
+      await recalcProductAggregatesForMany(touchedProducts)
+    } catch {
+      // best effort
+    }
+    try {
+      updateTag('home:products')
+    } catch {
+      // best effort
+    }
+    return { ok: true }
+  } catch (error) {
+    return failure('admin.deleteOrders', error)
   }
 }
 

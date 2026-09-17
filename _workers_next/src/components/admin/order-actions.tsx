@@ -1,7 +1,8 @@
 'use client'
 
 import Link from "next/link"
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { markOrderDelivered, markOrderPaid, cancelOrder } from "@/actions/admin-orders"
 import { toast } from "sonner"
@@ -15,6 +16,15 @@ export function AdminOrderActions({ order }: { order: any }) {
   const { confirm } = useConfirm()
   const [loading, setLoading] = useState(false)
   const loadingRef = useRef(false)
+  const mountedRef = useRef(true)
+  const router = useRouter()
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const status = order.status || 'pending'
   const canMarkPaid = status === 'pending'
@@ -23,59 +33,63 @@ export function AdminOrderActions({ order }: { order: any }) {
 
   const handle = async (action: 'paid' | 'delivered' | 'cancel') => {
     if (loadingRef.current) return
+
+    const confirmed = await confirm(
+      action === 'paid'
+        ? {
+            title: t('admin.orders.markPaid') || "标记订单为已支付",
+            description: t('admin.orders.confirmMarkPaid'),
+            variant: 'default',
+            icon: 'check',
+            confirmText: t('common.confirm'),
+            cancelText: t('common.cancel'),
+          }
+        : action === 'delivered'
+          ? {
+              title: t('admin.orders.markDelivered') || "标记订单为已发货",
+              description: t('admin.orders.confirmMarkDelivered'),
+              variant: 'default',
+              icon: 'check',
+              confirmText: t('common.confirm'),
+              cancelText: t('common.cancel'),
+            }
+          : {
+              title: t('admin.orders.cancelOrder') || "取消订单",
+              description: t('admin.orders.confirmCancel'),
+              variant: 'destructive',
+              icon: 'alert',
+              confirmText: t('common.confirm'),
+              cancelText: t('common.cancel'),
+            }
+    )
+    if (!confirmed) return
+
+    loadingRef.current = true
+    setLoading(true)
     try {
-      if (action === 'paid') {
-        const ok = await confirm({
-          title: t('admin.orders.markPaid') || "标记订单为已支付",
-          description: t('admin.orders.confirmMarkPaid'),
-          variant: 'default',
-          icon: 'check',
-          confirmText: t('common.confirm'),
-          cancelText: t('common.cancel'),
-        })
-        if (!ok) return
-        loadingRef.current = true
-        setLoading(true)
-        await markOrderPaid(order.orderId)
+      const result =
+        action === 'paid'
+          ? await markOrderPaid(order.orderId)
+          : action === 'delivered'
+            ? await markOrderDelivered(order.orderId)
+            : await cancelOrder(order.orderId)
+
+      if (!mountedRef.current) return
+      if (result.ok) {
         toast.success(t('common.success'))
-        return
+        router.refresh()
+      } else if (result.errorId) {
+        toast.error(`${t(result.errorKey)} · ${t('common.errorIdLabel')} ${result.errorId}`)
+      } else {
+        toast.error(t(result.errorKey))
       }
-      if (action === 'delivered') {
-        const ok = await confirm({
-          title: t('admin.orders.markDelivered') || "标记订单为已发货",
-          description: t('admin.orders.confirmMarkDelivered'),
-          variant: 'default',
-          icon: 'check',
-          confirmText: t('common.confirm'),
-          cancelText: t('common.cancel'),
-        })
-        if (!ok) return
-        loadingRef.current = true
-        setLoading(true)
-        await markOrderDelivered(order.orderId)
-        toast.success(t('common.success'))
-        return
-      }
-      if (action === 'cancel') {
-        const ok = await confirm({
-          title: t('admin.orders.cancelOrder') || "取消订单",
-          description: t('admin.orders.confirmCancel'),
-          variant: 'destructive',
-          icon: 'alert',
-          confirmText: t('common.confirm'),
-          cancelText: t('common.cancel'),
-        })
-        if (!ok) return
-        loadingRef.current = true
-        setLoading(true)
-        await cancelOrder(order.orderId)
-        toast.success(t('common.success'))
-      }
-    } catch (e: any) {
-      toast.error(t(resolveClientActionErrorKey(e)))
+    } catch (error) {
+      // Action 抛出的异常（网络中断等）同样必须释放按钮状态
+      if (!mountedRef.current) return
+      toast.error(t(resolveClientActionErrorKey(error)))
     } finally {
-      setLoading(false)
       loadingRef.current = false
+      if (mountedRef.current) setLoading(false)
     }
   }
 
