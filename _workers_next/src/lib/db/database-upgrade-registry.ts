@@ -8,6 +8,12 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
         description: '补齐当前版本所需的表、字段、索引和触发器，并启用可追踪的自动升级记录。',
         verifiesStructure: true,
     },
+    {
+        id: '0029_point_ledger_balance_trigger',
+        name: '积分账本余额触发器重建',
+        description: '重建积分账本余额触发器，补齐余额不足守卫与 NULL 余额处理，并把历史 NULL 余额归零，保证账本与余额始终一致。',
+        verifiesStructure: true,
+    },
 ] as const
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']

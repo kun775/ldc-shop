@@ -3,47 +3,58 @@
 import { auth } from "@/lib/auth"
 import { checkAdmin } from "./admin"
 import { applyUserManualPointAdjustment } from "@/lib/points/ledger-db"
+import { POINT_ADMIN_ERROR_KEY_MAP } from "@/lib/points/point-errors"
 import { revalidatePath } from "next/cache"
-import { logServerError, resolveClientErrorKey } from "@/lib/errors/safe-error"
+import { createErrorId, logServerError, resolveClientErrorKey } from "@/lib/errors/safe-error"
 
-const ADMIN_USER_POINT_ERROR_KEY_MAP: Record<string, string> = {
-    POINT_REASON_REQUIRED: "admin.users.adjustReasonRequired",
-    POINT_AMOUNT_INVALID: "admin.users.adjustAmountInvalid",
-    POINT_BALANCE_NEGATIVE: "admin.users.adjustNegativeNotAllowed",
-    POINT_LEDGER_CLAIM_FAILED: "common.error",
-    POINT_LEDGER_CLAIM_LOST: "common.error",
-    POINT_LEDGER_BUSINESS_KEY_CONFLICT: "common.error",
-    POINT_LEDGER_EVENT_IN_PROGRESS: "common.error",
-}
+/**
+ * 后台积分调整结果协议。
+ *
+ * 为什么显式返回而不是 throw：Server Action 的返回值**不会**被 Next.js
+ * 脱敏（只有 throw 才会）。因此这里主动把底层错误收敛成稳定 i18n key +
+ * errorId，任何 SQL 原文/绑定参数/表结构都不会到达前台。
+ */
+export type AdjustUserPointsResult =
+    | { ok: true; errorKey: null; errorId: null }
+    | { ok: false; errorKey: string; errorId: string }
 
 export async function adjustUserPoints(input: {
     userId: string
     direction: "increase" | "decrease"
     amount: number
     reason: string
-}) {
+}): Promise<AdjustUserPointsResult> {
     try {
         const session = await auth()
         await checkAdmin()
 
+        // userId 缺失时必须在进入账本写入前拦下：否则会插出一条 user_id 为空
+        // 的账本记录（外键失败或成为孤儿），错误信息还完全指不到根因。
+        const userId = String(input.userId || "").trim()
+        if (!userId) {
+            return { ok: false, errorKey: "admin.users.adjustUserMissing", errorId: "" }
+        }
+
         await applyUserManualPointAdjustment({
-            userId: input.userId,
+            userId,
             direction: input.direction,
             amount: input.amount,
             reason: input.reason,
             operatorUserId: session?.user?.id ?? null,
             operatorUsername: session?.user?.username ?? null,
-            businessKey: `admin_adjust:${input.userId}:${Date.now()}`,
+            // 业务键必须唯一：同一次点击生成一个键，重复请求由唯一索引拦截并
+            // 经 POINT_LEDGER_BUSINESS_KEY_CONFLICT 收敛为可重试文案。
+            businessKey: `admin_adjust:${userId}:${Date.now()}`,
         })
 
         revalidatePath('/admin/users')
-        revalidatePath(`/admin/users/${input.userId}`)
-        return { success: true as const }
+        revalidatePath(`/admin/users/${userId}`)
+        return { ok: true, errorKey: null, errorId: null }
     } catch (error) {
         const errorId = logServerError('admin.adjustUserPoints', error)
         return {
-            success: false as const,
-            error: resolveClientErrorKey(error, ADMIN_USER_POINT_ERROR_KEY_MAP, 'common.error'),
+            ok: false,
+            errorKey: resolveClientErrorKey(error, POINT_ADMIN_ERROR_KEY_MAP, 'common.error'),
             errorId,
         }
     }

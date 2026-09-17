@@ -1,7 +1,7 @@
 import { db } from "./index";
 import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger, refundRequests, userMessages } from "./schema";
 import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/lib/constants";
-import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema } from "@/lib/points/ledger-db";
+import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema, repairPointLedgerStructureIfNeeded, resetPointLedgerSchemaReady, verifyPointLedgerStructure } from "@/lib/points/ledger-db";
 import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once";
 import { SCHEMA_DRIFT_PROBES, isSchemaDriftError } from "./schema-drift";
 import {
@@ -22,7 +22,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 28;
+const CURRENT_SCHEMA_VERSION = 29;
 const dbInitializationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
@@ -72,6 +72,10 @@ function resetSchemaReadyFlags() {
     wishlistTablesReady = false;
     reviewRepliesEnsureState.ready = false;
     reviewRepliesEnsureState.pending = null;
+    // 积分账本的 ready 标记不在本模块内，必须显式复位，
+    // 否则 ensureStructuralSchema 里的 ensureUserPointLedgerSchema 会被短路，
+    // 使漂移修复路径无法真正重建积分表结构（历史故障即由此产生）。
+    resetPointLedgerSchemaReady();
 
     for (const key of Object.keys(columnEnsureState) as ColumnEnsureKey[]) {
         columnEnsureState[key].ready = false;
@@ -111,10 +115,13 @@ async function detectSchemaDrift(): Promise<boolean> {
         if (
             COUPON_USAGE_TRIGGER_NAMES.some((name) => !triggerNames.has(name))
             || MANUAL_STOCK_TRIGGER_NAMES.some((name) => !triggerNames.has(name))
-            || !triggerNames.has('user_point_ledger_apply_balance')
         ) {
             return true;
         }
+        // 积分账本要「表 + 全部列 + 索引 + 余额触发器（含余额不足守卫）」四者齐全。
+        // 只校验触发器名字不够：早期版本触发器缺少 changes() = 0 守卫，
+        // 会让余额静默变负或变更丢失，必须判定为漂移并触发重建。
+        if (!(await verifyPointLedgerStructure())) return true;
     } catch (error: unknown) {
         if (isSchemaDriftError(error)) return true;
         // 与列探测一致，瞬时错误不触发结构迁移
@@ -308,6 +315,15 @@ async function runRegisteredDatabaseUpgrades() {
                     await ensureStructuralSchema();
                     await ensureIndexes();
                 }
+            },
+            async '0029_point_ledger_balance_trigger'() {
+                // 独立升级项：只重建积分账本结构与余额触发器。
+                // 不复用 ensureStructuralSchema —— 那会连带重跑全部表/列/索引，
+                // 在 D1 上代价过高，而本次修复范围明确限定在积分账本。
+                // repairPointLedgerStructureIfNeeded 内部会先做只读探测，
+                // 结构完整时零 DDL，因此可安全重复执行。
+                resetPointLedgerSchemaReady();
+                await repairPointLedgerStructureIfNeeded();
             },
         },
         verifyStructure: verifyCurrentDatabaseStructure,

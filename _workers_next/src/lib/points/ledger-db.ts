@@ -11,7 +11,19 @@ import {
 import { buildLegacyPointLedgerEntries } from "./legacy-reconciliation"
 import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once"
 import { LOGIN_USERS_COLUMN_DEFINITIONS, LOGIN_USERS_CREATE_TABLE_STATEMENT } from "@/lib/db/login-users-schema"
-import { isDuplicateColumnError } from "@/lib/db/error-utils"
+import { isEmptySchemaError, isDuplicateColumnError, isDuplicateSchemaObjectError } from "@/lib/db/error-utils"
+import {
+    evaluatePointLedgerStructure,
+    LOGIN_USERS_POINT_INDEX_STATEMENTS,
+    LOGIN_USERS_POINT_NORMALIZE_STATEMENTS,
+    USER_POINT_LEDGER_BALANCE_TRIGGER_NAME,
+    USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT,
+    USER_POINT_LEDGER_COLUMN_DEFINITIONS,
+    USER_POINT_LEDGER_CREATE_TABLE_STATEMENT,
+    USER_POINT_LEDGER_INDEX_STATEMENTS,
+    USER_POINT_LEDGER_TABLE,
+    type PointLedgerStructureSnapshot,
+} from "@/lib/db/point-ledger-schema"
 
 type UserIdentity = {
     userId: string
@@ -49,7 +61,7 @@ let pointLedgerLoginUsersSchemaReady = false
 const pointLedgerSchemaState = createAsyncOnceState()
 const pointLedgerLoginUsersState = createAsyncOnceState()
 const persistedPointLedgerSchemaVersionState = createAsyncOnceState()
-const POINT_LEDGER_SCHEMA_VERSION = 2
+const POINT_LEDGER_SCHEMA_VERSION = 3
 const POINT_LEDGER_CLAIM_TTL_MS = 5 * 60 * 1000
 
 const TIMESTAMP_MS_THRESHOLD = 1_000_000_000_000
@@ -83,11 +95,26 @@ function normalizeTimestampMs(column: any) {
     return sql<number>`CASE WHEN ${column} < ${TIMESTAMP_MS_THRESHOLD} THEN ${column} * 1000 ELSE ${column} END`
 }
 
+/** 兼容 D1/drizzle 两种返回形状（results / rows），统一取数组 */
+function rowsFromResult<T>(result: unknown): T[] {
+    const value = result as { results?: T[]; rows?: T[] }
+    return value?.results || value?.rows || []
+}
+
 async function safeAddColumn(table: string, column: string, definition: string) {
     try {
         await db.run(sql.raw(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`))
     } catch (error: unknown) {
         if (!isDuplicateColumnError(error)) throw error
+    }
+}
+
+async function safeCreateIndex(statement: string) {
+    try {
+        await db.run(sql.raw(statement))
+    } catch (error: unknown) {
+        if (isDuplicateSchemaObjectError(error)) return
+        throw error
     }
 }
 
@@ -148,98 +175,193 @@ async function ensurePointLedgerLoginUsersSchema() {
         for (const [column, definition] of LOGIN_USERS_COLUMN_DEFINITIONS) {
             await safeAddColumn('login_users', column, definition)
         }
+        for (const statement of LOGIN_USERS_POINT_INDEX_STATEMENTS) {
+            await safeCreateIndex(statement)
+        }
 
         pointLedgerLoginUsersSchemaReady = true
     })
 }
 
 /**
- * ensureUserPointLedgerSchema 确保积分账本表与索引存在。
+ * readPointLedgerStructure 只读探测积分账本结构。
  *
- * 参数:
- *   - 无
+ * 全部为只读查询，任何一步失败都原样抛出 —— 由调用方决定是否升级为修复，
+ * 这里绝不吞异常（否则「探测失败」会被误判成「结构完整」）。
+ */
+async function readPointLedgerStructure(): Promise<PointLedgerStructureSnapshot> {
+    const [tableResult, columnResult, indexResult, triggerResult] = await Promise.all([
+        db.run(sql`
+            SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name = ${USER_POINT_LEDGER_TABLE}
+            LIMIT 1
+        `),
+        db.run(sql.raw(`PRAGMA table_info(${USER_POINT_LEDGER_TABLE})`)),
+        db.run(sql`
+            SELECT name FROM sqlite_master
+            WHERE type = 'index' AND tbl_name = ${USER_POINT_LEDGER_TABLE}
+        `),
+        db.run(sql`
+            SELECT sql FROM sqlite_master
+            WHERE type = 'trigger' AND name = ${USER_POINT_LEDGER_BALANCE_TRIGGER_NAME}
+            LIMIT 1
+        `),
+    ])
+
+    const tables = rowsFromResult<{ name?: unknown }>(tableResult)
+    const columns = rowsFromResult<{ name?: unknown }>(columnResult)
+    const indexes = rowsFromResult<{ name?: unknown }>(indexResult)
+    const triggers = rowsFromResult<{ sql?: unknown }>(triggerResult)
+
+    return {
+        tableExists: tables.length > 0,
+        columns: columns.map((row) => String(row.name || '')),
+        indexes: indexes.map((row) => String(row.name || '')),
+        triggerSql: triggers.length > 0 ? String(triggers[0].sql || '') : null,
+    }
+}
+
+/**
+ * repairPointLedgerStructure 幂等修复积分账本结构（无条件执行 DDL）。
  *
  * 元数据:
  *   - 作者: VitaHuang
  *   - 创建时间: 2026-04-18
  *   - 更新时间: 2026-09-17
- *   - 更新内容: 修复「版本标记领先于真实结构」导致的缺列故障。
+ *   - 更新内容: 修复「版本标记领先于真实结构」导致的缺列故障；
+ *     改为按只读探测结果精确修复，并校验余额触发器的守卫是否完整。
  *
- * 重要:
- *   - 历史事故中 `point_ledger_schema_version` 被手工置为 2，但真实表里
- *     并没有 claim_id / claimed_at 两列，于是旧实现（版本达标即 return）
- *     永久跳过了建列，签到与积分抵扣全部报 "no such column: claim_id"。
- *   - 因此这里**不再用版本号短路 DDL**：所有语句都是幂等的
- *     （CREATE TABLE/INDEX IF NOT EXISTS，ADD COLUMN 吞掉 duplicate column），
- *     每个 isolate 只执行一次，用这点成本换取结构自愈能力。
- *   - 版本号只在「未达标」时才写入，避免每 isolate 产生一次无谓写操作。
+ * 铁律:
+ *   - **不**用版本号短路 DDL。`point_ledger_schema_version` 会被手工置位，
+ *     版本领先真实结构时缺列将永久无法自愈。所有语句都是幂等的。
+ *   - 触发器只在「不存在」或「缺少余额守卫」时重建：`CREATE TRIGGER IF NOT
+ *     EXISTS` 对已存在的触发器是空操作，因此旧版本触发器必须显式 DROP。
+ *   - 版本号只在未达标时写入，避免每 isolate 一次无谓写操作。
  */
-export async function ensureUserPointLedgerSchema() {
-    if (pointLedgerSchemaReady) return
-    await ensureOnce(pointLedgerSchemaState, async () => {
-        const persistedVersion = await getPointLedgerSchemaVersion()
-        const versionSatisfied = persistedVersion !== null
-            && isSchemaVersionSatisfied(persistedVersion, POINT_LEDGER_SCHEMA_VERSION)
+async function repairPointLedgerStructure(): Promise<number> {
+    const persistedVersion = await getPointLedgerSchemaVersion()
+    const versionSatisfied = persistedVersion !== null
+        && isSchemaVersionSatisfied(persistedVersion, POINT_LEDGER_SCHEMA_VERSION)
 
-        await ensurePointLedgerLoginUsersSchema()
+    await ensurePointLedgerLoginUsersSchema()
 
-        await db.run(sql`
-            CREATE TABLE IF NOT EXISTS user_point_ledger (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL REFERENCES login_users(user_id) ON DELETE CASCADE,
-                event_type TEXT NOT NULL,
-                delta INTEGER NOT NULL,
-                balance_after INTEGER,
-                business_key TEXT NOT NULL,
-                source_type TEXT NOT NULL,
-                source_id TEXT,
-                reason TEXT NOT NULL,
-                operator_user_id TEXT,
-                operator_username TEXT,
-                metadata TEXT,
-                status TEXT NOT NULL DEFAULT 'completed',
-                claim_id TEXT,
-                claimed_at INTEGER,
-                created_at INTEGER DEFAULT (unixepoch() * 1000)
-            )
-        `)
-        await safeAddColumn('user_point_ledger', 'claim_id', 'TEXT')
-        await safeAddColumn('user_point_ledger', 'claimed_at', 'INTEGER')
-        await safeAddColumn('user_point_ledger', 'balance_after', 'INTEGER')
-        await safeAddColumn('user_point_ledger', 'status', "TEXT NOT NULL DEFAULT 'completed'")
-        await db.run(sql`
-            CREATE UNIQUE INDEX IF NOT EXISTS user_point_ledger_business_key_uq
-            ON user_point_ledger (business_key)
-        `)
-        await db.run(sql`
-            CREATE INDEX IF NOT EXISTS user_point_ledger_user_created_idx
-            ON user_point_ledger (user_id, created_at DESC, id DESC)
-        `)
+    // 先探测，再按需修复：探测失败（例如瞬时网络错误）会向上抛出，
+    // 不会退化成「无条件重跑一遍 DDL」。
+    const snapshot = await readPointLedgerStructure()
+    const verdict = evaluatePointLedgerStructure(snapshot)
+
+    if (!snapshot.tableExists) {
+        await db.run(sql.raw(USER_POINT_LEDGER_CREATE_TABLE_STATEMENT))
+    }
+    for (const [column, definition] of USER_POINT_LEDGER_COLUMN_DEFINITIONS) {
+        if (!snapshot.tableExists || verdict.missingColumns.includes(column)) {
+            await safeAddColumn(USER_POINT_LEDGER_TABLE, column, definition)
+        }
+    }
+    for (const statement of USER_POINT_LEDGER_INDEX_STATEMENTS) {
+        await safeCreateIndex(statement)
+    }
+
+    if (verdict.triggerNeedsRebuild) {
+        // 旧触发器可能缺少余额守卫 → 无条件重建，保证定义体是当前版本
         try {
-            await execD1(`
-                CREATE TRIGGER IF NOT EXISTS user_point_ledger_apply_balance
-                AFTER UPDATE OF status ON user_point_ledger
-                WHEN OLD.status = 'pending' AND NEW.status = 'completed'
-                BEGIN
-                    UPDATE login_users
-                    SET points = points + NEW.delta
-                    WHERE user_id = NEW.user_id
-                      AND points + NEW.delta >= 0;
-                    SELECT CASE
-                        WHEN changes() = 0 THEN RAISE(ABORT, 'POINT_BALANCE_NEGATIVE')
-                    END;
-                END;
-            `)
-        } catch (triggerError) {
+            await db.run(sql.raw(`DROP TRIGGER IF EXISTS ${USER_POINT_LEDGER_BALANCE_TRIGGER_NAME}`))
+        } catch (dropError) {
+            console.error('Failed to drop legacy point ledger balance trigger:', dropError)
+            throw dropError
+        }
+    }
+    try {
+        await execD1(USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT)
+    } catch (triggerError) {
+        // 并发场景下另一个 isolate 可能刚创建了同名触发器 → 幂等冲突可忽略
+        if (!isDuplicateSchemaObjectError(triggerError)) {
             console.error("Failed to create user_point_ledger_apply_balance trigger:", triggerError)
             throw triggerError
         }
+    }
 
-        if (!versionSatisfied) {
-            await setSettingValue("point_ledger_schema_version", String(POINT_LEDGER_SCHEMA_VERSION))
-        }
-        markPointLedgerSchemaReady()
+    // 历史 NULL 余额归零。必须在触发器就绪之后执行：否则触发器的
+    // COALESCE 会把一次「本该失败」的扣减当作对 0 余额的扣减，
+    // 而规范化本身也需要在同一轮修复里完成，才能让后续调整正常工作。
+    for (const statement of LOGIN_USERS_POINT_NORMALIZE_STATEMENTS) {
+        await db.run(sql.raw(statement))
+    }
+
+    if (!versionSatisfied) {
+        await setSettingValue("point_ledger_schema_version", String(POINT_LEDGER_SCHEMA_VERSION))
+    }
+    markPointLedgerSchemaReady()
+
+    return verdict.complete ? 0 : 1
+}
+
+/**
+ * isPointLedgerReady 供外部（结构漂移探测）查询当前 isolate 是否已确认账本结构。
+ */
+export function isPointLedgerSchemaReady(): boolean {
+    return pointLedgerSchemaReady
+}
+
+/**
+ * verifyPointLedgerStructure 只读校验账本结构是否完整（不执行任何 DDL）。
+ *
+ * 供 `detectSchemaDrift` 这类「先探测、后决定是否迁移」的路径使用。
+ */
+export async function verifyPointLedgerStructure(): Promise<boolean> {
+    try {
+        const snapshot = await readPointLedgerStructure()
+        return evaluatePointLedgerStructure(snapshot).complete
+    } catch (error) {
+        // 探测失败（网络/限流/超时）不构成「结构缺失」的证据，按完整处理，
+        // 避免把一次偶发故障升级为一次全量迁移。
+        if (isEmptySchemaError(error)) return true
+        console.warn('[PointLedger] structure verification failed:', error)
+        return true
+    }
+}
+
+/**
+ * repairPointLedgerStructureIfNeeded 按探测结果修复，完整时零 DDL。
+ *
+ * 与 `ensureUserPointLedgerSchema` 的区别：本函数**不依赖 isolate 级 ready
+ * 标记**，用于结构漂移路径下的强制复查。
+ */
+export async function repairPointLedgerStructureIfNeeded(): Promise<boolean> {
+    const repaired = await repairPointLedgerStructure()
+    return repaired > 0
+}
+
+/**
+ * ensureUserPointLedgerSchema 确保积分账本表、索引与余额触发器存在。
+ *
+ * 参数:
+ *   - force: 跳过 isolate 级 ready 标记，强制重新探测并修复（漂移路径使用）
+ */
+export async function ensureUserPointLedgerSchema(options?: { force?: boolean }) {
+    if (options?.force) {
+        await repairPointLedgerStructure()
+        return
+    }
+    if (pointLedgerSchemaReady) return
+    await ensureOnce(pointLedgerSchemaState, async () => {
+        await repairPointLedgerStructure()
     })
+}
+
+/**
+ * resetPointLedgerSchemaReady 复位 isolate 级结构标记。
+ *
+ * 用于结构漂移路径：全局快速路径可能已把账本标记为 ready，
+ * 必须先复位，否则 ensureUserPointLedgerSchema 会被短路而无法修复。
+ */
+export function resetPointLedgerSchemaReady() {
+    pointLedgerSchemaReady = false
+    pointLedgerLoginUsersSchemaReady = false
+    pointLedgerSchemaState.ready = false
+    pointLedgerSchemaState.pending = null
+    pointLedgerLoginUsersState.ready = false
+    pointLedgerLoginUsersState.pending = null
 }
 
 /**
@@ -380,33 +502,16 @@ function createPointLedgerRepository(identity: UserIdentity): PointLedgerReposit
             const record = await this.findByBusinessKey(input.businessKey)
             return { claimed, claimId: claimed ? claimId : null, record }
         },
-        async applyBalanceDelta(userId, delta) {
-            await ensureReady()
-
-            const updated = await db.update(loginUsers)
-                .set({ points: sql`${loginUsers.points} + ${delta}` })
-                .where(and(
-                    eq(loginUsers.userId, userId),
-                    sql`${loginUsers.points} + ${delta} >= 0`,
-                ))
-                .returning({ balanceAfter: loginUsers.points })
-
-            if (!updated.length) {
-                return { ok: false }
-            }
-
-            return {
-                ok: true,
-                balanceAfter: Number(updated[0].balanceAfter || 0),
-            }
-        },
         async finalizeAutomaticEvent(id, claimId) {
             await ensureReady()
 
             const rows = await db.update(userPointLedger)
                 .set({
+                    // balanceAfter 必须 COALESCE：历史 NULL 余额下
+                    // `NULL + delta` 会写入 NULL 明细，前台显示为「变动后余额 -」，
+                    // 与触发器实际把余额归零再加减的结果不一致。
                     balanceAfter: sql`(
-                        SELECT points + ${userPointLedger.delta}
+                        SELECT COALESCE(points, 0) + ${userPointLedger.delta}
                         FROM login_users
                         WHERE user_id = ${userPointLedger.userId}
                     )`,

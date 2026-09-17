@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { adjustUserPoints } from "@/actions/admin-users"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -8,8 +8,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useI18n } from "@/lib/i18n/context"
+import { pageLoadingStore } from "@/lib/ui/page-loading-store"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 import { Loader2, Coins } from "lucide-react"
 import { toast } from "sonner"
+
+type SubmitPhase = 'idle' | 'submitting' | 'error'
 
 export function UserPointAdjustmentDialog(props: {
     open: boolean
@@ -23,13 +27,31 @@ export function UserPointAdjustmentDialog(props: {
     const [direction, setDirection] = useState<"increase" | "decrease">("increase")
     const [amount, setAmount] = useState("")
     const [reason, setReason] = useState("")
-    const [saving, setSaving] = useState(false)
+    const [phase, setPhase] = useState<SubmitPhase>('idle')
+    const [submitError, setSubmitError] = useState<{ key: string; errorId: string } | null>(null)
+    // 同步互斥锁：setState 是异步的，连续快速点击仍可能穿过 phase 判断，
+    // 必须在 ref 上兜住，否则会产生两笔业务键不同的积分变更（各扣一次）。
+    const submitLock = useRef(false)
+    // 组件卸载 / 弹窗关闭后忽略迟到响应，避免对已关闭界面写状态
+    const mountedRef = useRef(true)
+
+    const saving = phase === 'submitting'
+
+    useEffect(() => {
+        mountedRef.current = true
+        return () => {
+            mountedRef.current = false
+        }
+    }, [])
 
     useEffect(() => {
         if (!props.open) return
         setDirection("increase")
         setAmount("")
         setReason("")
+        setPhase('idle')
+        setSubmitError(null)
+        submitLock.current = false
     }, [props.open, props.userId, props.currentPoints])
 
     const parsedAmount = Number.parseInt(amount, 10)
@@ -38,6 +60,57 @@ export function UserPointAdjustmentDialog(props: {
     const nextPoints = validAmount ? props.currentPoints + delta : props.currentPoints
     const invalidDecrease = direction === "decrease" && nextPoints < 0
     const canSubmit = validAmount && reason.trim().length > 0 && !invalidDecrease && !saving
+
+    const handleSubmit = async () => {
+        if (!canSubmit || submitLock.current) return
+        submitLock.current = true
+        setPhase('submitting')
+        setSubmitError(null)
+
+        // 提交期间抑制路由级全屏遮罩：成功后 router.refresh() 会让
+        // loading.tsx 的 fallback 挂载，从而点亮 z-[90] 遮罩并拦截点击。
+        const release = pageLoadingStore.beginInteraction()
+        try {
+            const result = await adjustUserPoints({
+                userId: props.userId,
+                direction,
+                amount: parsedAmount,
+                reason,
+            })
+            if (!mountedRef.current) return
+
+            if (!result.ok) {
+                // 失败时保留已填写的方向/数量/原因，让管理员能直接改后重试
+                setPhase('error')
+                setSubmitError({ key: result.errorKey, errorId: result.errorId })
+                toast.error(
+                    result.errorId
+                        ? `${t(result.errorKey)} · ${t('common.errorIdLabel')} ${result.errorId}`
+                        : t(result.errorKey),
+                )
+                return
+            }
+
+            setPhase('idle')
+            toast.success(t("common.success"))
+            props.onOpenChange(false)
+            props.onSuccess?.()
+        } catch (error) {
+            // Server Action 抛出的异常（网络中断等）也必须落到 error 态，
+            // 否则遮罩会永久停留、按钮永久禁用。
+            if (!mountedRef.current) return
+            const errorKey = resolveClientActionErrorKey(error)
+            setPhase('error')
+            setSubmitError({ key: errorKey, errorId: '' })
+            toast.error(t(errorKey))
+        } finally {
+            submitLock.current = false
+            release()
+            if (mountedRef.current) {
+                setPhase((current) => (current === 'submitting' ? 'idle' : current))
+            }
+        }
+    }
 
     return (
         <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -127,36 +200,25 @@ export function UserPointAdjustmentDialog(props: {
                     {invalidDecrease ? (
                         <div className="text-xs text-destructive">{t("admin.users.adjustNegativeNotAllowed")}</div>
                     ) : null}
+
+                    {submitError ? (
+                        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-2.5 text-xs text-destructive space-y-1">
+                            <div>{t(submitError.key)}</div>
+                            {submitError.errorId ? (
+                                <div className="font-mono text-[11px] text-destructive/80">
+                                    {t('common.errorIdLabel')}: {submitError.errorId}
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : null}
                 </div>
 
                 <DialogFooter className="px-6 py-4 bg-muted/20 border-t border-border/40 flex items-center justify-end gap-2 sm:gap-2">
-                    <Button variant="outline" className="h-9 rounded-xl px-4 text-xs font-medium border-border/60 hover:bg-muted/60" onClick={() => props.onOpenChange(false)}>
+                    <Button variant="outline" className="h-9 rounded-xl px-4 text-xs font-medium border-border/60 hover:bg-muted/60" onClick={() => props.onOpenChange(false)} disabled={saving}>
                         {t("common.cancel")}
                     </Button>
                     <Button
-                        onClick={async () => {
-                            if (!canSubmit) return
-                            setSaving(true)
-                            try {
-                                const result = await adjustUserPoints({
-                                    userId: props.userId,
-                                    direction,
-                                    amount: parsedAmount,
-                                    reason,
-                                })
-                                if (!result.success) {
-                                    toast.error(t(result.error))
-                                    return
-                                }
-                                toast.success(t("common.success"))
-                                props.onOpenChange(false)
-                                props.onSuccess?.()
-                            } catch {
-                                toast.error(t("common.error"))
-                            } finally {
-                                setSaving(false)
-                            }
-                        }}
+                        onClick={handleSubmit}
                         disabled={!canSubmit}
                         className="h-9 rounded-xl px-4 text-xs font-medium shadow-xs"
                     >

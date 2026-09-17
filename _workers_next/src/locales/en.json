@@ -620,6 +620,11 @@
             "adjustReason": "Reason",
             "adjustPreview": "Current points {{current}}, after adjustment {{next}}",
             "adjustNegativeNotAllowed": "Points cannot become negative after deduction",
+            "adjustInProgress": "Another points adjustment is being processed, please retry later",
+            "adjustFailed": "Points adjustment failed, please retry later",
+            "adjustConflict": "This adjustment conflicts with an existing record, please refresh and retry",
+            "adjustUnavailable": "Points feature is temporarily unavailable, please retry later",
+            "adjustUserMissing": "User not found, please go back and select again",
             "adjustReasonRequired": "Please enter an adjustment reason",
             "adjustAmountInvalid": "Adjustment amount must be a positive integer",
             "submitAdjustment": "Apply Adjustment",
@@ -1121,6 +1126,8 @@
     },
     "points": {
         "myPoints": "My Points"
+,
+        "insufficient": "Insufficient points balance"
     },
     "coupon": {
         "errors": {

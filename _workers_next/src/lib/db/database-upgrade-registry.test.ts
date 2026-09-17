@@ -10,11 +10,12 @@ const {
     supportsRegisteredDatabaseUpgrades,
 } = registry
 
-function appliedRecord() {
+function appliedRecord(definitionIndex = 0) {
+    const definition = DATABASE_UPGRADE_DEFINITIONS[definitionIndex]
     return {
-        id: DATABASE_UPGRADE_DEFINITIONS[0].id,
-        name: DATABASE_UPGRADE_DEFINITIONS[0].name,
-        description: DATABASE_UPGRADE_DEFINITIONS[0].description,
+        id: definition.id,
+        name: definition.name,
+        description: definition.description,
         status: 'applied',
         claimId: 'claim-1',
         startedAt: 100,
@@ -26,10 +27,30 @@ function appliedRecord() {
     }
 }
 
+/** 为每个已注册升级项各生成一条 applied 记录 */
+function allAppliedRecords() {
+    return DATABASE_UPGRADE_DEFINITIONS.map((_: unknown, index: number) => appliedRecord(index))
+}
+
 test('database upgrade ids are unique and ordered', () => {
     const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
     assert.equal(new Set(ids).size, ids.length)
     assert.deepEqual([...ids].sort(), ids)
+    assert.ok(ids.length >= 2, 'point ledger trigger rebuild must be its own upgrade item')
+})
+
+test('the point ledger trigger rebuild is registered as a separate upgrade item', () => {
+    // 数据库变更铁律：结构变更必须新增独立升级项，不得堆进既有的全量修复项。
+    const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
+    assert.ok(
+        ids.includes('0029_point_ledger_balance_trigger'),
+        'the balance trigger fix must never be folded into the earlier structural upgrade',
+    )
+    const item = DATABASE_UPGRADE_DEFINITIONS.find(
+        (entry: { id: string }) => entry.id === '0029_point_ledger_balance_trigger',
+    )
+    assert.equal(item.verifiesStructure, true, '结构修复项必须参与结构校验')
+    assert.ok(item.description.length > 0)
 })
 
 test('registered upgrades start from the schema version before the registry was introduced', () => {
@@ -41,19 +62,23 @@ test('registered upgrades start from the schema version before the registry was 
 })
 
 test('applied upgrade remains applied when structure is healthy', () => {
-    const status = buildDatabaseUpgradeStatus([appliedRecord()], true, 1_000)
-    assert.equal(status.total, 1)
-    assert.equal(status.applied, 1)
+    const status = buildDatabaseUpgradeStatus(allAppliedRecords(), true, 1_000)
+    assert.equal(status.total, DATABASE_UPGRADE_DEFINITIONS.length)
+    assert.equal(status.applied, DATABASE_UPGRADE_DEFINITIONS.length)
     assert.equal(status.pending, 0)
-    assert.equal(status.items[0].repairRequired, false)
+    for (const item of status.items) {
+        assert.equal(item.repairRequired, false, `${item.id} must not require repair`)
+    }
 })
 
 test('applied structural upgrade becomes pending when drift is detected', () => {
-    const status = buildDatabaseUpgradeStatus([appliedRecord()], false, 1_000)
+    const status = buildDatabaseUpgradeStatus(allAppliedRecords(), false, 1_000)
     assert.equal(status.applied, 0)
-    assert.equal(status.pending, 1)
-    assert.equal(status.items[0].status, 'pending')
-    assert.equal(status.items[0].repairRequired, true)
+    assert.equal(status.pending, DATABASE_UPGRADE_DEFINITIONS.length)
+    for (const item of status.items) {
+        assert.equal(item.status, 'pending')
+        assert.equal(item.repairRequired, true)
+    }
 })
 
 test('stale running upgrade becomes retryable failure', () => {
@@ -67,5 +92,13 @@ test('stale running upgrade becomes retryable failure', () => {
     const status = buildDatabaseUpgradeStatus([record], true, checkedAt)
     assert.equal(status.running, 0)
     assert.equal(status.failed, 1)
-    assert.equal(status.pending, 1)
+    // 注意：现有实现的 pending 语义是「尚未成功 = pending 或 failed」，
+    // 因此过期的 failed 项也计入 pending（管理员可重试）。
+    // 这是既有行为，本次不改动，仅在此显式固化以免被误认为 bug。
+    assert.equal(status.pending, status.total)
+    assert.equal(
+        status.pending,
+        DATABASE_UPGRADE_DEFINITIONS.length,
+        'failed items remain retryable and therefore count as pending',
+    )
 })

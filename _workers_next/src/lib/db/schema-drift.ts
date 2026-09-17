@@ -23,6 +23,11 @@ import { collectErrorText } from "./error-utils.ts"
  * 探测语句必须满足:
  *   - 只读（SELECT）且 LIMIT 0，不产生任何行读取或写入
  *   - 覆盖「当前 schema 版本最新引入的对象」，也就是最可能缺失的部分
+ *
+ * 注意：表/列可以用 `SELECT ... LIMIT 0` 探测，但**触发器和索引不行** ——
+ * 定义体缺失不会让查询报错。因此积分账本的触发器与索引走
+ * `verifyPointLedgerStructure()`（读 sqlite_master + PRAGMA table_info）
+ * 在 `queries.ts` 中单独校验。
  */
 export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT compare_at_price, purchase_warning, is_shared, visibility_level, point_discount_enabled, point_discount_percent, manual_stock_count, stock_count, locked_count, sold_count, rating, review_count, variant_group_id, variant_label, purchase_questions, product_images, checkout_fields, fulfillment_mode FROM products LIMIT 0",
@@ -38,6 +43,7 @@ export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT coupon_id, order_id, user_id, username, status, sequence, reservation_id, reservation_expires_at, coupon_code_snapshot, rule_snapshot, eligible_amount_cents, discount_amount_cents, reserved_at, consumed_at, released_at, reversed_at, reason, created_at FROM coupon_usages LIMIT 0",
     "SELECT coupon_id, user_id, reserved_count, consumed_count, updated_at FROM coupon_user_counters LIMIT 0",
     "SELECT event_type, delta, balance_after, business_key, source_type, source_id, reason, operator_user_id, operator_username, metadata, status, claim_id, claimed_at, created_at FROM user_point_ledger LIMIT 0",
+    "SELECT user_id, points, last_checkin_at, consecutive_days FROM login_users LIMIT 0",
     "SELECT name, description, status, claim_id, started_at, executed_at, duration_ms, error_id, error_message, updated_at FROM database_migrations LIMIT 0",
 ]
 

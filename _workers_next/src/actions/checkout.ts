@@ -14,6 +14,8 @@ import { sendOrderEmail } from "@/lib/email"
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
+import { POINT_AUTOMATIC_ERROR_KEY_MAP } from "@/lib/points/point-errors"
+import { resolveClientErrorKey } from "@/lib/errors/safe-error"
 import { normalizeCouponCodeList } from "@/lib/coupons/code"
 import { resolveCouponQuote } from "@/lib/coupons/checkout-quote"
 import { centsToLdcNumber, centsToLdcString } from "@/lib/coupons/money"
@@ -705,7 +707,9 @@ export async function createOrder(productId: string, quantity: number = 1, email
             return { success: false, error: 'buy.stockLocked' };
         }
         if (error?.message === 'POINT_BALANCE_NEGATIVE' || error?.message === 'insufficient_points') {
-            return { success: false, error: 'Points mismatch, please try again.' };
+            // 必须返回稳定的 i18n key：返回值不会被 Next.js 脱敏，
+            // 任何明文句子都会原样显示在下单页（历史上这里直接返回英文句子）。
+            return { success: false, error: resolveClientErrorKey(error, POINT_AUTOMATIC_ERROR_KEY_MAP, 'common.error') };
         }
         if (error?.couponError) {
             return { success: false, error: String(error.couponError) };

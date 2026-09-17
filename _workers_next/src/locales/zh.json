@@ -620,6 +620,11 @@
             "adjustReason": "调整原因",
             "adjustPreview": "当前积分 {{current}}，调整后 {{next}}",
             "adjustNegativeNotAllowed": "扣减后积分不能为负数",
+            "adjustInProgress": "有一笔积分调整正在处理中，请稍后重试",
+            "adjustFailed": "积分调整失败，请稍后重试",
+            "adjustConflict": "该积分调整与已有记录冲突，请刷新后重试",
+            "adjustUnavailable": "积分功能暂时不可用，请稍后重试",
+            "adjustUserMissing": "未找到该用户，请返回列表重新选择",
             "adjustReasonRequired": "请填写调整原因",
             "adjustAmountInvalid": "调整数量必须是正整数",
             "submitAdjustment": "确认调整",
@@ -1121,6 +1126,8 @@
     },
     "points": {
         "myPoints": "账户积分"
+,
+        "insufficient": "积分余额不足"
     },
     "coupon": {
         "errors": {

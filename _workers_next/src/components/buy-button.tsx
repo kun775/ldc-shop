@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label"
 import { Loader2, Coins, Mail, ShoppingBag, ShieldCheck, Ticket, X } from "lucide-react"
 import { toast } from "sonner"
 import { useI18n } from "@/lib/i18n/context"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 import { cn } from "@/lib/utils"
 
 const MAX_COUPONS_PER_ORDER = 3
@@ -271,7 +272,10 @@ export function BuyButton({
 
         } catch (e: any) {
             if (!isNavigatingRef.current) {
-                toast.error(e.message || "Failed to create order")
+                // Server Action 抛出的异常（网络中断、未捕获的服务端错误）也可能
+                // 带着原文消息。统一走 key 收敛，绝不把 SQL 原文或内部错误码
+                // 直接渲染到下单页。
+                toast.error(t(resolveClientActionErrorKey(e)))
                 setLoading(false)
             }
         }

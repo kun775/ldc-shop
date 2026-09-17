@@ -58,3 +58,27 @@ export function isDuplicateColumnError(error: unknown): boolean {
     return text.includes('duplicate column')
         || (text.includes('column') && text.includes('already exists'))
 }
+
+/**
+ * isDuplicateSchemaObjectError 判断「对象已存在」类错误。
+ *
+ * 用于幂等 DDL（CREATE INDEX/TRIGGER IF NOT EXISTS 之外的兜底场景）：
+ * D1 在部分并发路径下会对同名对象返回 already exists，这属于预期内的
+ * 幂等冲突，不应向上抛出中断整个结构修复；其它错误必须原样抛出。
+ */
+export function isDuplicateSchemaObjectError(error: unknown): boolean {
+    const text = collectErrorText(error).toLowerCase()
+    return text.includes('already exists')
+        || text.includes('duplicate')
+        || (text.includes('unique constraint') && text.includes('sqlite_master'))
+}
+
+/**
+ * isEmptySchemaError 判断错误是否为空结构错误（无可用信息）
+ *
+ * 用于区分「探测本身失败但无判定依据」与「明确的缺结构」，
+ * 前者一律不得升级为结构修复动作。
+ */
+export function isEmptySchemaError(error: unknown): boolean {
+    return collectErrorText(error).trim().length === 0
+}

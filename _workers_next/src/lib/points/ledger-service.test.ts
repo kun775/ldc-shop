@@ -48,7 +48,6 @@ function repo(overrides: Partial<PointLedgerRepository> = {}): PointLedgerReposi
         },
         async finalizeAutomaticEvent() { return record("completed") },
         async rollbackAutomaticEvent() {},
-        async applyBalanceDelta() { return { ok: true, balanceAfter: 90 } },
         async claimManualAdjustment() {
             return { claimed: true, claimId: "claim-1", record: record("pending", "claim-1") }
         },

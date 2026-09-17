@@ -5,23 +5,10 @@ import { db } from "@/lib/db"
 import { loginUsers } from "@/lib/db/schema"
 import { ensureLoginUsersSchema, getSetting } from "@/lib/db/queries"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
+import { POINT_CHECKIN_ERROR_KEY_MAP } from "@/lib/points/point-errors"
 import { and, eq, isNull, lt, or, sql } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
-import { createErrorId, logServerError, resolveClientErrorKey } from "@/lib/errors/safe-error"
-
-/**
- * 积分账本内部错误码 → 面向用户的 checkin.* 文案 key。
- * 未命中的错误一律退化为 checkin.failed，避免任何内部信息（SQL 原文、
- * 绑定参数、表结构）通过返回值泄漏到前台。
- */
-const CHECKIN_ERROR_KEY_MAP: Record<string, string> = {
-    POINT_LEDGER_EVENT_IN_PROGRESS: "checkin.inProgress",
-    POINT_LEDGER_CLAIM_FAILED: "checkin.failed",
-    POINT_LEDGER_CLAIM_LOST: "checkin.failed",
-    POINT_LEDGER_BUSINESS_KEY_CONFLICT: "checkin.alreadyCheckedIn",
-    POINT_BALANCE_NEGATIVE: "checkin.balanceNegative",
-    insufficient_points: "checkin.balanceNegative",
-}
+import { logServerError, resolveClientErrorKey } from "@/lib/errors/safe-error"
 
 export async function checkIn() {
     const session = await auth()
@@ -125,7 +112,7 @@ export async function checkIn() {
         return { success: true, points: reward, consecutiveDays: updated[0]?.consecutiveDays ?? 1 }
     } catch (error: any) {
         const errorId = logServerError('checkin', error)
-        const errorKey = resolveClientErrorKey(error, CHECKIN_ERROR_KEY_MAP, "checkin.failed")
+        const errorKey = resolveClientErrorKey(error, POINT_CHECKIN_ERROR_KEY_MAP, "checkin.failed")
         return { success: false, error: errorKey, errorId }
     }
 }

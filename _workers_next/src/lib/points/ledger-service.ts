@@ -41,10 +41,16 @@ export interface PointLedgerRepository {
         claimId: string,
     ): Promise<PointLedgerRecord>
     rollbackAutomaticEvent(id: number, claimId: string): Promise<void>
-    applyBalanceDelta(
-        userId: string,
-        delta: number,
-    ): Promise<{ ok: true; balanceAfter: number } | { ok: false }>
+    /**
+     * 注意：这里**刻意不提供**独立的「改余额」方法。
+     *
+     * 余额只在 `finalizeAutomaticEvent` 内由数据库触发器
+     * （`user_point_ledger_apply_balance`）随状态迁移原子变更。
+     * 历史上存在过一个 `applyBalanceDelta`，它让余额变更成为与账本
+     * 分离的第二次写入 —— 一旦中间失败就会出现「账本已完成但余额没变」
+     * 或「余额变了但账本未完成」的撕裂状态。移除它是为了从接口层面
+     * 消除这种写法。
+     */
     claimManualAdjustment(input: {
         userId: string
         delta: number

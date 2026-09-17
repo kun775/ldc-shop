@@ -16,9 +16,7 @@
 # next.js
 /.next/
 .next.backup*
-.next-logo-fix/
-.next-coupon-verify/
-.next-v2-verify/
+.next-*/
 /out/
 
 # production
