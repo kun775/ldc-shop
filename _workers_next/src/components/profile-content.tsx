@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { toast } from "sonner"
-import { updateDesktopNotifications, updateProfileEmail } from "@/actions/profile"
+import { updateDesktopNotifications, updateProfileEmail, updateProfileNickname } from "@/actions/profile"
 import { useEffect, useRef, useState } from "react"
 import { CheckInButton } from "@/components/checkin-button"
 import { clearMyNotifications, getMyNotifications, markAllNotificationsRead, markNotificationRead } from "@/actions/user-notifications"
@@ -45,6 +45,7 @@ interface ProfileContentProps {
     user: {
         id: string
         name: string
+        nickname: string | null
         username: string | null
         avatar: string | null
         email: string | null
@@ -85,6 +86,9 @@ export function ProfileContent({
     desktopNotificationsEnabled
 }: ProfileContentProps) {
     const { t } = useI18n()
+    const [nickname, setNickname] = useState(user.nickname || '')
+    const [savedNickname, setSavedNickname] = useState(user.nickname || '')
+    const [savingNickname, setSavingNickname] = useState(false)
     const [email, setEmail] = useState(user.email || '')
     const [savedEmail, setSavedEmail] = useState(user.email || '')
     const [savingEmail, setSavingEmail] = useState(false)
@@ -108,6 +112,7 @@ export function ProfileContent({
     const notifiedIdsRef = useRef<Set<number>>(new Set())
 
     const unreadCount = notifications.filter((n) => !n.isRead).length
+    const displayName = savedNickname || user.name
 
     const parseNotificationData = (data: string | null) => {
         if (!data) return {}
@@ -252,6 +257,24 @@ export function ProfileContent({
         }
     }
 
+    const handleSaveNickname = async () => {
+        setSavingNickname(true)
+        try {
+            const result = await updateProfileNickname(nickname)
+            if (result?.success && result.nickname) {
+                setNickname(result.nickname)
+                setSavedNickname(result.nickname)
+                toast.success(t('profile.nicknameSaved'))
+            } else {
+                toast.error(result?.error ? t(result.error) : t('common.error'))
+            }
+        } catch {
+            toast.error(t('common.error'))
+        } finally {
+            setSavingNickname(false)
+        }
+    }
+
     const getNotificationBadge = (type: string): { icon: LucideIcon; color: string; bg: string } => {
         if (type.includes('deliver') || type.includes('order_delivered')) {
             return { icon: Package, color: 'text-emerald-500', bg: 'bg-emerald-500/10' }
@@ -272,7 +295,7 @@ export function ProfileContent({
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2.5">
                         <User className="h-6 w-6 text-primary" />
-                        {user.name}
+                        {displayName}
                     </h1>
                     <p className="text-sm text-muted-foreground mt-0.5">
                         {user.username ? `@${user.username} · ` : ''}
@@ -312,9 +335,9 @@ export function ProfileContent({
                             {/* Avatar & Floating Badges */}
                             <div className="flex items-end justify-between -mt-8 mb-3">
                                 <Avatar className="h-16 w-16 ring-4 ring-card shadow-sm border border-border/50">
-                                    <AvatarImage src={user.avatar || ''} alt={user.name} />
+                                    <AvatarImage src={user.avatar || ''} alt={displayName} />
                                     <AvatarFallback className="bg-primary/10 text-primary font-bold text-lg">
-                                        {user.name.slice(0, 2).toUpperCase()}
+                                        {displayName.slice(0, 2).toUpperCase()}
                                     </AvatarFallback>
                                 </Avatar>
                                 <div className="flex items-center gap-1.5">
@@ -327,7 +350,7 @@ export function ProfileContent({
                             {/* Name & ID */}
                             <div className="space-y-1">
                                 <div className="flex items-center gap-2">
-                                    <h2 className="text-lg font-bold text-foreground truncate">{user.name}</h2>
+                                    <h2 className="text-lg font-bold text-foreground truncate">{displayName}</h2>
                                 </div>
                                 {user.username && (
                                     <p className="text-xs text-muted-foreground">@{user.username}</p>
@@ -427,8 +450,42 @@ export function ProfileContent({
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="px-5 pb-5 space-y-4">
-                            {/* Email Setting */}
                             <div className="space-y-2">
+                                <Label htmlFor="profile-nickname" className="text-xs font-medium text-foreground">
+                                    {t('profile.nicknameTitle')}
+                                </Label>
+                                <div className="flex gap-2">
+                                    <div className="relative flex-1">
+                                        <User className="h-3.5 w-3.5 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                        <Input
+                                            id="profile-nickname"
+                                            type="text"
+                                            minLength={2}
+                                            maxLength={32}
+                                            placeholder={t('profile.nicknamePlaceholder')}
+                                            value={nickname}
+                                            onChange={(event) => setNickname(event.target.value)}
+                                            disabled={savingNickname}
+                                            className="h-9 pl-8 text-xs"
+                                        />
+                                    </div>
+                                    <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        className="h-9 px-3.5 text-xs font-medium shrink-0"
+                                        disabled={savingNickname || nickname.trim() === savedNickname}
+                                        onClick={handleSaveNickname}
+                                    >
+                                        {savingNickname ? t('common.processing') : t('profile.nicknameSave')}
+                                    </Button>
+                                </div>
+                                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                    {t('profile.nicknameHint')}
+                                </p>
+                            </div>
+
+                            {/* Email Setting */}
+                            <div className="space-y-2 border-t border-border/50 pt-3">
                                 <div className="flex items-center justify-between">
                                     <Label htmlFor="profile-email" className="text-xs font-medium text-foreground">
                                         {t('profile.emailTitle')}

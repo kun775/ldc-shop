@@ -18,7 +18,7 @@ export interface WishlistItem {
     id: number
     title: string
     description?: string | null
-    username?: string | null
+    nickname?: string | null
     createdAt?: number | null
     votes: number
     voted: boolean
@@ -212,7 +212,7 @@ export function WishlistSection({
                                 </div>
                                 <div className="flex items-center justify-between">
                                     <div className="text-xs text-muted-foreground">
-                                        {item.username ? `@${item.username}` : t("wishlist.anonymous")}
+                                        {item.nickname || t("wishlist.anonymous")}
                                     </div>
                                     <Button
                                         size="sm"

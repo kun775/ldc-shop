@@ -20,7 +20,7 @@ function resolveProductStockCount(product: any): number {
   if (isGroup) {
     const totalStock = Number(product.totalStock || 0);
     const totalLocked = Number(product.totalLocked || 0);
-    if (product.groupManual || (product.groupShared && totalStock > 0) || totalStock >= INFINITE_STOCK) {
+    if ((product.groupShared && totalStock > 0) || totalStock >= INFINITE_STOCK) {
       return INFINITE_STOCK;
     }
     return totalStock + totalLocked;
@@ -28,7 +28,7 @@ function resolveProductStockCount(product: any): number {
 
   const stock = Number(product.stock || 0);
   const locked = Number(product.locked || 0);
-  if (product.fulfillmentMode === 'manual') return INFINITE_STOCK;
+  if (product.fulfillmentMode === 'manual') return stock;
   if (product.isShared) return stock > 0 ? INFINITE_STOCK : 0;
   return stock >= INFINITE_STOCK ? INFINITE_STOCK : stock + locked;
 }

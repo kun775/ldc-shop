@@ -19,6 +19,7 @@ export const products = sqliteTable('products', {
     visibilityLevel: integer('visibility_level').default(-1),
     pointDiscountEnabled: integer('point_discount_enabled', { mode: 'boolean' }).default(false),
     pointDiscountPercent: integer('point_discount_percent').default(0),
+    manualStockCount: integer('manual_stock_count').default(0).notNull(),
     stockCount: integer('stock_count').default(0),
     lockedCount: integer('locked_count').default(0),
     soldCount: integer('sold_count').default(0),
@@ -63,6 +64,7 @@ export const orders = sqliteTable('orders', {
     payee: text('payee'),
     pointsUsed: integer('points_used').default(0),
     quantity: integer('quantity').default(1).notNull(),
+    manualStockQuantity: integer('manual_stock_quantity').default(0).notNull(),
     currentPaymentId: text('current_payment_id'),
     checkoutFieldValues: text('checkout_field_values'),
     fulfillmentMode: text('fulfillment_mode').default('auto'),
@@ -163,6 +165,7 @@ export const orderDeliveryFiles = sqliteTable('order_delivery_files', {
 export const loginUsers = sqliteTable('login_users', {
     userId: text('user_id').primaryKey(),
     username: text('username'),
+    nickname: text('nickname'),
     email: text('email'),
     points: integer('points').default(0).notNull(),
     isBlocked: integer('is_blocked', { mode: 'boolean' }).default(false),

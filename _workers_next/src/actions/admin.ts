@@ -88,6 +88,14 @@ export async function saveProduct(formData: FormData) {
     }
     const checkoutFields = serializeCheckoutFieldConfigs(formData.get('checkoutFields'))
     const fulfillmentMode = parseFulfillmentMode(formData.get('fulfillmentMode'))
+    const manualStockRaw = (formData.get('manualStockCount') as string | null)?.trim() ?? ''
+    const manualStockCount = fulfillmentMode === 'manual' ? Number(manualStockRaw) : 0
+    if (
+        fulfillmentMode === 'manual'
+        && (!manualStockRaw || !Number.isSafeInteger(manualStockCount) || manualStockCount < 0)
+    ) {
+        throw new Error('admin.productForm.manualStockInvalid')
+    }
     const parsedVisibility = Number.parseInt(visibilityLevelRaw, 10)
     const visibilityLevel = Number.isFinite(parsedVisibility) ? parsedVisibility : -1
     if (![ -1, 0, 1, 2, 3 ].includes(visibilityLevel)) {
@@ -145,7 +153,9 @@ export async function saveProduct(formData: FormData) {
             variantLabel,
             purchaseQuestions,
             checkoutFields,
-            fulfillmentMode
+            fulfillmentMode,
+            manualStockCount,
+            stockCount: fulfillmentMode === 'manual' ? manualStockCount : undefined,
         }).onConflictDoUpdate({
             target: products.id,
             set: {
@@ -167,7 +177,9 @@ export async function saveProduct(formData: FormData) {
                 variantLabel,
                 purchaseQuestions,
                 checkoutFields,
-                fulfillmentMode
+                fulfillmentMode,
+                manualStockCount,
+                ...(fulfillmentMode === 'manual' ? { stockCount: manualStockCount, lockedCount: 0 } : {}),
             }
         })
     }
@@ -203,6 +215,9 @@ export async function saveProduct(formData: FormData) {
         } catch { /* column exists */ }
         try {
             await db.run(sql.raw(`ALTER TABLE products ADD COLUMN fulfillment_mode TEXT DEFAULT 'auto'`));
+        } catch { /* column exists */ }
+        try {
+            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN manual_stock_count INTEGER NOT NULL DEFAULT 0`));
         } catch { /* column exists */ }
     }
 

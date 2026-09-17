@@ -73,6 +73,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
             purchaseQuestions: true,
             checkoutFields: true,
             fulfillmentMode: true,
+            manualStockCount: true,
             pointDiscountEnabled: true,
             pointDiscountPercent: true,
         }
@@ -205,7 +206,13 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
     // 2. Check Stock
     const getAvailableStock = async () => {
-        if (manualFulfillment) return INFINITE_STOCK
+        if (manualFulfillment) {
+            const row = await db.select({ stock: products.manualStockCount })
+                .from(products)
+                .where(eq(products.id, productId))
+                .limit(1)
+            return Math.max(0, Number(row[0]?.stock || 0))
+        }
         // For shared products, we just need ANY unused card to exist. Reservation status doesn't matter since we don't reserve.
         if (product.isShared) {
             const result = await db.select({ count: sql<number>`count(*)` })
@@ -475,6 +482,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         tradeNo: 'POINTS_REDEMPTION',
                         pointsUsed: pointsToUse,
                         quantity: qty,
+                        manualStockQuantity: qty,
                         checkoutFieldValues: checkoutFieldValuesJson,
                         fulfillmentMode,
                         createdAt: new Date()
@@ -514,6 +522,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     tradeNo: 'POINTS_REDEMPTION',
                     pointsUsed: pointsToUse,
                     quantity: qty,
+                    manualStockQuantity: 0,
                     checkoutFieldValues: checkoutFieldValuesJson,
                     fulfillmentMode,
                     createdAt: new Date()
@@ -536,6 +545,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     currentPaymentId: orderId, // Store current payment ID
                     cardIds: cardIdsValue,
                     quantity: qty,
+                    manualStockQuantity: manualFulfillment ? qty : 0,
                     checkoutFieldValues: checkoutFieldValuesJson,
                     fulfillmentMode,
                     createdAt: new Date()
@@ -687,6 +697,10 @@ export async function createOrder(productId: string, quantity: number = 1, email
             }
         }
     } catch (error: any) {
+        const errorMessage = String(error?.message || error || '')
+        if (errorMessage.includes('manual_stock_insufficient')) {
+            return { success: false, error: 'buy.outOfStock' };
+        }
         if (error?.message === 'stock_locked') {
             return { success: false, error: 'buy.stockLocked' };
         }

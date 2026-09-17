@@ -15,7 +15,7 @@ import { SignOutButton } from "@/components/signout-button"
 import { HeaderLogo, HeaderNav, HeaderSearch, HeaderUserMenuItems, HeaderUnreadBadge, HeaderAnnouncementTrigger, LanguageSwitcher } from "@/components/header-client-parts"
 import { ModeToggle } from "@/components/mode-toggle"
 import { CheckInButton } from "@/components/checkin-button"
-import { getSetting, recordLoginUser, getUserUnreadNotificationCount, getLoginUserDesktopNotificationsEnabled } from "@/lib/db/queries"
+import { getSetting, recordLoginUser, getUserUnreadNotificationCount, getLoginUserDesktopNotificationsEnabled, getLoginUserNickname } from "@/lib/db/queries"
 import { getActiveAnnouncement } from "@/actions/settings"
 import { isRegistryEnabled } from "@/lib/registry"
 import { resolveEffectiveShopLogo } from "@/lib/shop-logo"
@@ -24,8 +24,10 @@ import { getAdminUsernames, isAdminIdentity } from "@/lib/admin-auth"
 export async function SiteHeader() {
     const session = await auth()
     const user = session?.user
+    let displayName = user?.name || user?.username || ''
     if (user?.id) {
         await recordLoginUser(user.id, user.username || user.name || null, user.email || null)
+        displayName = await getLoginUserNickname(user.id).catch(() => null) || displayName
     }
 
     const rawAdminUsers = getAdminUsernames()
@@ -119,7 +121,7 @@ export async function SiteHeader() {
                                     <Button variant="ghost" className="relative h-8 w-8 overflow-visible rounded-full bg-background/70 hover:bg-background/90 transition-all duration-200 hover:-translate-y-0.5 hover:ring-2 hover:ring-primary/25 hover:ring-offset-2 hover:ring-offset-background">
                                         <HeaderUnreadBadge initialCount={unreadCount} desktopEnabled={desktopNotificationsEnabled} className="absolute -top-1 -right-1 z-10 pointer-events-none shadow-sm" />
                                         <Avatar className="relative z-0 h-8 w-8">
-                                            <AvatarImage src={user.avatar_url || ''} alt={user.name || ''} />
+                                            <AvatarImage src={user.avatar_url || ''} alt={displayName} />
                                             <AvatarFallback><User className="h-4 w-4" /></AvatarFallback>
                                         </Avatar>
                                     </Button>
@@ -127,7 +129,7 @@ export async function SiteHeader() {
                                 <DropdownMenuContent className="w-56" align="end" forceMount>
                                     <DropdownMenuLabel className="font-normal">
                                         <div className="flex flex-col space-y-1">
-                                            <p className="text-sm font-medium leading-none">{user.name}</p>
+                                            <p className="text-sm font-medium leading-none">{displayName}</p>
                                             <p className="text-xs leading-none text-muted-foreground">ID: {user.id}</p>
                                         </div>
                                     </DropdownMenuLabel>

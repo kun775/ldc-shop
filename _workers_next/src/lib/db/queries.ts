@@ -9,6 +9,7 @@ import {
     COUPON_USAGE_TRIGGER_NAMES,
     COUPON_USAGE_TRIGGER_STATEMENTS,
 } from "@/lib/coupons/counter-triggers";
+import { MANUAL_STOCK_TRIGGER_NAMES, MANUAL_STOCK_TRIGGER_STATEMENTS } from "@/lib/manual-stock-triggers";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -17,7 +18,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 26;
+const CURRENT_SCHEMA_VERSION = 27;
 const dbInitializationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
@@ -104,7 +105,10 @@ async function detectSchemaDrift(): Promise<boolean> {
         };
         const rows = queryResult.results || queryResult.rows || [];
         const triggerNames = new Set(rows.map((row) => String(row.name || '')));
-        if (COUPON_USAGE_TRIGGER_NAMES.some((name) => !triggerNames.has(name))) {
+        if (
+            COUPON_USAGE_TRIGGER_NAMES.some((name) => !triggerNames.has(name))
+            || MANUAL_STOCK_TRIGGER_NAMES.some((name) => !triggerNames.has(name))
+        ) {
             return true;
         }
     } catch (error: unknown) {
@@ -283,6 +287,7 @@ async function ensureReviewRepliesTable() {
 async function ensureStructuralSchema() {
     await ensureProductsColumns();
     await ensureOrdersColumns();
+    await ensureManualStockTriggers();
     await ensureOrderDeliveryFilesTable();
     await ensureCouponTables();
     await ensureCardsColumns();
@@ -386,6 +391,7 @@ export async function ensureDatabaseInitialized() {
             visibility_level INTEGER DEFAULT -1,
             point_discount_enabled INTEGER DEFAULT 0,
             point_discount_percent INTEGER DEFAULT 0,
+            manual_stock_count INTEGER NOT NULL DEFAULT 0,
             stock_count INTEGER DEFAULT 0,
             locked_count INTEGER DEFAULT 0,
             sold_count INTEGER DEFAULT 0,
@@ -428,6 +434,7 @@ export async function ensureDatabaseInitialized() {
             username TEXT,
             points_used INTEGER DEFAULT 0,
             quantity INTEGER DEFAULT 1,
+            manual_stock_quantity INTEGER NOT NULL DEFAULT 0,
             current_payment_id TEXT,
             checkout_field_values TEXT,
             fulfillment_mode TEXT DEFAULT 'auto',
@@ -454,6 +461,7 @@ export async function ensureDatabaseInitialized() {
         CREATE TABLE IF NOT EXISTS login_users (
             user_id TEXT PRIMARY KEY,
             username TEXT,
+            nickname TEXT,
             points INTEGER DEFAULT 0,
             is_blocked INTEGER DEFAULT 0,
             desktop_notifications_enabled INTEGER DEFAULT 0,
@@ -600,6 +608,7 @@ export async function ensureDatabaseInitialized() {
         await ensureIndexes();
         await ensureOrderDeliveryFilesTable();
         await ensureCouponTables();
+        await ensureManualStockTriggers();
         await backfillProductAggregates();
 
         // Set initial schema version
@@ -625,6 +634,7 @@ async function ensureProductsColumns() {
         await safeAddColumn('products', 'visibility_level', 'INTEGER DEFAULT -1');
         await safeAddColumn('products', 'point_discount_enabled', 'INTEGER DEFAULT 0');
         await safeAddColumn('products', 'point_discount_percent', 'INTEGER DEFAULT 0');
+        await safeAddColumn('products', 'manual_stock_count', 'INTEGER NOT NULL DEFAULT 0');
         await safeAddColumn('products', 'stock_count', 'INTEGER DEFAULT 0');
         await safeAddColumn('products', 'locked_count', 'INTEGER DEFAULT 0');
         await safeAddColumn('products', 'sold_count', 'INTEGER DEFAULT 0');
@@ -654,7 +664,20 @@ async function ensureOrdersColumns() {
         await safeAddColumn('orders', 'coupon_discount_amount_cents', 'INTEGER DEFAULT 0');
         await safeAddColumn('orders', 'points_discount_amount_cents', 'INTEGER DEFAULT 0');
         await safeAddColumn('orders', 'pricing_snapshot', 'TEXT');
+        await safeAddColumn('orders', 'manual_stock_quantity', 'INTEGER NOT NULL DEFAULT 0');
     });
+}
+
+async function ensureManualStockTriggers() {
+    for (const statement of MANUAL_STOCK_TRIGGER_STATEMENTS) {
+        await db.run(sql.raw(statement));
+    }
+    await db.run(sql`
+        UPDATE products
+        SET stock_count = MAX(0, COALESCE(manual_stock_count, 0)),
+            locked_count = 0
+        WHERE COALESCE(fulfillment_mode, 'auto') = 'manual'
+    `);
 }
 
 // ensureCouponTables 幂等创建优惠券相关表与索引
@@ -854,6 +877,7 @@ async function ensureLoginUsersColumns() {
         await safeAddColumn('login_users', 'last_checkin_at', 'INTEGER');
         await safeAddColumn('login_users', 'consecutive_days', 'INTEGER DEFAULT 0');
         await safeAddColumn('login_users', 'desktop_notifications_enabled', 'INTEGER DEFAULT 0');
+        await safeAddColumn('login_users', 'nickname', 'TEXT');
     });
 }
 
@@ -866,6 +890,7 @@ export async function ensureLoginUsersSchema() {
     await safeAddColumn('login_users', 'points', 'INTEGER DEFAULT 0 NOT NULL');
     await safeAddColumn('login_users', 'is_blocked', 'INTEGER DEFAULT 0');
     await safeAddColumn('login_users', 'desktop_notifications_enabled', 'INTEGER DEFAULT 0');
+    await safeAddColumn('login_users', 'nickname', 'TEXT');
     loginUsersSchemaReady = true;
 }
 
@@ -909,7 +934,7 @@ export async function recalcProductAggregates(productId: string) {
 
     const product = await db.query.products.findFirst({
         where: eq(products.id, pid),
-        columns: { isShared: true, fulfillmentMode: true }
+        columns: { isShared: true, fulfillmentMode: true, manualStockCount: true }
     });
     if (!product) return;
 
@@ -964,13 +989,13 @@ export async function recalcProductAggregates(productId: string) {
     }
 
     const stockCount = product.fulfillmentMode === 'manual'
-        ? INFINITE_STOCK
+        ? Math.max(0, Number(product.manualStockCount || 0))
         : (product.isShared ? (unusedCount > 0 ? INFINITE_STOCK : 0) : availableCount);
 
     await db.update(products)
         .set({
             stockCount,
-            lockedCount,
+            lockedCount: product.fulfillmentMode === 'manual' ? 0 : lockedCount,
             soldCount,
             rating,
             reviewCount
@@ -998,6 +1023,7 @@ export async function recalcProductAggregatesForMany(productIds: string[]) {
     const aggregates = new Map<string, {
         isShared: boolean;
         fulfillmentMode: string | null;
+        manualStockCount: number;
         unused: number;
         available: number;
         locked: number;
@@ -1008,13 +1034,19 @@ export async function recalcProductAggregatesForMany(productIds: string[]) {
 
     for (let i = 0; i < ids.length; i += QUERY_BATCH_SIZE) {
         const batch = ids.slice(i, i + QUERY_BATCH_SIZE);
-        const rows = await db.select({ id: products.id, isShared: products.isShared, fulfillmentMode: products.fulfillmentMode })
+        const rows = await db.select({
+            id: products.id,
+            isShared: products.isShared,
+            fulfillmentMode: products.fulfillmentMode,
+            manualStockCount: sql<number>`COALESCE(${products.manualStockCount}, 0)`,
+        })
             .from(products)
             .where(inArray(products.id, batch));
         for (const row of rows) {
             aggregates.set(row.id, {
                 isShared: !!row.isShared,
                 fulfillmentMode: row.fulfillmentMode || 'auto',
+                manualStockCount: Number(row.manualStockCount || 0),
                 unused: 0,
                 available: 0,
                 locked: 0,
@@ -1100,12 +1132,12 @@ export async function recalcProductAggregatesForMany(productIds: string[]) {
     const updates = existingIds.map((id) => {
         const agg = aggregates.get(id)!;
         const stockCount = agg.fulfillmentMode === 'manual'
-            ? INFINITE_STOCK
+            ? Math.max(0, agg.manualStockCount)
             : (agg.isShared ? (agg.unused > 0 ? INFINITE_STOCK : 0) : agg.available);
         return {
             id,
             stockCount,
-            lockedCount: agg.locked,
+            lockedCount: agg.fulfillmentMode === 'manual' ? 0 : agg.locked,
             soldCount: agg.sold,
             rating: agg.rating,
             reviewCount: agg.reviewCount
@@ -1396,13 +1428,14 @@ export async function getWishlistItems(userId: string | null, limit = 10) {
                 wi.id AS id,
                 wi.title AS title,
                 wi.description AS description,
-                wi.username AS username,
+                lu.nickname AS nickname,
                 wi.created_at AS created_at,
                 COUNT(wv.id) AS votes,
                 SUM(CASE WHEN wv.user_id = ${userId} THEN 1 ELSE 0 END) AS voted
             FROM wishlist_items wi
             LEFT JOIN wishlist_votes wv ON wv.item_id = wi.id
-            GROUP BY wi.id
+            LEFT JOIN login_users lu ON lu.user_id = wi.user_id
+            GROUP BY wi.id, lu.nickname
             ORDER BY votes DESC, wi.created_at DESC
             LIMIT ${limit}
         `);
@@ -1412,7 +1445,7 @@ export async function getWishlistItems(userId: string | null, limit = 10) {
             id: Number(row.id),
             title: row.title,
             description: row.description,
-            username: row.username,
+            nickname: row.nickname,
             createdAt: Number(row.created_at ?? row.createdAt ?? 0),
             votes: Number(row.votes || 0),
             voted: Number(row.voted || 0) > 0,
@@ -1427,13 +1460,14 @@ export async function getWishlistItems(userId: string | null, limit = 10) {
                         wi.id AS id,
                         wi.title AS title,
                         wi.description AS description,
-                        wi.username AS username,
+                        lu.nickname AS nickname,
                         wi.created_at AS created_at,
                         COUNT(wv.id) AS votes,
                         SUM(CASE WHEN wv.user_id = ${userId} THEN 1 ELSE 0 END) AS voted
                     FROM wishlist_items wi
                     LEFT JOIN wishlist_votes wv ON wv.item_id = wi.id
-                    GROUP BY wi.id
+                    LEFT JOIN login_users lu ON lu.user_id = wi.user_id
+                    GROUP BY wi.id, lu.nickname
                     ORDER BY votes DESC, wi.created_at DESC
                     LIMIT ${limit}
                 `);
@@ -1442,7 +1476,7 @@ export async function getWishlistItems(userId: string | null, limit = 10) {
                     id: Number(row.id),
                     title: row.title,
                     description: row.description,
-                    username: row.username,
+                    nickname: row.nickname,
                     createdAt: Number(row.created_at ?? row.createdAt ?? 0),
                     votes: Number(row.votes || 0),
                     voted: Number(row.voted || 0) > 0,
@@ -1612,6 +1646,7 @@ export async function getProductForAdmin(id: string) {
             purchaseQuestions: products.purchaseQuestions,
             checkoutFields: products.checkoutFields,
             fulfillmentMode: products.fulfillmentMode,
+            manualStockCount: sql<number>`COALESCE(${products.manualStockCount}, 0)`,
         })
             .from(products)
             .where(eq(products.id, id));
@@ -1900,7 +1935,7 @@ export async function getAdminOverview(lowStockThreshold = 5) {
             const lowStockItems = productRows
                 .filter((row) => {
                     if (row.isActive === false) return false
-                    if (row.fulfillmentMode === 'manual' || row.isShared) return false
+                    if (row.isShared) return false
                     const stock = toSafeNumber(row.stock)
                     return stock < INFINITE_STOCK && stock <= threshold
                 })
@@ -2269,6 +2304,7 @@ export async function getProductReviews(
     limit = 20,
     cursor?: { createdAtMs: number; id: number } | null,
 ) {
+    await ensureDatabaseInitialized()
     await ensureReviewRepliesTable()
     const safeLimit = Math.min(Math.max(Math.trunc(limit) || 20, 1), 100)
     const cursorCondition = cursor
@@ -2277,8 +2313,18 @@ export async function getProductReviews(
             OR (COALESCE(${reviews.createdAt}, 0) = ${cursor.createdAtMs} AND ${reviews.id} < ${cursor.id})
         )`
         : undefined
-    const reviewRows = await db.select()
+    const reviewRows = await db.select({
+        id: reviews.id,
+        productId: reviews.productId,
+        orderId: reviews.orderId,
+        userId: reviews.userId,
+        rating: reviews.rating,
+        comment: reviews.comment,
+        createdAt: reviews.createdAt,
+        nickname: loginUsers.nickname,
+    })
         .from(reviews)
+        .leftJoin(loginUsers, eq(reviews.userId, loginUsers.userId))
         .where(and(eq(reviews.productId, productId), cursorCondition))
         .orderBy(sql`COALESCE(${reviews.createdAt}, 0) DESC`, desc(reviews.id))
         .limit(safeLimit);
@@ -2286,8 +2332,16 @@ export async function getProductReviews(
     if (!reviewRows.length) return reviewRows.map((review) => ({ ...review, replies: [] }));
 
     try {
-        const replyRows = await db.select()
+        const replyRows = await db.select({
+            id: reviewReplies.id,
+            reviewId: reviewReplies.reviewId,
+            userId: reviewReplies.userId,
+            comment: reviewReplies.comment,
+            createdAt: reviewReplies.createdAt,
+            nickname: loginUsers.nickname,
+        })
             .from(reviewReplies)
+            .leftJoin(loginUsers, eq(reviewReplies.userId, loginUsers.userId))
             .where(inArray(reviewReplies.reviewId, reviewRows.map((review) => review.id)))
             .orderBy(asc(reviewReplies.createdAt));
 
@@ -2501,6 +2555,7 @@ async function ensureLoginUsersTable() {
         CREATE TABLE IF NOT EXISTS login_users(
         user_id TEXT PRIMARY KEY,
         username TEXT,
+        nickname TEXT,
         email TEXT,
         points INTEGER DEFAULT 0 NOT NULL,
         is_blocked BOOLEAN DEFAULT FALSE,
@@ -2619,6 +2674,7 @@ async function ensureWishlistColumns() {
 type GitHubLoginUserRow = {
     userId: string
     username: string | null
+    nickname: string | null
     email: string | null
     points: number
     isBlocked: boolean
@@ -2691,6 +2747,7 @@ function mergeLoginUserRows(primary: GitHubLoginUserRow, secondary: GitHubLoginU
 
     return {
         username: normalizeGitHubUsernameValue(primary.username) || normalizeGitHubUsernameValue(secondary.username),
+        nickname: primary.nickname || secondary.nickname || null,
         email: primary.email || secondary.email || null,
         points: Number(primary.points || 0) + Number(secondary.points || 0),
         isBlocked: !!primary.isBlocked || !!secondary.isBlocked,
@@ -2752,6 +2809,7 @@ async function migrateMalformedGitHubUserIds() {
     const malformedRows = await db.select({
         userId: loginUsers.userId,
         username: loginUsers.username,
+        nickname: loginUsers.nickname,
         email: loginUsers.email,
         points: loginUsers.points,
         isBlocked: sql<boolean>`COALESCE(${loginUsers.isBlocked}, FALSE)`,
@@ -2768,6 +2826,7 @@ async function migrateMalformedGitHubUserIds() {
         const sourceUser: GitHubLoginUserRow = {
             userId: row.userId,
             username: row.username || null,
+            nickname: row.nickname || null,
             email: row.email || null,
             points: Number(row.points || 0),
             isBlocked: !!row.isBlocked,
@@ -2782,6 +2841,7 @@ async function migrateMalformedGitHubUserIds() {
         const existingTargetRows = await db.select({
             userId: loginUsers.userId,
             username: loginUsers.username,
+            nickname: loginUsers.nickname,
             email: loginUsers.email,
             points: loginUsers.points,
             isBlocked: sql<boolean>`COALESCE(${loginUsers.isBlocked}, FALSE)`,
@@ -2797,6 +2857,7 @@ async function migrateMalformedGitHubUserIds() {
             ? {
                 userId: existingTargetRows[0].userId,
                 username: existingTargetRows[0].username || null,
+                nickname: existingTargetRows[0].nickname || null,
                 email: existingTargetRows[0].email || null,
                 points: Number(existingTargetRows[0].points || 0),
                 isBlocked: !!existingTargetRows[0].isBlocked,
@@ -2813,6 +2874,7 @@ async function migrateMalformedGitHubUserIds() {
                 INSERT OR IGNORE INTO login_users (
                     user_id,
                     username,
+                    nickname,
                     email,
                     points,
                     is_blocked,
@@ -2822,6 +2884,7 @@ async function migrateMalformedGitHubUserIds() {
                 ) VALUES (
                     ${targetUserId},
                     NULL,
+                    ${sourceUser.nickname},
                     ${sourceUser.email},
                     ${sourceUser.points},
                     ${sourceUser.isBlocked ? 1 : 0},
@@ -2835,6 +2898,7 @@ async function migrateMalformedGitHubUserIds() {
             await db.update(loginUsers)
                 .set({
                     username: merged.username,
+                    nickname: merged.nickname,
                     email: merged.email,
                     points: merged.points,
                     isBlocked: merged.isBlocked,
@@ -2865,6 +2929,7 @@ async function migrateGitHubUsersDedupAndCanonicalize() {
     const githubUsers = await db.select({
         userId: loginUsers.userId,
         username: loginUsers.username,
+        nickname: loginUsers.nickname,
         email: loginUsers.email,
         points: loginUsers.points,
         isBlocked: sql<boolean>`COALESCE(${loginUsers.isBlocked}, FALSE)`,
@@ -2885,6 +2950,7 @@ async function migrateGitHubUsersDedupAndCanonicalize() {
         list.push({
             userId: row.userId,
             username: row.username,
+            nickname: row.nickname || null,
             email: row.email || null,
             points: Number(row.points || 0),
             isBlocked: !!row.isBlocked,
@@ -2904,6 +2970,7 @@ async function migrateGitHubUsersDedupAndCanonicalize() {
         const mergedBlocked = rows.some((row) => row.isBlocked)
         const mergedDesktopNotifications = rows.some((row) => row.desktopNotificationsEnabled)
         const mergedEmail = canonical.email || rows.map((row) => row.email).find((value) => !!value) || null
+        const mergedNickname = canonical.nickname || rows.map((row) => row.nickname).find((value) => !!value) || null
 
         const createdCandidates = rows.map((row) => toEpochMs(row.createdAt)).filter((value): value is number => value !== null)
         const lastLoginCandidates = rows.map((row) => toEpochMs(row.lastLoginAt)).filter((value): value is number => value !== null)
@@ -2918,6 +2985,7 @@ async function migrateGitHubUsersDedupAndCanonicalize() {
         await db.update(loginUsers)
             .set({
                 username: normalizedUsername,
+                nickname: mergedNickname,
                 email: mergedEmail,
                 points: mergedPoints,
                 isBlocked: mergedBlocked,
@@ -3106,6 +3174,45 @@ export async function getLoginUserEmail(userId: string): Promise<string | null> 
         return result[0]?.email ?? null;
     } catch (error: any) {
         if (isMissingTableOrColumn(error)) return null;
+        throw error;
+    }
+}
+
+export async function getLoginUserNickname(userId: string): Promise<string | null> {
+    if (!userId) return null;
+    try {
+        const result = await db.select({ nickname: loginUsers.nickname })
+            .from(loginUsers)
+            .where(eq(loginUsers.userId, userId))
+            .limit(1);
+        return result[0]?.nickname?.trim() || null;
+    } catch (error: any) {
+        if (isMissingTableOrColumn(error)) return null;
+        throw error;
+    }
+}
+
+export async function updateLoginUserNickname(userId: string, nickname: string) {
+    if (!userId) return;
+    const doUpdate = async () => {
+        await db.insert(loginUsers).values({
+            userId,
+            nickname,
+            lastLoginAt: new Date(),
+        }).onConflictDoUpdate({
+            target: loginUsers.userId,
+            set: { nickname, lastLoginAt: new Date() },
+        });
+    };
+
+    try {
+        await doUpdate();
+    } catch (error: any) {
+        if (isMissingTableOrColumn(error)) {
+            await ensureLoginUsersSchema();
+            await doUpdate();
+            return;
+        }
         throw error;
     }
 }

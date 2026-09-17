@@ -4,7 +4,7 @@ import { db } from "@/lib/db"
 import { sql } from "drizzle-orm"
 import { revalidatePath, updateTag } from "next/cache"
 import { checkAdmin } from "@/actions/admin"
-import { recalcProductAggregatesForMany } from "@/lib/db/queries"
+import { ensureDatabaseInitialized, recalcProductAggregatesForMany } from "@/lib/db/queries"
 import { products } from "@/lib/db/schema"
 import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 
@@ -69,6 +69,7 @@ export async function repairDataAction() {
 
 export async function importData(formData: FormData) {
     await checkAdmin()
+    await ensureDatabaseInitialized()
 
     const file = formData.get('file') as File
     if (!file) {
@@ -99,6 +100,7 @@ export async function importData(formData: FormData) {
             visibilityLevel: 'visibility_level',
             pointDiscountEnabled: 'point_discount_enabled',
             pointDiscountPercent: 'point_discount_percent',
+            manualStockCount: 'manual_stock_count',
             stockCount: 'stock_count',
             lockedCount: 'locked_count',
             soldCount: 'sold_count',
@@ -123,6 +125,7 @@ export async function importData(formData: FormData) {
             paidAt: 'paid_at',
             deliveredAt: 'delivered_at',
             pointsUsed: 'points_used',
+            manualStockQuantity: 'manual_stock_quantity',
             checkoutFieldValues: 'checkout_field_values',
             deliveryNote: 'delivery_note',
             currentPaymentId: 'current_payment_id',

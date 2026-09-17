@@ -146,12 +146,14 @@ async function migrateLegacyUserId(sourceUserId: string, targetUserId: string, u
     if (!sourceUserId || !targetUserId || sourceUserId === targetUserId) return
 
     const normalizedUsername = username?.trim().toLowerCase() || null
+    await runAuthMigrationStep(sql.raw(`ALTER TABLE login_users ADD COLUMN nickname TEXT`))
 
     try {
         const sourceRows = await db
             .select({
                 userId: loginUsers.userId,
                 username: loginUsers.username,
+                nickname: loginUsers.nickname,
                 email: loginUsers.email,
                 points: loginUsers.points,
                 isBlocked: sql<boolean>`COALESCE(${loginUsers.isBlocked}, FALSE)`,
@@ -168,6 +170,7 @@ async function migrateLegacyUserId(sourceUserId: string, targetUserId: string, u
             .select({
                 userId: loginUsers.userId,
                 username: loginUsers.username,
+                nickname: loginUsers.nickname,
                 email: loginUsers.email,
                 points: loginUsers.points,
                 isBlocked: sql<boolean>`COALESCE(${loginUsers.isBlocked}, FALSE)`,
@@ -187,6 +190,7 @@ async function migrateLegacyUserId(sourceUserId: string, targetUserId: string, u
                 INSERT OR IGNORE INTO login_users (
                     user_id,
                     username,
+                    nickname,
                     email,
                     points,
                     is_blocked,
@@ -196,6 +200,7 @@ async function migrateLegacyUserId(sourceUserId: string, targetUserId: string, u
                 ) VALUES (
                     ${targetUserId},
                     ${normalizedUsername || source.username || null},
+                    ${source.nickname || null},
                     ${source.email || null},
                     ${Number(source.points || 0)},
                     ${source.isBlocked ? 1 : 0},
@@ -211,6 +216,7 @@ async function migrateLegacyUserId(sourceUserId: string, targetUserId: string, u
             const mergedBlocked = !!source.isBlocked || !!target.isBlocked
             const mergedDesktopEnabled = !!source.desktopNotificationsEnabled || !!target.desktopNotificationsEnabled
             const mergedEmail = target.email || source.email || null
+            const mergedNickname = target.nickname || source.nickname || null
 
             const createdCandidates = [asTimestampMs(source.createdAt), asTimestampMs(target.createdAt)].filter((v): v is number => v !== null)
             const lastLoginCandidates = [asTimestampMs(source.lastLoginAt), asTimestampMs(target.lastLoginAt)].filter((v): v is number => v !== null)
@@ -220,6 +226,7 @@ async function migrateLegacyUserId(sourceUserId: string, targetUserId: string, u
             await db.update(loginUsers)
                 .set({
                     username: normalizedUsername || target.username || source.username || null,
+                    nickname: mergedNickname,
                     email: mergedEmail,
                     points: mergedPoints,
                     isBlocked: mergedBlocked,

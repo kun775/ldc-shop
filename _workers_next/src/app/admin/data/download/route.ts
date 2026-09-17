@@ -21,8 +21,9 @@ import {
   wishlistVotes,
 } from "@/lib/db/schema"
 import { and, desc, eq, or, sql } from "drizzle-orm"
-import { getProducts, normalizeTimestampMs } from "@/lib/db/queries"
+import { ensureDatabaseInitialized, getProducts, normalizeTimestampMs } from "@/lib/db/queries"
 import { isAdminIdentity } from "@/lib/admin-auth"
+import { prepareManualStockProductsForSqlBackup } from "@/lib/manual-stock-backup"
 
 function requireAdminIdentity(user?: { id?: string | null; username?: string | null } | null) {
   if (!isAdminIdentity(user)) throw new Error("Unauthorized")
@@ -90,6 +91,7 @@ function rowToInsertOrIgnore(table: string, row: Record<string, any>): string {
 export async function GET(req: Request) {
   const session = await auth()
   requireAdminIdentity(session?.user)
+  await ensureDatabaseInitialized()
 
   const { searchParams } = new URL(req.url)
   const type = (searchParams.get("type") || "").toLowerCase()
@@ -307,6 +309,10 @@ export async function GET(req: Request) {
       }
 
       if (format === "sql") {
+        const sqlDump = {
+          ...full,
+          products: prepareManualStockProductsForSqlBackup(full.products || [], full.orders || []),
+        }
         const parts: string[] = []
         parts.push(`-- Database Migration Dump (Vercel Postgres -> Cloudflare D1)`)
         parts.push(`-- Generated at ${new Date().toISOString()}`)
@@ -331,6 +337,7 @@ export async function GET(req: Request) {
           purchaseLimit: 'purchase_limit',
           purchaseWarning: 'purchase_warning',
           visibilityLevel: 'visibility_level',
+          manualStockCount: 'manual_stock_count',
           stockCount: 'stock_count',
           lockedCount: 'locked_count',
           soldCount: 'sold_count',
@@ -355,6 +362,7 @@ export async function GET(req: Request) {
           paidAt: 'paid_at',
           deliveredAt: 'delivered_at',
           pointsUsed: 'points_used',
+          manualStockQuantity: 'manual_stock_quantity',
           checkoutFieldValues: 'checkout_field_values',
           deliveryNote: 'delivery_note',
           currentPaymentId: 'current_payment_id',
@@ -382,7 +390,7 @@ export async function GET(req: Request) {
           targetValue: 'target_value',
         }
 
-        for (const [tableName, rows] of Object.entries(full)) {
+        for (const [tableName, rows] of Object.entries(sqlDump)) {
           if (!rows.length) continue
           for (const row of rows) {
             // Convert keys to snake_case

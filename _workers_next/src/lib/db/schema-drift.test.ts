@@ -32,6 +32,9 @@ test("drift probes cover the objects that historically went missing", () => {
         'coupon_user_counters',
         'subtotal_amount_cents',
         'fulfillment_claim_id',
+        'manual_stock_count',
+        'manual_stock_quantity',
+        'nickname',
         'rule_snapshot',
         'refund_policy',
     ]) {

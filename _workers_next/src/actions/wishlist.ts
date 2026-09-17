@@ -5,7 +5,7 @@ import { db } from "@/lib/db"
 import { loginUsers } from "@/lib/db/schema"
 import { eq, sql } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
-import { getSetting } from "@/lib/db/queries"
+import { ensureDatabaseInitialized, getLoginUserNickname, getSetting } from "@/lib/db/queries"
 
 async function safeAddColumn(table: string, column: string, definition: string) {
     try {
@@ -55,6 +55,7 @@ async function isBlockedUser(userId: string) {
 }
 
 export async function submitWishlistItem(title: string, description?: string) {
+    await ensureDatabaseInitialized()
     const session = await auth()
     const userId = session?.user?.id
     const username = session?.user?.username || session?.user?.name || null
@@ -72,6 +73,7 @@ export async function submitWishlistItem(title: string, description?: string) {
     if (await isBlockedUser(userId)) {
         return { success: false, error: "wishlist.blocked" }
     }
+    const nickname = await getLoginUserNickname(userId).catch(() => null)
 
     const cleanTitle = (title || "").trim()
     const cleanDesc = (description || "").trim()
@@ -108,7 +110,7 @@ export async function submitWishlistItem(title: string, description?: string) {
             id,
             title: cleanTitle,
             description: cleanDesc || null,
-            username,
+            nickname,
             createdAt: Date.now(),
             votes: 0,
             voted: false

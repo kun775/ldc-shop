@@ -23,10 +23,10 @@
  *   - 覆盖「当前 schema 版本最新引入的对象」，也就是最可能缺失的部分
  */
 export const SCHEMA_DRIFT_PROBES: readonly string[] = [
-    "SELECT compare_at_price, purchase_warning, is_shared, visibility_level, point_discount_enabled, point_discount_percent, stock_count, locked_count, sold_count, rating, review_count, variant_group_id, variant_label, purchase_questions, product_images, checkout_fields, fulfillment_mode FROM products LIMIT 0",
-    "SELECT points_used, current_payment_id, payee, card_ids, checkout_field_values, fulfillment_mode, delivery_note, fulfillment_claim_id, fulfillment_claimed_at, subtotal_amount_cents, coupon_discount_amount_cents, points_discount_amount_cents, pricing_snapshot FROM orders LIMIT 0",
+    "SELECT compare_at_price, purchase_warning, is_shared, visibility_level, point_discount_enabled, point_discount_percent, manual_stock_count, stock_count, locked_count, sold_count, rating, review_count, variant_group_id, variant_label, purchase_questions, product_images, checkout_fields, fulfillment_mode FROM products LIMIT 0",
+    "SELECT points_used, current_payment_id, payee, card_ids, checkout_field_values, fulfillment_mode, manual_stock_quantity, delivery_note, fulfillment_claim_id, fulfillment_claimed_at, subtotal_amount_cents, coupon_discount_amount_cents, points_discount_amount_cents, pricing_snapshot FROM orders LIMIT 0",
     "SELECT reserved_order_id, reserved_at, expires_at FROM cards LIMIT 0",
-    "SELECT email, points, is_blocked, desktop_notifications_enabled, last_checkin_at, consecutive_days FROM login_users LIMIT 0",
+    "SELECT nickname, email, points, is_blocked, desktop_notifications_enabled, last_checkin_at, consecutive_days FROM login_users LIMIT 0",
     "SELECT review_id, user_id, username, comment, created_at FROM review_replies LIMIT 0",
     "SELECT title, description, user_id, username, created_at FROM wishlist_items LIMIT 0",
     "SELECT item_id, user_id, created_at FROM wishlist_votes LIMIT 0",

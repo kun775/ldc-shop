@@ -16,11 +16,11 @@ function mergeLiveStockIntoVariants(
     return variants.map((v) => {
         const stat = liveStats.get(v.id) ?? { unused: 0, available: 0, locked: 0 }
         const stockCount = v.fulfillmentMode === 'manual'
-            ? INFINITE_STOCK
+            ? Math.max(0, Number(v.stock || 0))
             : v.isShared
             ? (stat.unused > 0 ? INFINITE_STOCK : 0)
             : stat.available
-        return { ...v, stockCount, lockedCount: stat.locked }
+        return { ...v, stockCount, lockedCount: v.fulfillmentMode === 'manual' ? 0 : stat.locked }
     })
 }
 
@@ -63,11 +63,11 @@ export default async function BuyPage({ params }: BuyPageProps) {
     const liveStats = await getLiveCardStats([product.id]).catch(() => new Map())
     const stat = liveStats.get(product.id) ?? { unused: 0, available: 0, locked: 0 }
     const liveAvailable = product.fulfillmentMode === 'manual'
-        ? INFINITE_STOCK
+        ? Math.max(0, Number(product.stock || 0))
         : product.isShared
         ? (stat.unused > 0 ? INFINITE_STOCK : 0)
         : stat.available
-    const liveLocked = stat.locked
+    const liveLocked = product.fulfillmentMode === 'manual' ? 0 : stat.locked
 
     return (
         <BuyContent

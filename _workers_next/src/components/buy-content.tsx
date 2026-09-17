@@ -54,15 +54,13 @@ interface Product {
 
 interface Review {
     id: number
-    username: string
-    userId?: string | null
+    nickname: string
     rating: number
     comment: string | null
     createdAt: Date | string | null
     replies?: Array<{
         id: number
-        username: string
-        userId?: string | null
+        nickname: string
         comment: string
         createdAt: Date | string | null
     }>
@@ -576,7 +574,7 @@ export function BuyContent({
                                             {variants.map((v) => {
                                                 const isSelected = v.id === selectedVariantId
                                                 const isVariantManual = v.fulfillmentMode === 'manual'
-                                                const hasVariantStock = isVariantManual || v.stockCount > 0
+                                                const hasVariantStock = v.stockCount > 0
                                                 return (
                                                     <button
                                                         key={v.id}
@@ -608,13 +606,17 @@ export function BuyContent({
                                                             </span>
                                                             <span className={cn(
                                                                 "text-[10px] font-medium px-1.5 py-0.5 rounded-md",
-                                                                isVariantManual
+                                                                !hasVariantStock
+                                                                    ? "bg-destructive/10 text-destructive"
+                                                                    : isVariantManual
                                                                     ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                                                                    : hasVariantStock
-                                                                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                                                                    : "bg-destructive/10 text-destructive"
+                                                                    : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                                                             )}>
-                                                                {isVariantManual ? "手工交付" : hasVariantStock ? `现货 ${v.stockCount > 99 ? '99+' : v.stockCount}` : "已售罄"}
+                                                                {!hasVariantStock
+                                                                    ? "已售罄"
+                                                                    : isVariantManual
+                                                                        ? `手工交付 · 现货 ${v.stockCount > 99 ? '99+' : v.stockCount}`
+                                                                        : `现货 ${v.stockCount > 99 ? '99+' : v.stockCount}`}
                                                             </span>
                                                         </div>
                                                     </button>

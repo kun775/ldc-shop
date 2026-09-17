@@ -5,7 +5,6 @@ import { useI18n } from '@/lib/i18n/context'
 import { StarRating } from '@/components/star-rating'
 import { Card, CardContent } from '@/components/ui/card'
 import { ClientDate } from '@/components/client-date'
-import { getDisplayUsername, getExternalProfileUrl } from '@/lib/user-profile-link'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { submitReviewReply } from '@/actions/reviews'
@@ -14,15 +13,13 @@ import { CornerUpLeft } from 'lucide-react'
 
 interface Review {
     id: number
-    username: string
-    userId?: string | null
+    nickname: string
     rating: number
     comment: string | null
     createdAt: Date | string | null
     replies?: Array<{
         id: number
-        username: string
-        userId?: string | null
+        nickname: string
         comment: string
         createdAt: Date | string | null
     }>
@@ -97,18 +94,9 @@ export function ReviewList({ reviews, averageRating, totalCount, productId, isLo
                             <div className="flex items-start justify-between gap-4">
                                 <div className="min-w-0 flex-1 space-y-1">
                                     <div className="flex items-center gap-2">
-                                        {getExternalProfileUrl(review.username, review.userId) ? (
-                                            <a
-                                                href={getExternalProfileUrl(review.username, review.userId) || "#"}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                className="font-medium text-sm hover:underline text-primary"
-                                            >
-                                                {getDisplayUsername(review.username, review.userId) || review.username}
-                                            </a>
-                                        ) : (
-                                            <span className="font-medium text-sm">{review.username}</span>
-                                        )}
+                                        <span className="font-medium text-sm">
+                                            {review.nickname || t('profile.anonymous')}
+                                        </span>
                                         <StarRating rating={review.rating} size="sm" />
                                     </div>
                                     {review.comment && (
@@ -119,20 +107,9 @@ export function ReviewList({ reviews, averageRating, totalCount, productId, isLo
                                             {review.replies.map((reply) => (
                                                 <div key={reply.id} className="rounded-xl border border-border/25 bg-muted/20 px-3 py-3">
                                                     <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-                                                        {getExternalProfileUrl(reply.username, reply.userId) ? (
-                                                            <a
-                                                                href={getExternalProfileUrl(reply.username, reply.userId) || "#"}
-                                                                target="_blank"
-                                                                rel="noreferrer"
-                                                                className="font-medium text-foreground hover:underline"
-                                                            >
-                                                                {getDisplayUsername(reply.username, reply.userId) || reply.username}
-                                                            </a>
-                                                        ) : (
-                                                            <span className="font-medium text-foreground">
-                                                                {getDisplayUsername(reply.username, reply.userId) || reply.username}
-                                                            </span>
-                                                        )}
+                                                        <span className="font-medium text-foreground">
+                                                            {reply.nickname || t('profile.anonymous')}
+                                                        </span>
                                                         <ClientDate value={reply.createdAt} />
                                                     </div>
                                                     <p className="text-sm text-muted-foreground">{reply.comment}</p>

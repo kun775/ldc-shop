@@ -6,15 +6,13 @@ import { getEmailSettings } from "@/lib/email"
 
 interface BuyMetaReview {
     id: number
-    username: string
-    userId: string | null
+    nickname: string
     rating: number
     comment: string | null
     createdAt: string | null
     replies: Array<{
         id: number
-        username: string
-        userId: string | null
+        nickname: string
         comment: string
         createdAt: string | null
     }>
@@ -47,15 +45,13 @@ function toIsoString(value: Date | string | null): string | null {
 function mapReviews(rawReviews: Awaited<ReturnType<typeof getProductReviews>>): BuyMetaReview[] {
     return rawReviews.map((review) => ({
         id: Number(review.id),
-        username: review.username || "",
-        userId: review.userId || null,
+        nickname: review.nickname || "",
         rating: Number(review.rating || 0),
         comment: review.comment || null,
         createdAt: toIsoString(review.createdAt),
         replies: review.replies.map((reply) => ({
             id: Number(reply.id),
-            username: reply.username || "",
-            userId: reply.userId || null,
+            nickname: reply.nickname || "",
             comment: reply.comment || "",
             createdAt: toIsoString(reply.createdAt),
         })),

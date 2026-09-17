@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 import { db } from "@/lib/db"
 import { orders, loginUsers, userMessages } from "@/lib/db/schema"
 import { eq, sql, desc } from "drizzle-orm"
-import { getLoginUserEmail, getLoginUserDesktopNotificationsEnabled, getSetting, getUserNotifications } from "@/lib/db/queries"
+import { ensureDatabaseInitialized, getLoginUserEmail, getLoginUserDesktopNotificationsEnabled, getSetting, getUserNotifications } from "@/lib/db/queries"
 import { ProfileContent } from "@/components/profile-content"
 import { unstable_noStore } from "next/cache"
 
@@ -15,19 +15,23 @@ export default async function ProfilePage() {
         redirect("/")
     }
 
+    await ensureDatabaseInitialized()
+
     const userId = session.user.id
 
     // Get user points
     let userPoints = 0
     let profileEmail: string | null = null
+    let profileNickname: string | null = null
     let checkinEnabled = true
     let desktopNotificationsEnabled = false
     try {
-        const userResult = await db.select({ points: loginUsers.points })
+        const userResult = await db.select({ points: loginUsers.points, nickname: loginUsers.nickname })
             .from(loginUsers)
             .where(eq(loginUsers.userId, userId))
             .limit(1)
         userPoints = userResult[0]?.points || 0
+        profileNickname = userResult[0]?.nickname?.trim() || null
     } catch {
         userPoints = 0
     }
@@ -122,7 +126,8 @@ export default async function ProfilePage() {
         <ProfileContent
             user={{
                 id: session.user.id,
-                name: session.user.name || session.user.username || "User",
+                name: profileNickname || session.user.name || session.user.username || "User",
+                nickname: profileNickname,
                 username: session.user.username || null,
                 avatar: session.user.avatar_url || null,
                 email: profileEmail || session.user.email || null,

@@ -1,7 +1,8 @@
 'use server'
 
 import { auth } from "@/lib/auth"
-import { updateLoginUserEmail, updateLoginUserDesktopNotificationsEnabled } from "@/lib/db/queries"
+import { updateLoginUserEmail, updateLoginUserDesktopNotificationsEnabled, updateLoginUserNickname } from "@/lib/db/queries"
+import { validateNickname } from "@/lib/nickname"
 import { revalidatePath } from "next/cache"
 
 function isValidEmail(value: string) {
@@ -26,6 +27,26 @@ export async function updateProfileEmail(emailInput: string) {
         return { success: true }
     } catch (error) {
         console.error('[Profile] updateProfileEmail failed:', error)
+        return { success: false, error: 'common.error' }
+    }
+}
+
+export async function updateProfileNickname(nicknameInput: string) {
+    const session = await auth()
+    const userId = session?.user?.id
+    if (!userId) return { success: false, error: 'common.error' }
+
+    const validation = validateNickname(nicknameInput)
+    if (!validation.ok) return { success: false, error: validation.error }
+
+    try {
+        await updateLoginUserNickname(userId, validation.nickname)
+        revalidatePath('/profile')
+        revalidatePath('/')
+        revalidatePath('/wishlist')
+        return { success: true, nickname: validation.nickname }
+    } catch (error) {
+        console.error('[Profile] updateProfileNickname failed:', error)
         return { success: false, error: 'common.error' }
     }
 }

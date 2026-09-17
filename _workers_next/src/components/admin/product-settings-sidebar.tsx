@@ -174,6 +174,27 @@ export function ProductSettingsSidebar({
                         <p className="text-[11px] text-muted-foreground leading-relaxed">
                             {t('admin.productForm.fulfillmentModeHint')}
                         </p>
+
+                        {fulfillmentMode === 'manual' && (
+                            <div className="grid gap-2 border-t border-border/50 pt-3">
+                                <Label htmlFor="manualStockCount">
+                                    {t('admin.productForm.manualStockLabel')}
+                                </Label>
+                                <Input
+                                    id="manualStockCount"
+                                    name="manualStockCount"
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    required
+                                    defaultValue={Math.max(0, Number(currentProduct?.manualStockCount || 0))}
+                                    onWheel={(event) => event.currentTarget.blur()}
+                                />
+                                <p className="text-[11px] text-muted-foreground">
+                                    {t('admin.productForm.manualStockHint')}
+                                </p>
+                            </div>
+                        )}
                     </div>
 
                     <div className="flex items-start gap-3 rounded-lg border bg-muted/20 p-4">
