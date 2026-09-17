@@ -26,8 +26,8 @@ export default async function AdminCouponsPage(props: {
     const page = parseIntParam(firstParam(searchParams.page), 1)
     const pageSize = Math.min(parseIntParam(firstParam(searchParams.pageSize), 20), 100)
 
-    // 列表读取：结构缺失由 repository 自愈一次；仍失败则抛出，
-    // 由本段落 error.tsx 呈现安全文案 + errorId，而不是静默显示「0 张优惠券」。
+    // 列表读取失败时由本段落 error.tsx 呈现安全文案 + errorId，
+    // 不在页面请求中执行数据库 DDL，也不静默显示「0 张优惠券」。
     const [result, enabled] = await Promise.all([
         listAdminCoupons({ q, status, discountType, scope, page, pageSize }),
         isCouponsEnabled().catch(() => false),

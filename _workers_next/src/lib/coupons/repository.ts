@@ -1,8 +1,7 @@
 import { db } from '@/lib/db'
 import { coupons, couponProducts, couponUsages, couponUserCounters, orders, products } from '@/lib/db/schema'
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm'
-import { ensureCouponTables, ensureDatabaseInitialized } from '@/lib/db/queries'
-import { withSchemaSelfHeal } from '@/lib/db/schema-self-heal.ts'
+import { ensureDatabaseInitialized } from '@/lib/db/queries'
 import { normalizeCouponCode, orderCouponEntriesByCode } from './code.ts'
 import type {
     CouponRecord,
@@ -17,37 +16,9 @@ import type {
 const COUPON_LIST_MAX_PAGE_SIZE = 100
 const COUPON_PAGE_SIZE_DEFAULT = 20
 
-/**
- * 优惠券表全部依赖清单。
- *
- * 与 ensureCouponTables 中的 CREATE TABLE 一一对应：只要探测到其中任意一张缺失，
- * 就重跑一次幂等结构修复。新增优惠券表时必须同步这里，否则自愈会漏项。
- */
-export const COUPON_TABLE_NAMES = [
-    'coupons',
-    'coupon_products',
-    'coupon_usages',
-    'coupon_user_counters',
-] as const
-
-/**
- * runWithCouponSchemaSelfHeal 执行优惠券读写操作，遇到结构缺失时自愈一次并重试。
- *
- * 契约细节见 `@/lib/db/schema-self-heal`：
- *   - 只有**确认是结构错误**（缺表/缺列）才重跑幂等 DDL，瞬时错误直接抛出；
- *   - 自愈只执行一次，避免结构性问题演变成无限重试；
- *   - 自愈失败时保留原始错误，不掩盖真实原因。
- *
- * 为什么不先用 `hasCurrentSchemaVersion()` 走快速路径：
- *   版本号可能领先于真实结构（历史事故已固化此约定），而 ensureCouponTables
- *   本身是幂等的 CREATE/ALTER IF NOT EXISTS，直接执行成本可控。
- */
-function runWithCouponSchemaSelfHeal<T>(run: () => Promise<T>): Promise<T> {
-    return withSchemaSelfHeal({
-        run,
-        repair: () => ensureCouponTables(),
-        label: 'Coupon',
-    })
+/** 页面与业务请求保持纯读写，不在请求内执行数据库 DDL。 */
+function runCouponOperation<T>(run: () => Promise<T>): Promise<T> {
+    return run()
 }
 
 export interface CouponAdminFilters {
@@ -211,8 +182,8 @@ export async function listAdminCoupons(filters: CouponAdminFilters = {}) {
 
     const whereExpr = whereParts.length ? and(...whereParts) : undefined
 
-    // 列表读取：结构缺失时自愈一次重跑；查询异常一律上抛，由调用方统一脱敏
-    return runWithCouponSchemaSelfHeal(async () => {
+    // 查询异常一律上抛，由调用方统一脱敏并记录错误 ID。
+    return runCouponOperation(async () => {
         const countQuery = db.select({ count: sql<number>`count(*)` }).from(coupons)
         const rowsQuery = db.select().from(coupons)
             .orderBy(desc(coupons.createdAt))
@@ -265,7 +236,7 @@ export async function getCouponById(id: string): Promise<CouponRecord | null> {
     await ensureDatabaseInitialized()
 
     // null 严格表示「记录不存在」；结构或查询异常一律抛出，由上层转为可追踪失败
-    return runWithCouponSchemaSelfHeal(async () => {
+    return runCouponOperation(async () => {
         const rows = await db.select().from(coupons).where(eq(coupons.id, id)).limit(1)
         if (!rows.length) return null
         const productMap = await loadProductIdsByCoupon([id])
@@ -288,7 +259,7 @@ export async function getCouponRuntimeState(couponId: string, userId: string | n
     }
     if (!couponId) return base
 
-    return runWithCouponSchemaSelfHeal(async () => {
+    return runCouponOperation(async () => {
         const rows = await db
             .select({ reservedCount: coupons.reservedCount, consumedCount: coupons.consumedCount })
             .from(coupons)
@@ -327,9 +298,8 @@ export async function loadCouponRuntimeEntries(codes: string[], userId: string |
 
     await ensureDatabaseInitialized()
 
-    // 读取整表：结构缺失时自愈一次；查询异常上抛，由上层转为可追踪失败，
-    // 不允许把系统错误伪装成「优惠码不存在」。
-    const { rows, productMap, counterMap } = await runWithCouponSchemaSelfHeal(async () => {
+    // 查询异常上抛，由上层转为可追踪失败，不把系统错误伪装成「优惠码不存在」。
+    const { rows, productMap, counterMap } = await runCouponOperation(async () => {
         const rows = await db
             .select()
             .from(coupons)
@@ -420,9 +390,8 @@ export async function listCouponUsages(input: {
     }
     const whereExpr = and(...whereParts)
 
-    // 使用记录读取同样自愈一次：缺表时补结构，查询异常上抛，
-    // 避免「优惠券详情页显示 0 条使用记录」而实际是结构漂移。
-    const { total, usageRows, orderMap } = await runWithCouponSchemaSelfHeal(async () => {
+    // 查询异常上抛，避免「优惠券详情页显示 0 条使用记录」而实际是结构漂移。
+    const { total, usageRows, orderMap } = await runCouponOperation(async () => {
         const [countRows, usageRows] = await Promise.all([
             db.select({ count: sql<number>`count(*)` }).from(couponUsages).where(whereExpr),
             db.select().from(couponUsages)
@@ -503,10 +472,10 @@ export async function getCouponUsageSummary(couponId: string) {
     if (!couponId) return empty
     await ensureDatabaseInitialized()
 
-    // 统计读取：结构缺失时自愈后重跑；查询异常上抛。
+    // 统计查询异常直接上抛。
     // 详情页会把这个失败显示为「统计不可用」而不是静默显示 0，
     // 避免结构漂移被误读成「这张券没人用过」。
-    return runWithCouponSchemaSelfHeal(async () => {
+    return runCouponOperation(async () => {
         const rows = await db
             .select({
                 status: couponUsages.status,
@@ -640,11 +609,11 @@ export async function setCouponStatusRecord(id: string, status: CouponStatus): P
 //   原因：`coupon_products` 没有唯一约束，旧写法一旦在 delete 之后 insert 失败
 //   （例如结构漂移、请求超时），该券的适用商品会被清空且无法回滚，
 //   直接表现为「编辑保存后满减券变成了全场券」。集合差分天然幂等，
-//   自愈重跑与并发重入都不会丢数据。
+//   重试与并发重入都不会丢数据。
 export async function replaceCouponProducts(couponId: string, productIds: string[]): Promise<void> {
     const unique = Array.from(new Set(productIds.map((id) => String(id || '').trim()).filter(Boolean)))
 
-    await runWithCouponSchemaSelfHeal(async () => {
+    await runCouponOperation(async () => {
         const existingRows = await db
             .select({ productId: couponProducts.productId })
             .from(couponProducts)
@@ -670,13 +639,13 @@ export async function replaceCouponProducts(couponId: string, productIds: string
 }
 
 export async function deleteCouponProducts(couponId: string): Promise<void> {
-    await runWithCouponSchemaSelfHeal(async () => {
+    await runCouponOperation(async () => {
         await db.delete(couponProducts).where(eq(couponProducts.couponId, couponId))
     })
 }
 
 export async function deleteCouponRecord(couponId: string): Promise<void> {
-    await runWithCouponSchemaSelfHeal(async () => {
+    await runCouponOperation(async () => {
         await db.delete(coupons).where(eq(coupons.id, couponId))
     })
 }
@@ -709,7 +678,7 @@ export async function findCouponIdByCode(code: string): Promise<string | null> {
     if (!normalized) return null
     // null 只表示「优惠码未被占用」；结构/查询异常上抛，避免把系统错误
     // 当成「可用优惠码」，进而在保存时撞上真实唯一约束。
-    return runWithCouponSchemaSelfHeal(async () => {
+    return runCouponOperation(async () => {
         const rows = await db
             .select({ id: coupons.id })
             .from(coupons)

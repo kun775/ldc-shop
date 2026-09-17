@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import { unstable_noStore } from 'next/cache'
-import { CouponForm, toCouponFormInitial } from '@/components/admin/coupons/coupon-form'
+import { CouponForm } from '@/components/admin/coupons/coupon-form'
+import { toCouponFormInitial } from '@/lib/coupons/form-initial'
 import { getCouponById, listActiveProductOptions } from '@/lib/coupons/repository'
 
 export default async function AdminCouponEditPage({ params }: { params: Promise<{ id: string }> }) {

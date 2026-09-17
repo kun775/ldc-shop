@@ -15,64 +15,10 @@ import { useI18n } from '@/lib/i18n/context'
 import { toast } from 'sonner'
 import { ArrowLeft, Loader2, Sparkles } from 'lucide-react'
 import { createCouponAction, updateCouponAction } from '@/actions/coupons'
-import { centsToLdcNumber } from '@/lib/coupons/money'
 import { generateCouponCode } from '@/lib/coupons/code'
+import type { CouponFormInitial } from '@/lib/coupons/form-initial'
 import { resolveClientActionErrorKey } from '@/lib/errors/safe-error'
 import { pageLoadingStore } from '@/lib/ui/page-loading-store'
-import type { CouponRecord } from '@/lib/coupons/types'
-
-export interface CouponFormInitial {
-    id: string
-    code: string
-    name: string
-    description: string
-    discountType: 'percent' | 'fixed' | 'threshold_fixed'
-    ratePercent: string
-    discountValue: string
-    minSpendValue: string
-    maxDiscountValue: string
-    scope: 'all' | 'selected'
-    productIds: string[]
-    totalUseLimit: string
-    perUserLimit: string
-    stackableWithCoupons: boolean
-    stackableWithPoints: boolean
-    refundPolicy: string
-    status: string
-    startsAtInput: string
-    endsAtInput: string
-}
-
-export function toCouponFormInitial(coupon: CouponRecord): CouponFormInitial {
-    return {
-        id: coupon.id,
-        code: coupon.code,
-        name: coupon.name,
-        description: coupon.description || '',
-        discountType: coupon.discountType,
-        ratePercent: coupon.rateBps ? String(coupon.rateBps / 100) : '',
-        discountValue: coupon.discountAmountCents ? String(centsToLdcNumber(coupon.discountAmountCents)) : '',
-        minSpendValue: coupon.minSpendCents > 0 ? String(centsToLdcNumber(coupon.minSpendCents)) : '',
-        maxDiscountValue: coupon.maxDiscountCents ? String(centsToLdcNumber(coupon.maxDiscountCents)) : '',
-        scope: coupon.scope,
-        productIds: coupon.productIds,
-        totalUseLimit: coupon.totalUseLimit === null ? '' : String(coupon.totalUseLimit),
-        perUserLimit: coupon.perUserLimit === null ? '' : String(coupon.perUserLimit),
-        stackableWithCoupons: coupon.stackableWithCoupons,
-        stackableWithPoints: coupon.stackableWithPoints,
-        refundPolicy: coupon.refundPolicy,
-        status: coupon.status,
-        startsAtInput: msToLocalInput(coupon.startsAt),
-        endsAtInput: msToLocalInput(coupon.endsAt),
-    }
-}
-
-function msToLocalInput(ms: number | null): string {
-    if (ms === null) return ''
-    const date = new Date(ms)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
 
 function localInputToMs(value: string): number | null {
     if (!value) return null
