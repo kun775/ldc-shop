@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, blob } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core';
 
 // Products
 export const products = sqliteTable('products', {
@@ -69,8 +69,83 @@ export const orders = sqliteTable('orders', {
     deliveryNote: text('delivery_note'),
     fulfillmentClaimId: text('fulfillment_claim_id'),
     fulfillmentClaimedAt: integer('fulfillment_claimed_at', { mode: 'timestamp_ms' }),
+    subtotalAmountCents: integer('subtotal_amount_cents'),
+    couponDiscountAmountCents: integer('coupon_discount_amount_cents').default(0),
+    pointsDiscountAmountCents: integer('points_discount_amount_cents').default(0),
+    pricingSnapshot: text('pricing_snapshot'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
 });
+
+// Coupons (discount definitions)
+export const coupons = sqliteTable('coupons', {
+    id: text('id').primaryKey(),
+    code: text('code').notNull(),
+    name: text('name').notNull(),
+    description: text('description'),
+    discountType: text('discount_type').notNull().default('fixed'), // percent, fixed, threshold_fixed
+    rateBps: integer('rate_bps'),
+    discountAmountCents: integer('discount_amount_cents'),
+    minSpendCents: integer('min_spend_cents').default(0).notNull(),
+    maxDiscountCents: integer('max_discount_cents'),
+    scope: text('scope').notNull().default('all'), // all, selected
+    totalUseLimit: integer('total_use_limit'),
+    perUserLimit: integer('per_user_limit'),
+    reservedCount: integer('reserved_count').default(0).notNull(),
+    consumedCount: integer('consumed_count').default(0).notNull(),
+    stackableWithCoupons: integer('stackable_with_coupons', { mode: 'boolean' }).default(false),
+    stackableWithPoints: integer('stackable_with_points', { mode: 'boolean' }).default(true),
+    refundPolicy: text('refund_policy').default('unfulfilled_full_refund').notNull(),
+    status: text('status').notNull().default('draft'), // draft, active, disabled
+    startsAt: integer('starts_at', { mode: 'timestamp_ms' }),
+    endsAt: integer('ends_at', { mode: 'timestamp_ms' }),
+    createdBy: text('created_by'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
+});
+
+// Coupon -> product scope mapping
+export const couponProducts = sqliteTable('coupon_products', {
+    couponId: text('coupon_id').notNull(),
+    productId: text('product_id').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
+}, (table) => [
+    primaryKey({ columns: [table.couponId, table.productId] }),
+]);
+
+// Coupon usage ledger (reserve / consume / release / reverse)
+export const couponUsages = sqliteTable('coupon_usages', {
+    id: text('id').primaryKey(),
+    couponId: text('coupon_id').notNull(),
+    orderId: text('order_id').notNull(),
+    userId: text('user_id'),
+    username: text('username'),
+    status: text('status').notNull().default('reserved'), // reserved, consumed, released, reversed
+    sequence: integer('sequence').default(0).notNull(),
+    reservationId: text('reservation_id').notNull(),
+    reservationExpiresAt: integer('reservation_expires_at', { mode: 'timestamp_ms' }),
+    couponCodeSnapshot: text('coupon_code_snapshot').notNull(),
+    ruleSnapshot: text('rule_snapshot').notNull(),
+    eligibleAmountCents: integer('eligible_amount_cents').default(0).notNull(),
+    discountAmountCents: integer('discount_amount_cents').default(0).notNull(),
+    reservedAt: integer('reserved_at', { mode: 'timestamp_ms' }),
+    consumedAt: integer('consumed_at', { mode: 'timestamp_ms' }),
+    releasedAt: integer('released_at', { mode: 'timestamp_ms' }),
+    reversedAt: integer('reversed_at', { mode: 'timestamp_ms' }),
+    reason: text('reason'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
+});
+
+// Per-user coupon counters for atomic per-user quota enforcement
+export const couponUserCounters = sqliteTable('coupon_user_counters', {
+    couponId: text('coupon_id').notNull(),
+    userId: text('user_id').notNull(),
+    reservedCount: integer('reserved_count').default(0).notNull(),
+    consumedCount: integer('consumed_count').default(0).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
+}, (table) => [
+    primaryKey({ columns: [table.couponId, table.userId] }),
+]);
+
 
 export const orderDeliveryFiles = sqliteTable('order_delivery_files', {
     id: integer('id', { mode: 'number' }).primaryKey({ autoIncrement: true }),

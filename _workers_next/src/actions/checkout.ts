@@ -14,7 +14,12 @@ import { sendOrderEmail } from "@/lib/email"
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
-import { resolveCheckoutPointUsage } from "@/lib/points/product-point-discount"
+import { normalizeCouponCodeList } from "@/lib/coupons/code"
+import { resolveCouponQuote } from "@/lib/coupons/checkout-quote"
+import { centsToLdcNumber, centsToLdcString } from "@/lib/coupons/money"
+import { consumeCouponReservations, releaseCouponUsages, reserveCouponUsages } from "@/lib/coupons/reservation"
+import type { CouponReservationLine } from "@/lib/coupons/reservation"
+import { isCouponsEnabled } from "@/lib/coupons/flag"
 import { parseCheckoutFieldConfigs, validateCheckoutFieldValues } from "@/lib/checkout-fields"
 import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
 import { createOrderAccessToken, ORDER_ACCESS_COOKIE, ORDER_ACCESS_TTL_SECONDS } from "@/lib/order-access"
@@ -44,7 +49,7 @@ async function autoReplenishByApi(productId: string, reason: string) {
     }
 }
 
-export async function createOrder(productId: string, quantity: number = 1, email?: string, usePoints: boolean = false, answers?: string[], checkoutFieldValues?: Record<string, string>) {
+export async function createOrder(productId: string, quantity: number = 1, email?: string, usePoints: boolean = false, answers?: string[], checkoutFieldValues?: Record<string, string>, couponCodesInput?: string[]) {
     await ensureDatabaseInitialized()
     const session = await auth()
     const user = session?.user
@@ -125,9 +130,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
         }
     }
 
-    const orderAmount = Number(product.price) * quantity
     let availablePoints = 0
-
     if (user?.id) {
         const userRec = await db.query.loginUsers.findFirst({
             where: eq(loginUsers.userId, user.id),
@@ -136,17 +139,54 @@ export async function createOrder(productId: string, quantity: number = 1, email
         availablePoints = userRec?.points || 0
     }
 
-    const pricing = resolveCheckoutPointUsage({
-        orderAmount,
-        availablePoints,
-        usePoints,
-        pointDiscountEnabled: Boolean(product.pointDiscountEnabled),
-        pointDiscountPercent: Number(product.pointDiscountPercent || 0),
-    })
-    const pointsToUse = pricing.pointsToUse
-    const finalAmount = pricing.finalAmount
+    // 优惠券定价：商品小计 → 优惠券优惠 → 券后金额 → 积分抵扣 → 最终应付
+    const couponCodes = normalizeCouponCodeList(couponCodesInput)
+    if (couponCodes.length > 0 && !(await isCouponsEnabled())) {
+        return { success: false, error: 'coupon.errors.unavailable' }
+    }
 
-    const isZeroPrice = finalAmount <= 0
+    const quote = await resolveCouponQuote({
+        product,
+        quantity,
+        codes: couponCodes,
+        usePoints,
+        userId: user?.id ?? null,
+        availablePoints,
+    })
+    if (!quote.ok) {
+        return { success: false, error: quote.error }
+    }
+
+    const pricing = quote.result
+    const pointsToUse = pricing.pointsToUse
+    const finalAmountCents = pricing.finalAmountCents
+    const finalAmount = centsToLdcNumber(finalAmountCents)
+
+    const couponByCouponId = new Map(quote.entries.map((entry) => [entry.coupon.id, entry.coupon]))
+    const couponReservationLines: CouponReservationLine[] = pricing.lines
+        .map((line) => {
+            const coupon = couponByCouponId.get(line.couponId)
+            if (!coupon) return null
+            return {
+                coupon,
+                sequence: line.sequence,
+                eligibleAmountCents: line.eligibleAmountCents,
+                discountAmountCents: line.discountAmountCents,
+                ruleSnapshot: line.ruleSnapshot,
+            } satisfies CouponReservationLine
+        })
+        .filter((line): line is CouponReservationLine => line !== null)
+
+    const isZeroPrice = finalAmountCents <= 0
+
+    // 订单金额快照：历史订单只依赖快照，不随优惠券主表变更而漂移
+    const orderSnapshotFields = {
+        amount: centsToLdcString(finalAmountCents),
+        subtotalAmountCents: quote.subtotalCents,
+        couponDiscountAmountCents: pricing.couponDiscountCents,
+        pointsDiscountAmountCents: pricing.pointsDiscountCents,
+        pricingSnapshot: pricing.pricingSnapshot,
+    }
     const fulfillmentMode = parseFulfillmentMode(product.fulfillmentMode)
     const manualFulfillment = isManualFulfillment(fulfillmentMode)
     const rawContact = (email || '').trim()
@@ -246,7 +286,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
         const reservedCards: { id: number, key: string }[] = []
 
         if (manualFulfillment) {
-            await createOrderRecord([], '', isZeroPrice, pointsToUse, finalAmount, user, session?.user?.username, resolvedContactInfo, product, orderId, quantity, checkoutFieldValuesPayload)
+            await createOrderRecord([], '', isZeroPrice, pointsToUse, user, session?.user?.username, resolvedContactInfo, product, orderId, quantity, checkoutFieldValuesPayload)
             return
         }
 
@@ -393,23 +433,40 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
         const joinedKeys = reservedCards.map(c => c.key).join('\n')
 
-        await createOrderRecord(reservedCards, joinedKeys, isZeroPrice, pointsToUse, finalAmount, user, session?.user?.username, resolvedContactInfo, product, orderId, quantity, checkoutFieldValuesPayload)
+        await createOrderRecord(reservedCards, joinedKeys, isZeroPrice, pointsToUse, user, session?.user?.username, resolvedContactInfo, product, orderId, quantity, checkoutFieldValuesPayload)
     };
 
-    const createOrderRecord = async (reservedCards: any[], joinedKeys: string, isZeroPrice: boolean, pointsToUse: number, finalAmount: number, user: any, canonicalUsername: any, contactInfo: any, product: any, orderId: string, qty: number, checkoutFieldValuesJson: string | null) => {
+    const createOrderRecord = async (reservedCards: any[], joinedKeys: string, isZeroPrice: boolean, pointsToUse: number, user: any, canonicalUsername: any, contactInfo: any, product: any, orderId: string, qty: number, checkoutFieldValuesJson: string | null) => {
         let orderInserted = false
         const normalizedUsername = canonicalUsername || user?.username || user?.name || null
         const uniqueCardIds = Array.from(new Set(reservedCards.map(c => c.id).filter((id: any) => id !== null && id !== undefined)));
         const cardIdsValue = uniqueCardIds.length > 0 ? uniqueCardIds.join(',') : null;
 
         try {
+            // 先原子预占优惠券次数；失败则不创建订单，避免一次性券被并发超用
+            if (couponReservationLines.length > 0) {
+                const reservation = await reserveCouponUsages({
+                    orderId,
+                    userId: user?.id || null,
+                    username: normalizedUsername,
+                    now: Date.now(),
+                    reservationTtlMs: RESERVATION_TTL_MS,
+                    lines: couponReservationLines,
+                })
+                if (!reservation.ok) {
+                    const reservationError: any = new Error('coupon_reservation_failed')
+                    reservationError.couponError = reservation.error
+                    throw reservationError
+                }
+            }
+
             if (isZeroPrice) {
                 if (manualFulfillment) {
                     await db.insert(orders).values({
                         orderId,
                         productId: product.id,
                         productName: product.name,
-                        amount: finalAmount.toString(),
+                        ...orderSnapshotFields,
                         email: resolvedContactInfo,
                         userId: user?.id || null,
                         username: normalizedUsername,
@@ -445,7 +502,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     orderId,
                     productId: product.id,
                     productName: product.name,
-                    amount: finalAmount.toString(),
+                    ...orderSnapshotFields,
                     email: resolvedContactInfo,
                     userId: user?.id || null,
                     username: normalizedUsername,
@@ -470,7 +527,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     orderId,
                     productId: product.id,
                     productName: product.name,
-                    amount: finalAmount.toString(),
+                    ...orderSnapshotFields,
                     email: resolvedContactInfo,
                     userId: user?.id || null,
                     username: normalizedUsername,
@@ -505,6 +562,15 @@ export async function createOrder(productId: string, quantity: number = 1, email
             }
 
             if (isZeroPrice) {
+                // 零元订单不经过支付回调，直接完成核销
+                if (couponReservationLines.length > 0) {
+                    try {
+                        await consumeCouponReservations(orderId)
+                    } catch (couponConsumeError) {
+                        console.error('[Coupon] Zero-price consume failed:', couponConsumeError)
+                    }
+                }
+
                 if (user?.id) {
                     try {
                         await createUserNotification({
@@ -587,6 +653,15 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     // best effort rollback
                 }
             }
+
+            if (couponReservationLines.length > 0) {
+                try {
+                    await releaseCouponUsages(orderId, 'order_create_failed')
+                } catch {
+                    // best effort rollback
+                }
+            }
+
             throw error;
         }
     }
@@ -618,6 +693,12 @@ export async function createOrder(productId: string, quantity: number = 1, email
         if (error?.message === 'POINT_BALANCE_NEGATIVE' || error?.message === 'insufficient_points') {
             return { success: false, error: 'Points mismatch, please try again.' };
         }
+        if (error?.couponError) {
+            return { success: false, error: String(error.couponError) };
+        }
+        if (error?.message === 'coupon_reservation_failed') {
+            return { success: false, error: 'coupon.errors.reservationConflict' };
+        }
         throw error;
     }
 
@@ -646,7 +727,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
         notify_url: `${baseUrl}/api/notify`,
         return_url: `${baseUrl}/callback/${orderId}`,
         name: product.name,
-        money: Number(finalAmount).toFixed(2),
+        money: centsToLdcString(finalAmountCents),
         sign_type: 'MD5'
     }
 

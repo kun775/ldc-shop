@@ -7,6 +7,12 @@ import { revalidatePath, updateTag } from "next/cache"
 import { getSetting, recalcProductAggregates } from "@/lib/db/queries"
 import { checkAdmin } from "@/actions/admin"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
+import {
+    getOrderCouponsForReverse,
+    releaseCouponUsages,
+    reverseCouponUsages,
+    shouldReverseCouponsOnRefund,
+} from "@/lib/coupons/reservation"
 
 export async function markOrderRefunded(orderId: string) {
     await checkAdmin()
@@ -43,6 +49,21 @@ export async function markOrderRefunded(orderId: string) {
 
     // Update order status
     await db.update(orders).set({ status: 'refunded' }).where(eq(orders.orderId, orderId))
+
+    // 优惠券处理：未核销的预占一律释放；已核销的按券的退款策略决定是否返还次数
+    try {
+        await releaseCouponUsages(orderId, 'refund_release')
+        const fulfilled = order.status === 'delivered'
+        const consumedCoupons = await getOrderCouponsForReverse(orderId)
+        const shouldReverse = consumedCoupons.some((row: any) =>
+            shouldReverseCouponsOnRefund({ refundPolicy: row?.refundPolicy, fulfilled })
+        )
+        if (shouldReverse) {
+            await reverseCouponUsages(orderId, fulfilled ? 'refund_reverse_fulfilled' : 'refund_reverse')
+        }
+    } catch (error) {
+        console.error('[Coupon] Refund reversal failed:', error)
+    }
 
     // Reclaim card back to stock (best effort)
     let reclaimCards = true

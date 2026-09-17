@@ -77,7 +77,10 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
   const router = useRouter()
   const paymentBreakdown = getOrderPaymentBreakdown({
     amount: order.amount,
-    pointsUsed: order.pointsUsed
+    pointsUsed: order.pointsUsed,
+    subtotalAmountCents: order.subtotalAmountCents,
+    couponDiscountAmountCents: order.couponDiscountAmountCents,
+    pointsDiscountAmountCents: order.pointsDiscountAmountCents
   })
   const checkoutFieldValues = parseCheckoutFieldValues(order.checkoutFieldValues)
   const [email, setEmail] = useState(order.email || '')
@@ -285,6 +288,20 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
             <div className="space-y-2">
               <div className="text-sm text-muted-foreground">{t('admin.orders.paymentBreakdown')}</div>
               <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                {paymentBreakdown.hasCouponBreakdown && paymentBreakdown.subtotalAmount !== null && (
+                  <div className="flex items-center justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">商品小计</span>
+                    <span className="font-medium tabular-nums">{paymentBreakdown.subtotalAmount.toFixed(2)}</span>
+                  </div>
+                )}
+                {paymentBreakdown.couponDiscountAmount > 0 && (
+                  <div className="flex items-center justify-between gap-4 text-sm">
+                    <span className="text-muted-foreground">优惠券优惠</span>
+                    <span className="font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
+                      -{paymentBreakdown.couponDiscountAmount.toFixed(2)}
+                    </span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between gap-4 text-sm">
                   <span className="text-muted-foreground">{t('admin.orders.ldcPaid')}</span>
                   <span className="font-medium">{paymentBreakdown.ldcAmount}</span>

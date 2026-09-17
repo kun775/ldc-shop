@@ -1089,5 +1089,60 @@
     },
     "points": {
         "myPoints": "My Points"
+    },
+    "coupon": {
+        "errors": {
+            "notFound": "Coupon not found or no longer valid",
+            "notActive": "This coupon is not available",
+            "notStarted": "This coupon has not started yet",
+            "expired": "This coupon has expired",
+            "exhausted": "This coupon has been fully claimed",
+            "loginRequired": "Please sign in to use this coupon",
+            "userLimitReached": "You have reached the usage limit for this coupon",
+            "productNotEligible": "This coupon does not apply to the current product",
+            "minSpendNotMet": "The minimum spend for this coupon is not met",
+            "notStackable": "This coupon cannot be combined with other coupons",
+            "pointsConflict": "This coupon cannot be combined with point redemption",
+            "reservationConflict": "This coupon was just used, please confirm the price again",
+            "unavailable": "Coupons are temporarily unavailable",
+            "invalidCode": "Invalid coupon code format",
+            "tooMany": "Up to 3 coupons per order",
+            "duplicateCode": "Duplicate coupon code"
+        },
+        "modal": {
+            "title": "Coupon",
+            "placeholder": "Enter coupon code",
+            "apply": "Apply",
+            "applying": "Checking…",
+            "remove": "Remove",
+            "applied": "Applied",
+            "discountLabel": "Coupon discount",
+            "pointsDisabled": "This coupon cannot be combined with point redemption",
+            "maxReached": "Up to 3 coupons per order",
+            "empty": "No coupons available"
+        },
+        "admin": {
+            "errors": {
+                "nameInvalid": "Name is required and must be under 100 characters",
+                "codeInvalid": "Code must be 4-32 characters of A-Z, 0-9, underscore or hyphen",
+                "descriptionTooLong": "Description must be under 500 characters",
+                "typeInvalid": "Invalid discount type",
+                "rateInvalid": "Rate must be an integer between 1 and 100",
+                "discountInvalid": "Discount amount must be greater than 0",
+                "maxDiscountInvalid": "Maximum discount must be greater than 0",
+                "minSpendInvalid": "Invalid minimum spend",
+                "minSpendRequired": "Threshold coupons require a minimum spend",
+                "scopeInvalid": "Invalid scope",
+                "productsRequired": "Select at least one product for a selected-scope coupon",
+                "totalLimitInvalid": "Total usage limit must be an integer of at least 1",
+                "perUserLimitInvalid": "Per-user limit must be an integer of at least 1",
+                "perUserExceedsTotal": "Per-user limit cannot exceed the total usage limit",
+                "windowInvalid": "End time must be later than start time",
+                "codeTaken": "This coupon code is already in use",
+                "notFound": "Coupon not found",
+                "lockedAfterUsage": "This coupon already has usage records; copy it to change pricing rules",
+                "hasUsage": "This coupon already has usage records and cannot be deleted"
+            }
+        }
     }
 }

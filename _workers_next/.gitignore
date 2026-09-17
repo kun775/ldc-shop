@@ -17,6 +17,7 @@
 /.next/
 .next.backup*
 .next-logo-fix/
+.next-coupon-verify/
 /out/
 
 # production

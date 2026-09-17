@@ -11,6 +11,7 @@ import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib
 import { DELIVERY_FILE_LIMITS, deleteDeliveryFiles, listDeliveryFiles, saveDeliveryFiles } from "@/lib/delivery-files"
 import { isManualFulfillment } from "@/lib/fulfillment"
 import { isValidEmail, sendManualDeliveryEmail } from "@/lib/email"
+import { consumeCouponReservations, releaseCouponUsages } from "@/lib/coupons/reservation"
 
 export async function markOrderPaid(orderId: string) {
   await checkAdmin()
@@ -21,6 +22,13 @@ export async function markOrderPaid(orderId: string) {
     status: 'paid',
     paidAt: new Date(),
   }).where(eq(orders.orderId, orderId))
+
+  // 管理员手工标记已支付同样要核销优惠券预占，避免次数泄漏
+  try {
+    await consumeCouponReservations(orderId)
+  } catch (error) {
+    console.error('[Coupon] Consume on admin mark paid failed:', error)
+  }
 
   revalidatePath('/admin/orders')
   revalidatePath(`/admin/orders/${orderId}`)
@@ -205,6 +213,13 @@ export async function cancelOrder(orderId: string) {
   await db.update(cards).set({ reservedOrderId: null, reservedAt: null })
     .where(sql`${cards.reservedOrderId} = ${orderId} AND ${cards.isUsed} = false`)
 
+  // 释放优惠券预占次数（幂等）
+  try {
+    await releaseCouponUsages(orderId, 'admin_cancel')
+  } catch (error) {
+    console.error('[Coupon] Release on cancel failed:', error)
+  }
+
   revalidatePath('/admin/orders')
   revalidatePath('/admin/users')
   if (order?.userId) {
@@ -272,6 +287,13 @@ async function deleteOneOrder(orderId: string) {
 
   await db.update(cards).set({ reservedOrderId: null, reservedAt: null })
     .where(sql`${cards.reservedOrderId} = ${orderId} AND ${cards.isUsed} = false`)
+
+  // 删除订单前释放仍处于预占的优惠券次数
+  try {
+    await releaseCouponUsages(orderId, 'order_deleted')
+  } catch (error) {
+    console.error('[Coupon] Release before delete failed:', error)
+  }
 
   // Delete related refund requests (best effort)
   try {

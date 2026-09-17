@@ -6,7 +6,7 @@ import { useEffect, useState } from "react"
 import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger, SheetClose } from "@/components/ui/sheet"
-import { Package, CreditCard, Megaphone, Star, Download, Tags, RotateCcw, Users, Settings, QrCode, Bell, Menu, MessageSquare, LayoutDashboard } from "lucide-react"
+import { Package, CreditCard, Megaphone, Star, Download, Tags, RotateCcw, Users, Settings, QrCode, Bell, Menu, MessageSquare, LayoutDashboard, TicketPercent } from "lucide-react"
 import { useI18n } from "@/lib/i18n/context"
 import { getPendingRefundRequestCount } from "@/actions/refund-requests"
 import { getUnreadUserMessageCount } from "@/actions/user-messages"
@@ -151,6 +151,7 @@ function SidebarContent({ closeOnNavigate = false, showTitle = true, username, t
                     <NavLink href="/admin" icon={<LayoutDashboard className="h-4 w-4" />} label={t('admin.overview.nav')} closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/settings" icon={<Settings className="h-4 w-4" />} label={t('common.storeSettings')} closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/products" icon={<Package className="h-4 w-4" />} label={t('common.productManagement')} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/coupons" icon={<TicketPercent className="h-4 w-4" />} label="优惠券管理" closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/orders" icon={<CreditCard className="h-4 w-4" />} label={t('common.ordersRefunds')} closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/categories" icon={<Tags className="h-4 w-4" />} label={t('common.categoriesManage')} closeOnNavigate={closeOnNavigate} />
                 </div>

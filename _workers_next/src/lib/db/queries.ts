@@ -11,7 +11,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 24;
+const CURRENT_SCHEMA_VERSION = 25;
 const dbInitializationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
@@ -228,6 +228,7 @@ export async function ensureDatabaseInitialized() {
                 await ensureProductsColumns();
                 await ensureOrdersColumns();
                 await ensureOrderDeliveryFilesTable();
+                await ensureCouponTables();
                 await ensureCardsColumns();
                 await ensureCardKeyDuplicatesAllowed();
                 await ensureLoginUsersTable();
@@ -490,6 +491,7 @@ export async function ensureDatabaseInitialized() {
         await migrateGitHubUsersDedupAndCanonicalize();
         await ensureIndexes();
         await ensureOrderDeliveryFilesTable();
+        await ensureCouponTables();
         await backfillProductAggregates();
 
         // Set initial schema version
@@ -540,7 +542,116 @@ async function ensureOrdersColumns() {
         await safeAddColumn('orders', 'delivery_note', 'TEXT');
         await safeAddColumn('orders', 'fulfillment_claim_id', 'TEXT');
         await safeAddColumn('orders', 'fulfillment_claimed_at', 'INTEGER');
+        await safeAddColumn('orders', 'subtotal_amount_cents', 'INTEGER');
+        await safeAddColumn('orders', 'coupon_discount_amount_cents', 'INTEGER DEFAULT 0');
+        await safeAddColumn('orders', 'points_discount_amount_cents', 'INTEGER DEFAULT 0');
+        await safeAddColumn('orders', 'pricing_snapshot', 'TEXT');
     });
+}
+
+// ensureCouponTables 幂等创建优惠券相关表与索引
+//
+// 元数据:
+//   - 作者: Codex
+//   - 创建时间: 2026-03-05
+//   - 更新内容: 新增优惠券主表、适用商品、使用记录与用户计数表，schema v25。
+export async function ensureCouponTables() {
+    await db.run(sql`
+        CREATE TABLE IF NOT EXISTS coupons (
+            id TEXT PRIMARY KEY,
+            code TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            discount_type TEXT NOT NULL DEFAULT 'fixed',
+            rate_bps INTEGER,
+            discount_amount_cents INTEGER,
+            min_spend_cents INTEGER NOT NULL DEFAULT 0,
+            max_discount_cents INTEGER,
+            scope TEXT NOT NULL DEFAULT 'all',
+            total_use_limit INTEGER,
+            per_user_limit INTEGER,
+            reserved_count INTEGER NOT NULL DEFAULT 0,
+            consumed_count INTEGER NOT NULL DEFAULT 0,
+            stackable_with_coupons INTEGER DEFAULT 0,
+            stackable_with_points INTEGER DEFAULT 1,
+            refund_policy TEXT NOT NULL DEFAULT 'unfulfilled_full_refund',
+            status TEXT NOT NULL DEFAULT 'draft',
+            starts_at INTEGER,
+            ends_at INTEGER,
+            created_by TEXT,
+            created_at INTEGER DEFAULT (unixepoch() * 1000),
+            updated_at INTEGER DEFAULT (unixepoch() * 1000)
+        )
+    `)
+    await db.run(sql`
+        CREATE TABLE IF NOT EXISTS coupon_products (
+            coupon_id TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            created_at INTEGER DEFAULT (unixepoch() * 1000)
+        )
+    `)
+    await db.run(sql`
+        CREATE TABLE IF NOT EXISTS coupon_usages (
+            id TEXT PRIMARY KEY,
+            coupon_id TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            user_id TEXT,
+            username TEXT,
+            status TEXT NOT NULL DEFAULT 'reserved',
+            sequence INTEGER NOT NULL DEFAULT 0,
+            reservation_id TEXT NOT NULL,
+            reservation_expires_at INTEGER,
+            coupon_code_snapshot TEXT NOT NULL,
+            rule_snapshot TEXT NOT NULL,
+            eligible_amount_cents INTEGER NOT NULL DEFAULT 0,
+            discount_amount_cents INTEGER NOT NULL DEFAULT 0,
+            reserved_at INTEGER,
+            consumed_at INTEGER,
+            released_at INTEGER,
+            reversed_at INTEGER,
+            reason TEXT,
+            created_at INTEGER DEFAULT (unixepoch() * 1000)
+        )
+    `)
+    await db.run(sql`
+        CREATE TABLE IF NOT EXISTS coupon_user_counters (
+            coupon_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            reserved_count INTEGER NOT NULL DEFAULT 0,
+            consumed_count INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER DEFAULT (unixepoch() * 1000),
+            PRIMARY KEY (coupon_id, user_id)
+        )
+    `)
+
+    const couponIndexStatements = [
+        `CREATE UNIQUE INDEX IF NOT EXISTS coupons_code_uq ON coupons(upper(code))`,
+        `CREATE INDEX IF NOT EXISTS coupons_status_window_idx ON coupons(status, starts_at, ends_at)`,
+        `CREATE INDEX IF NOT EXISTS coupons_created_at_idx ON coupons(created_at)`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS coupon_products_coupon_product_uq ON coupon_products(coupon_id, product_id)`,
+        `CREATE INDEX IF NOT EXISTS coupon_products_product_idx ON coupon_products(product_id, coupon_id)`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS coupon_usages_order_coupon_uq ON coupon_usages(order_id, coupon_id)`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS coupon_usages_reservation_uq ON coupon_usages(reservation_id)`,
+        `CREATE INDEX IF NOT EXISTS coupon_usages_coupon_status_idx ON coupon_usages(coupon_id, status, reserved_at)`,
+        `CREATE INDEX IF NOT EXISTS coupon_usages_user_idx ON coupon_usages(coupon_id, user_id, status)`,
+        `CREATE INDEX IF NOT EXISTS coupon_usages_order_idx ON coupon_usages(order_id, sequence)`,
+        `CREATE INDEX IF NOT EXISTS coupon_usages_status_created_idx ON coupon_usages(status, created_at)`,
+    ]
+
+    for (const statement of couponIndexStatements) {
+        try {
+            await db.run(sql.raw(statement));
+        } catch (e: any) {
+            const errorString = (JSON.stringify(e) + String(e) + (e?.message || '')).toLowerCase();
+            if (errorString.includes('no such table') || errorString.includes('does not exist')) {
+                continue;
+            }
+            if (errorString.includes('already exists') || errorString.includes('constraint failed')) {
+                continue;
+            }
+            throw e;
+        }
+    }
 }
 
 async function ensureOrderDeliveryFilesTable() {
@@ -3016,6 +3127,7 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
         if (!orderIds.length) return orderIds;
 
         const actuallyCancelled: typeof candidates = [];
+        let releasedCouponUsageCount = 0;
         for (const expired of candidates) {
             const expiredOrderId = expired.orderId;
             if (!expiredOrderId) continue;
@@ -3058,6 +3170,18 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
             } catch (error: any) {
                 if (!isMissingTableOrColumn(error)) throw error;
             }
+
+            try {
+                // 超时取消同时释放优惠券预占，避免次数被永久占用
+                const { releaseCouponUsages } = await import("@/lib/coupons/reservation");
+                releasedCouponUsageCount += await releaseCouponUsages(expiredOrderId, 'timeout_cancel');
+            } catch (error: any) {
+                console.error('[Coupon] Release on timeout cancel failed:', error);
+            }
+        }
+
+        if (releasedCouponUsageCount > 0) {
+            console.info('[Coupon] Released reservations on timeout cancel:', releasedCouponUsageCount);
         }
 
         const productIds = Array.from(new Set(actuallyCancelled.map((row) => row.productId).filter(Boolean)));

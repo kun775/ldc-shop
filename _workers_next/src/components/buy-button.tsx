@@ -2,16 +2,20 @@
 
 import { useState, useEffect, useRef } from "react"
 import { createOrder } from "@/actions/checkout"
+import { getCouponFeatureFlag, previewCoupons } from "@/actions/coupons"
+import type { CouponPreviewPayload } from "@/actions/coupons"
 import { getUserPoints } from "@/actions/points"
 import { calculatePointDiscountPreview } from "@/lib/points/product-point-discount"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import { Loader2, Coins, Mail, ShoppingBag, ShieldCheck } from "lucide-react"
+import { Loader2, Coins, Mail, ShoppingBag, ShieldCheck, Ticket, X } from "lucide-react"
 import { toast } from "sonner"
 import { useI18n } from "@/lib/i18n/context"
 import { cn } from "@/lib/utils"
+
+const MAX_COUPONS_PER_ORDER = 3
 
 interface BuyButtonProps {
     productId: string
@@ -51,6 +55,12 @@ export function BuyButton({
     const [pointsLoading, setPointsLoading] = useState(false)
     const [hasAutoOpened, setHasAutoOpened] = useState(false)
     const [email, setEmail] = useState('')
+    const [couponsEnabled, setCouponsEnabled] = useState(false)
+    const [couponInput, setCouponInput] = useState('')
+    const [appliedCodes, setAppliedCodes] = useState<string[]>([])
+    const [couponPreview, setCouponPreview] = useState<CouponPreviewPayload | null>(null)
+    const [couponError, setCouponError] = useState<string | null>(null)
+    const [couponLoading, setCouponLoading] = useState(false)
     const isNavigatingRef = useRef(false)
     const { t } = useI18n()
 
@@ -58,10 +68,18 @@ export function BuyButton({
     const preview = calculatePointDiscountPreview({
         orderAmount: numericalPrice,
         availablePoints: points,
-        usePoints,
+        usePoints: couponPreview ? couponPreview.pointsToUse > 0 : usePoints,
         pointDiscountEnabled,
         pointDiscountPercent,
     })
+
+    const subtotalDisplay = couponPreview ? couponPreview.subtotalCents / 100 : numericalPrice
+    const couponDiscountDisplay = couponPreview ? couponPreview.couponDiscountLdc : 0
+    const pointsDiscountDisplay = couponPreview
+        ? couponPreview.pointsDiscountLdc
+        : (usePoints && preview.pointsToUse > 0 ? numericalPrice - preview.finalAmount : 0)
+    const finalPrice = couponPreview ? couponPreview.finalAmountLdc : preview.finalAmount
+    const pointsStackingBlocked = couponPreview ? !couponPreview.stackableWithPoints : false
 
     const openDialog = async () => {
         if (disabled) return
@@ -69,9 +87,17 @@ export function BuyButton({
         setPoints(0)
         setUsePoints(false)
         setPointsLoading(true)
+        setCouponInput('')
+        setAppliedCodes([])
+        setCouponPreview(null)
+        setCouponError(null)
         try {
-            const p = await getUserPoints()
+            const [p, couponsOn] = await Promise.all([
+                getUserPoints(),
+                getCouponFeatureFlag(),
+            ])
             setPoints(p)
+            setCouponsEnabled(Boolean(couponsOn))
             setUsePoints(false)
         } catch (e) {
             console.error(e)
@@ -105,6 +131,87 @@ export function BuyButton({
         await openDialog()
     }
 
+    const refreshCouponPreview = async (codes: string[], usePointsValue: boolean): Promise<boolean> => {
+        if (codes.length === 0) {
+            setAppliedCodes([])
+            setCouponPreview(null)
+            setCouponError(null)
+            return true
+        }
+
+        setCouponLoading(true)
+        try {
+            let result = await previewCoupons({
+                productId,
+                quantity,
+                codes,
+                usePoints: usePointsValue,
+            })
+
+            // 券不允许与积分叠加时，自动关闭积分再试一次，避免用户被迫手动取消
+            let effectiveUsePoints = usePointsValue
+            if (!result.success && result.error === 'coupon.errors.pointsConflict' && usePointsValue) {
+                effectiveUsePoints = false
+                result = await previewCoupons({
+                    productId,
+                    quantity,
+                    codes,
+                    usePoints: false,
+                })
+            }
+
+            if (!result.success) {
+                setCouponError(t(result.error))
+                return false
+            }
+
+            setAppliedCodes(codes)
+            setCouponPreview(result)
+            setCouponError(null)
+            if (!effectiveUsePoints || !result.stackableWithPoints) {
+                setUsePoints(false)
+            }
+            return true
+        } catch (couponPreviewError: any) {
+            setCouponError(couponPreviewError?.message || t('common.error'))
+            return false
+        } finally {
+            setCouponLoading(false)
+        }
+    }
+
+    const handleApplyCoupon = async () => {
+        const code = couponInput.trim().toUpperCase()
+        if (!code) return
+        if (appliedCodes.includes(code)) {
+            setCouponError(t('coupon.errors.duplicateCode'))
+            return
+        }
+        if (appliedCodes.length >= MAX_COUPONS_PER_ORDER) {
+            setCouponError(t('coupon.errors.tooMany'))
+            return
+        }
+        const applied = await refreshCouponPreview([...appliedCodes, code], usePoints)
+        if (applied) {
+            setCouponInput('')
+        }
+    }
+
+    const handleRemoveCoupon = async (code: string) => {
+        await refreshCouponPreview(appliedCodes.filter((item) => item !== code), usePoints)
+    }
+
+    const handleTogglePoints = async (next: boolean) => {
+        if (appliedCodes.length === 0) {
+            setUsePoints(next)
+            return
+        }
+        const applied = await refreshCouponPreview(appliedCodes, next)
+        if (applied && next) {
+            setUsePoints(true)
+        }
+    }
+
     const handleBuy = async () => {
         if (isNavigatingRef.current) return
 
@@ -115,7 +222,7 @@ export function BuyButton({
                 setLoading(false)
                 return
             }
-            const result = await createOrder(productId, quantity, email, usePoints, answers, checkoutFieldValues)
+            const result = await createOrder(productId, quantity, email, usePoints, answers, checkoutFieldValues, appliedCodes)
 
             if (!result?.success) {
                 const message = result?.error ? t(result.error) : t('common.error')
@@ -169,8 +276,6 @@ export function BuyButton({
             }
         }
     }
-
-    const finalPrice = preview.finalAmount
 
     return (
         <>
@@ -231,10 +336,75 @@ export function BuyButton({
                             </div>
                         </div>
 
+                        {/* 优惠券 */}
+                        {couponsEnabled && (
+                            <div className="space-y-2 rounded-xl border border-border/60 bg-card/60 p-3.5">
+                                <div className="flex items-center gap-2">
+                                    <div className="rounded-lg bg-primary/10 p-1.5 text-primary">
+                                        <Ticket className="h-3.5 w-3.5" />
+                                    </div>
+                                    <span className="text-sm font-semibold text-foreground">{t('coupon.modal.title')}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <Input
+                                        aria-label={t('coupon.modal.title')}
+                                        placeholder={t('coupon.modal.placeholder')}
+                                        value={couponInput}
+                                        onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault()
+                                                void handleApplyCoupon()
+                                            }
+                                        }}
+                                        className="h-10 rounded-xl font-mono text-sm uppercase"
+                                        disabled={couponLoading || appliedCodes.length >= MAX_COUPONS_PER_ORDER}
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="h-10 shrink-0 rounded-xl px-4 text-sm"
+                                        onClick={() => void handleApplyCoupon()}
+                                        disabled={couponLoading || !couponInput.trim()}
+                                    >
+                                        {couponLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : t('coupon.modal.apply')}
+                                    </Button>
+                                </div>
+                                {appliedCodes.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {appliedCodes.map((code) => (
+                                            <span
+                                                key={code}
+                                                className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-[11px] font-semibold text-primary"
+                                            >
+                                                {code}
+                                                <button
+                                                    type="button"
+                                                    aria-label={`${t('coupon.modal.remove')} ${code}`}
+                                                    className="rounded-full p-0.5 transition-colors hover:bg-primary/20"
+                                                    onClick={() => void handleRemoveCoupon(code)}
+                                                >
+                                                    <X className="h-3 w-3" />
+                                                </button>
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+                                {pointsStackingBlocked && (
+                                    <p className="text-[11px] leading-normal text-amber-600 dark:text-amber-400">
+                                        {t('coupon.modal.pointsDisabled')}
+                                    </p>
+                                )}
+                                {couponError && (
+                                    <p className="text-[11px] leading-normal text-destructive">{couponError}</p>
+                                )}
+                            </div>
+                        )}
+
                         {/* 积分抵扣卡片 */}
-                        {preview.shouldShowPointOption && (
+                        {preview.shouldShowPointOption && !pointsStackingBlocked && (
                             <div 
-                                onClick={() => setUsePoints(!usePoints)}
+                                onClick={() => void handleTogglePoints(!usePoints)}
                                 className={cn(
                                     "flex items-start gap-3 rounded-xl border p-3.5 cursor-pointer transition-all select-none",
                                     usePoints 
@@ -252,9 +422,9 @@ export function BuyButton({
                                     <div className="flex items-center justify-between">
                                         <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
                                             {t('buy.modal.usePoints')}
-                                            {usePoints && preview.pointsToUse > 0 && (
+                                            {usePoints && pointsDiscountDisplay > 0 && (
                                                 <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                                                    -¥{(numericalPrice - preview.finalAmount).toFixed(2)}
+                                                    -¥{pointsDiscountDisplay.toFixed(2)}
                                                 </span>
                                             )}
                                         </span>
@@ -264,7 +434,7 @@ export function BuyButton({
                                             checked={usePoints}
                                             onChange={(e) => {
                                                 e.stopPropagation()
-                                                setUsePoints(e.target.checked)
+                                                void handleTogglePoints(e.target.checked)
                                             }}
                                             className="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary focus:ring-primary"
                                         />
@@ -284,16 +454,27 @@ export function BuyButton({
                         <div className="rounded-xl border border-border/60 bg-muted/20 p-3.5 space-y-2 text-sm">
                             <div className="flex justify-between items-center text-xs text-muted-foreground">
                                 <span>{t('buy.modal.price')}</span>
-                                <span className="tabular-nums font-medium text-foreground">¥{numericalPrice.toFixed(2)}</span>
+                                <span className="tabular-nums font-medium text-foreground">¥{subtotalDisplay.toFixed(2)}</span>
                             </div>
-                            {usePoints && preview.pointsToUse > 0 && (
+                            {couponDiscountDisplay > 0 && (
+                                <div className="flex justify-between items-center text-xs">
+                                    <span className="flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
+                                        <Ticket className="h-3 w-3" />
+                                        <span>{t('coupon.modal.discountLabel')}</span>
+                                    </span>
+                                    <span className="tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
+                                        -¥{couponDiscountDisplay.toFixed(2)}
+                                    </span>
+                                </div>
+                            )}
+                            {usePoints && pointsDiscountDisplay > 0 && (
                                 <div className="flex justify-between items-center text-xs">
                                     <span className="flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
                                         <Coins className="h-3 w-3" />
-                                        <span>积分抵扣 ({preview.pointsToUse} 积分)</span>
+                                        <span>积分抵扣 ({couponPreview ? couponPreview.pointsToUse : preview.pointsToUse} 积分)</span>
                                     </span>
                                     <span className="tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
-                                        -¥{(numericalPrice - preview.finalAmount).toFixed(2)}
+                                        -¥{pointsDiscountDisplay.toFixed(2)}
                                     </span>
                                 </div>
                             )}

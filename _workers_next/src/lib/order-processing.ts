@@ -12,6 +12,7 @@ import {
     recalcProductAggregates,
 } from "@/lib/db/queries"
 import { pullOneCardFromApi } from "@/lib/card-api"
+import { consumeCouponReservations } from "@/lib/coupons/reservation"
 import { updateTag } from "next/cache"
 import { after } from "next/server"
 import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
@@ -181,6 +182,9 @@ async function autoReplenishByApi(productId: string, reason: string) {
 }
 
 async function finalizePaidOrder(orderId: string, claimId: string, tradeNo: string, fulfillmentMode?: string | null) {
+    // 核销优惠券预占：幂等，重复支付回调不会重复扣次数
+    await consumeCouponReservations(orderId)
+
     const updated = await db.update(orders)
         .set({
             status: "paid",
@@ -209,6 +213,9 @@ async function finalizeSharedDelivery(
 ) {
     const quantity = Math.max(1, Number(order.quantity || 1))
     const joinedKeys = Array(quantity).fill(cardKey).join("\n")
+
+    await consumeCouponReservations(order.orderId)
+
     const updated = await db.update(orders)
         .set({
             status: "delivered",
@@ -311,6 +318,8 @@ async function finalizeCardDelivery(
     if (consumedRows.length !== selectedCards.length) {
         throw new Error(`Order ${order.orderId} lost reserved cards before delivery`)
     }
+
+    await consumeCouponReservations(order.orderId)
 
     const finalized = await db.update(orders)
         .set({

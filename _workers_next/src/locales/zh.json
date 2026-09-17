@@ -1089,5 +1089,60 @@
     },
     "points": {
         "myPoints": "账户积分"
+    },
+    "coupon": {
+        "errors": {
+            "notFound": "优惠券不存在或已失效",
+            "notActive": "该优惠券当前不可用",
+            "notStarted": "该优惠券尚未开始",
+            "expired": "该优惠券已过期",
+            "exhausted": "该优惠券已被领完",
+            "loginRequired": "该优惠券需要登录后使用",
+            "userLimitReached": "您已达到该优惠券的使用次数上限",
+            "productNotEligible": "该优惠券不适用于当前商品",
+            "minSpendNotMet": "未达到该优惠券的使用门槛",
+            "notStackable": "该优惠券不可与其他优惠券同时使用",
+            "pointsConflict": "该优惠券不可与积分抵扣同时使用",
+            "reservationConflict": "该优惠券刚刚被使用，请重新确认",
+            "unavailable": "优惠券功能暂时不可用",
+            "invalidCode": "优惠码格式不正确",
+            "tooMany": "每单最多使用 3 张优惠券",
+            "duplicateCode": "优惠码重复"
+        },
+        "modal": {
+            "title": "优惠券",
+            "placeholder": "输入优惠码",
+            "apply": "使用",
+            "applying": "校验中…",
+            "remove": "移除",
+            "applied": "已使用",
+            "discountLabel": "优惠券优惠",
+            "pointsDisabled": "该优惠券不可与积分抵扣同时使用",
+            "maxReached": "每单最多使用 3 张优惠券",
+            "empty": "暂无可用优惠券"
+        },
+        "admin": {
+            "errors": {
+                "nameInvalid": "名称不能为空且不超过 100 个字符",
+                "codeInvalid": "优惠码只能是 4-32 位字母、数字、下划线或连字符",
+                "descriptionTooLong": "说明不超过 500 个字符",
+                "typeInvalid": "优惠类型不合法",
+                "rateInvalid": "折扣比例需为 1-100 的整数",
+                "discountInvalid": "优惠金额必须大于 0",
+                "maxDiscountInvalid": "最高优惠金额必须大于 0",
+                "minSpendInvalid": "最低消费金额不合法",
+                "minSpendRequired": "满减券必须设置最低消费金额",
+                "scopeInvalid": "使用范围不合法",
+                "productsRequired": "指定商品券至少选择一个商品",
+                "totalLimitInvalid": "总使用次数需为不小于 1 的整数",
+                "perUserLimitInvalid": "每人使用次数需为不小于 1 的整数",
+                "perUserExceedsTotal": "每人使用次数不能大于总使用次数",
+                "windowInvalid": "结束时间必须晚于开始时间",
+                "codeTaken": "该优惠码已被占用",
+                "notFound": "优惠券不存在",
+                "lockedAfterUsage": "该优惠券已有使用记录，经济规则不可修改，请复制为新优惠券",
+                "hasUsage": "该优惠券已有使用记录，不可删除"
+            }
+        }
     }
 }
