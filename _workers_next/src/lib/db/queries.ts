@@ -12,6 +12,7 @@ import {
 import { MANUAL_STOCK_TRIGGER_NAMES, MANUAL_STOCK_TRIGGER_STATEMENTS } from "@/lib/manual-stock-triggers";
 import { LOGIN_USERS_COLUMN_DEFINITIONS, LOGIN_USERS_CREATE_TABLE_STATEMENT } from "./login-users-schema";
 import { collectErrorText, isDuplicateColumnError } from "./error-utils";
+import { executeDatabaseUpgrades, ensureDatabaseMigrationsTable, readDatabaseUpgradeStatus } from "./database-upgrades";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -20,7 +21,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 27;
+const CURRENT_SCHEMA_VERSION = 28;
 const dbInitializationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
@@ -42,6 +43,7 @@ function primePersistedSchemaVersion(version: number | null) {
 function markCurrentSchemaReady(version: number = CURRENT_SCHEMA_VERSION) {
     primePersistedSchemaVersion(version);
     dbInitialized = true;
+    dbInitializationState.ready = true;
     loginUsersSchemaReady = true;
     wishlistTablesReady = true;
     reviewRepliesEnsureState.ready = true;
@@ -64,6 +66,7 @@ function markCurrentSchemaReady(version: number = CURRENT_SCHEMA_VERSION) {
 // 才能让本次增量迁移重新执行所有幂等 DDL。
 function resetSchemaReadyFlags() {
     dbInitialized = false;
+    dbInitializationState.ready = false;
     loginUsersSchemaReady = false;
     wishlistTablesReady = false;
     reviewRepliesEnsureState.ready = false;
@@ -107,6 +110,7 @@ async function detectSchemaDrift(): Promise<boolean> {
         if (
             COUPON_USAGE_TRIGGER_NAMES.some((name) => !triggerNames.has(name))
             || MANUAL_STOCK_TRIGGER_NAMES.some((name) => !triggerNames.has(name))
+            || !triggerNames.has('user_point_ledger_apply_balance')
         ) {
             return true;
         }
@@ -274,6 +278,7 @@ async function ensureReviewRepliesTable() {
 //   - 创建时间: 2026-09-17
 //   - 更新内容: 从 ensureDatabaseInitialized 中抽出，供正常迁移与漂移修复两条路径复用。
 async function ensureStructuralSchema() {
+    await ensureDatabaseMigrationsTable();
     await ensureProductsColumns();
     await ensureOrdersColumns();
     await ensureManualStockTriggers();
@@ -290,6 +295,47 @@ async function ensureStructuralSchema() {
     await ensureUserMessagesTable();
     await ensureBroadcastTables();
     await ensureWishlistTables();
+    await ensureUserPointLedgerSchema();
+}
+
+async function verifyCurrentDatabaseStructure() {
+    return !(await detectSchemaDrift());
+}
+
+async function runRegisteredDatabaseUpgrades() {
+    return executeDatabaseUpgrades({
+        executors: {
+            async '0028_database_upgrade_registry'() {
+                resetSchemaReadyFlags();
+                await ensureStructuralSchema();
+                await ensureIndexes();
+            },
+        },
+        verifyStructure: verifyCurrentDatabaseStructure,
+    });
+}
+
+async function runRegisteredDatabaseUpgradesOrThrow() {
+    const result = await runRegisteredDatabaseUpgrades();
+    if (result.failed) {
+        throw new Error(`DATABASE_UPGRADE_FAILED:${result.failed.id}:${result.failed.errorId}`);
+    }
+    return result;
+}
+
+export async function getDatabaseUpgradeStatus() {
+    await ensureDatabaseMigrationsTable();
+    return readDatabaseUpgradeStatus(await verifyCurrentDatabaseStructure());
+}
+
+export async function runPendingDatabaseUpgrades() {
+    const result = await runRegisteredDatabaseUpgrades();
+    const status = await getDatabaseUpgradeStatus();
+    if (!result.failed && status.structureHealthy) {
+        await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
+        markCurrentSchemaReady();
+    }
+    return { result, status };
 }
 
 // Auto-initialize database on first query
@@ -315,6 +361,7 @@ export async function ensureDatabaseInitialized() {
             if (versionSatisfied) {
                 driftDetected = await detectSchemaDrift();
                 if (!shouldReRunIncrementalMigration({ versionSatisfied, driftDetected })) {
+                    await runRegisteredDatabaseUpgradesOrThrow();
                     markCurrentSchemaReady();
                     return;
                 }
@@ -338,6 +385,7 @@ export async function ensureDatabaseInitialized() {
 
                 // 索引建立是纯幂等 DDL，两条路径都必须执行；此处保持与原实现相同的位置
                 await ensureIndexes();
+                await runRegisteredDatabaseUpgradesOrThrow();
 
                 if (!driftDetected) {
                     await backfillProductAggregates();
@@ -598,7 +646,10 @@ export async function ensureDatabaseInitialized() {
         await ensureOrderDeliveryFilesTable();
         await ensureCouponTables();
         await ensureManualStockTriggers();
+        await ensureUserPointLedgerSchema();
+        await ensureDatabaseMigrationsTable();
         await backfillProductAggregates();
+        await runRegisteredDatabaseUpgradesOrThrow();
 
         // Set initial schema version
         try {

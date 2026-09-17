@@ -37,6 +37,8 @@ export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT coupon_id, product_id, created_at FROM coupon_products LIMIT 0",
     "SELECT coupon_id, order_id, user_id, username, status, sequence, reservation_id, reservation_expires_at, coupon_code_snapshot, rule_snapshot, eligible_amount_cents, discount_amount_cents, reserved_at, consumed_at, released_at, reversed_at, reason, created_at FROM coupon_usages LIMIT 0",
     "SELECT coupon_id, user_id, reserved_count, consumed_count, updated_at FROM coupon_user_counters LIMIT 0",
+    "SELECT event_type, delta, balance_after, business_key, source_type, source_id, reason, operator_id, operator_username, metadata, status, claim_id, claimed_at, created_at FROM user_point_ledger LIMIT 0",
+    "SELECT name, description, status, claim_id, started_at, executed_at, duration_ms, error_id, error_message, updated_at FROM database_migrations LIMIT 0",
 ]
 
 /**

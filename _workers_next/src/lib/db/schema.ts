@@ -216,6 +216,21 @@ export const settings = sqliteTable('settings', {
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
 });
 
+// Versioned database upgrade execution history
+export const databaseMigrations = sqliteTable('database_migrations', {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description'),
+    status: text('status').default('running').notNull(),
+    claimId: text('claim_id'),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+    executedAt: integer('executed_at', { mode: 'timestamp_ms' }),
+    durationMs: integer('duration_ms'),
+    errorId: text('error_id'),
+    errorMessage: text('error_message'),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
+});
+
 // Reviews
 export const reviews = sqliteTable('reviews', {
     id: integer('id', { mode: 'number' }).primaryKey({ autoIncrement: true }),
