@@ -10,7 +10,7 @@
     "lint": "eslint src",
     "test": "node --test src/lib/**/*.test.ts",
     "check": "npm run typecheck && npm run lint && npm test",
-    "deploy": "opennextjs-cloudflare build && wrangler deploy"
+    "deploy": "opennextjs-cloudflare build && wrangler deploy --name ldc-shop"
   },
   "dependencies": {
     "@opennextjs/cloudflare": "^1.15.1",
