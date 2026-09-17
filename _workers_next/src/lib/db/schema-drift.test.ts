@@ -38,11 +38,13 @@ test("drift probes cover the objects that historically went missing", () => {
         'manual_stock_quantity',
         'nickname',
         'claim_id',
+        'operator_user_id',
         'rule_snapshot',
         'refund_policy',
     ]) {
         assert.ok(joined.includes(required), `missing drift probe coverage: ${required}`)
     }
+    assert.ok(!/\boperator_id\b/.test(joined), 'legacy operator_id probe would force permanent drift')
 })
 
 test("missing table/column errors are recognised as drift", () => {
