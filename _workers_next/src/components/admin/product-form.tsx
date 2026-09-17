@@ -155,12 +155,15 @@ export default function ProductForm({ product, categories = [] }: { product?: an
         submitLock.current = true
         setLoading(true)
         try {
-            await saveProduct(formData)
+            const result = await saveProduct(formData)
+            if (!result.success) {
+                toast.error(result.error ? t(result.error) : t('common.error'))
+                return
+            }
             toast.success(t('common.success'))
             router.push('/admin/products')
-        } catch (e: any) {
-            console.error('Save product error:', e)
-            toast.error(e?.message || t('common.error'))
+        } catch {
+            toast.error(t('common.error'))
         } finally {
             setLoading(false)
             submitLock.current = false

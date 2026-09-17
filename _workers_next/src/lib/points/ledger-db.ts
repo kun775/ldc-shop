@@ -10,6 +10,7 @@ import {
 } from "./ledger-service"
 import { buildLegacyPointLedgerEntries } from "./legacy-reconciliation"
 import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once"
+import { LOGIN_USERS_COLUMN_DEFINITIONS, LOGIN_USERS_CREATE_TABLE_STATEMENT } from "@/lib/db/login-users-schema"
 
 type UserIdentity = {
     userId: string
@@ -75,21 +76,6 @@ async function getPointLedgerSchemaVersion() {
     })
 
     return persistedPointLedgerSchemaVersion
-}
-
-/**
- * isPointLedgerSchemaCurrent 判断持久化版本号是否达标
- *
- * 重要: 这里**故意不产生任何副作用**（不置 ready 标记）。
- * 旧实现在此处调用 markPointLedgerSchemaReady()，而签到路径的顺序是
- *   ensurePointLedgerUserRecord() → ensurePointLedgerLoginUsersSchema()
- *   → hasCurrentPointLedgerSchema() → markPointLedgerSchemaReady()
- * 于是「版本达标 → 标记 ready → 跳过建列」在真正的账本 DDL 之前就被触发，
- * 使线上缺列（claim_id / claimed_at）永远无法自愈。
- */
-async function isPointLedgerSchemaCurrent() {
-    const version = await getPointLedgerSchemaVersion()
-    return version !== null && isSchemaVersionSatisfied(version, POINT_LEDGER_SCHEMA_VERSION)
 }
 
 function normalizeTimestampMs(column: any) {
@@ -158,32 +144,12 @@ async function getProductVariantLabels(productIds: string[]) {
 
 async function ensurePointLedgerLoginUsersSchema() {
     if (pointLedgerLoginUsersSchemaReady) return
-    if (await isPointLedgerSchemaCurrent()) return
 
     await ensureOnce(pointLedgerLoginUsersState, async () => {
-        await db.run(sql`
-            CREATE TABLE IF NOT EXISTS login_users (
-                user_id TEXT PRIMARY KEY,
-                username TEXT,
-                email TEXT,
-                points INTEGER DEFAULT 0 NOT NULL,
-                is_blocked INTEGER DEFAULT 0,
-                desktop_notifications_enabled INTEGER DEFAULT 0,
-                created_at INTEGER DEFAULT (unixepoch() * 1000),
-                last_login_at INTEGER DEFAULT (unixepoch() * 1000),
-                last_checkin_at INTEGER,
-                consecutive_days INTEGER DEFAULT 0
-            )
-        `)
-
-        await safeAddColumn('login_users', 'email', 'TEXT')
-        await safeAddColumn('login_users', 'points', 'INTEGER DEFAULT 0 NOT NULL')
-        await safeAddColumn('login_users', 'is_blocked', 'INTEGER DEFAULT 0')
-        await safeAddColumn('login_users', 'desktop_notifications_enabled', 'INTEGER DEFAULT 0')
-        await safeAddColumn('login_users', 'created_at', 'INTEGER DEFAULT (unixepoch() * 1000)')
-        await safeAddColumn('login_users', 'last_login_at', 'INTEGER DEFAULT (unixepoch() * 1000)')
-        await safeAddColumn('login_users', 'last_checkin_at', 'INTEGER')
-        await safeAddColumn('login_users', 'consecutive_days', 'INTEGER DEFAULT 0')
+        await db.run(sql.raw(LOGIN_USERS_CREATE_TABLE_STATEMENT))
+        for (const [column, definition] of LOGIN_USERS_COLUMN_DEFINITIONS) {
+            await safeAddColumn('login_users', column, definition)
+        }
 
         pointLedgerLoginUsersSchemaReady = true
     })

@@ -6,7 +6,7 @@ import { products, cards, reviews, reviewReplies, categories } from "@/lib/db/sc
 import { eq, sql, inArray, and, or, isNull, lte } from "drizzle-orm"
 import { sendBarkMessage, sendTelegramMessage } from "@/lib/notifications"
 import { revalidatePath, updateTag } from "next/cache"
-import { ensureDatabaseInitialized, getProductForAdmin, getSetting, recalcProductAggregates, recalcProductAggregatesForMany, setSetting } from "@/lib/db/queries"
+import { ensureDatabaseInitialized, ensureProductWriteSchema, getProductForAdmin, getSetting, recalcProductAggregates, recalcProductAggregatesForMany, setSetting } from "@/lib/db/queries"
 import { isAdminIdentity } from "@/lib/admin-auth"
 import { getProductCardApiConfig, pullOneCardFromApi, saveProductCardApiConfig } from "@/lib/card-api"
 import { unstable_noStore } from "next/cache"
@@ -23,6 +23,7 @@ import {
     splitProductImageGallery,
     validateProductImageRef,
 } from "@/lib/product-images"
+import { logServerError, sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 
 export async function checkAdmin() {
     const session = await auth()
@@ -33,8 +34,23 @@ export async function checkAdmin() {
 }
 
 export async function saveProduct(formData: FormData) {
+    try {
+        const id = await saveProductOrThrow(formData)
+        return { success: true as const, id }
+    } catch (error: any) {
+        const errorId = logServerError('admin.saveProduct', error)
+        return {
+            success: false as const,
+            error: sanitizeClientErrorMessage(error?.message, 'common.error'),
+            errorId,
+        }
+    }
+}
+
+async function saveProductOrThrow(formData: FormData) {
     await checkAdmin()
     await ensureDatabaseInitialized()
+    await ensureProductWriteSchema()
 
     const existingId = formData.get('id') as string
     const customSlug = (formData.get('slug') as string)?.trim()
@@ -184,49 +200,12 @@ export async function saveProduct(formData: FormData) {
         })
     }
 
-    // Ensure all product columns exist before saving
-    const ensureColumns = async () => {
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN compare_at_price TEXT`));
-        } catch { /* column exists */ }
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN is_hot INTEGER DEFAULT 0`));
-        } catch { /* column exists */ }
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN purchase_warning TEXT`));
-        } catch { /* column exists */ }
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN is_shared INTEGER DEFAULT 0`));
-        } catch { /* column exists */ }
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN visibility_level INTEGER DEFAULT -1`));
-        } catch { /* column exists */ }
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN point_discount_enabled INTEGER DEFAULT 0`));
-        } catch { /* column exists */ }
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN point_discount_percent INTEGER DEFAULT 0`));
-        } catch { /* column exists */ }
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN product_images TEXT`));
-        } catch { /* column exists */ }
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN checkout_fields TEXT`));
-        } catch { /* column exists */ }
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN fulfillment_mode TEXT DEFAULT 'auto'`));
-        } catch { /* column exists */ }
-        try {
-            await db.run(sql.raw(`ALTER TABLE products ADD COLUMN manual_stock_count INTEGER NOT NULL DEFAULT 0`));
-        } catch { /* column exists */ }
-    }
-
     try {
         await doSave()
     } catch (error: any) {
-        const errorString = JSON.stringify(error) + (error?.message || '')
-        if (errorString.includes('42703') || errorString.includes('no such column') || errorString.includes('SQLITE_ERROR')) {
-            await ensureColumns()
+        const errorString = (JSON.stringify(error) + (error?.message || '')).toLowerCase()
+        if (errorString.includes('42703') || errorString.includes('no such column') || errorString.includes('sqlite_error')) {
+            await ensureProductWriteSchema()
             await doSave()
         } else {
             throw error
@@ -247,6 +226,7 @@ export async function saveProduct(formData: FormData) {
     updateTag('home:ratings')
     updateTag('home:categories')
     updateTag('home:product-categories')
+    return id
 }
 
 export async function getProductForAdminAction(id: string) {

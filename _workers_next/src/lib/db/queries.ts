@@ -10,6 +10,7 @@ import {
     COUPON_USAGE_TRIGGER_STATEMENTS,
 } from "@/lib/coupons/counter-triggers";
 import { MANUAL_STOCK_TRIGGER_NAMES, MANUAL_STOCK_TRIGGER_STATEMENTS } from "@/lib/manual-stock-triggers";
+import { LOGIN_USERS_COLUMN_DEFINITIONS, LOGIN_USERS_CREATE_TABLE_STATEMENT } from "./login-users-schema";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -30,8 +31,6 @@ const columnEnsureState: Record<ColumnEnsureKey, { ready: boolean; pending: Prom
 };
 const reviewRepliesEnsureState = { ready: false, pending: null as Promise<void> | null };
 let persistedSchemaVersion: number | null = null;
-// 探测到「版本号领先于真实结构」时置为 true，用于在本次迁移中放行各 ensure* 的版本门控
-let schemaDriftDetected = false;
 
 function primePersistedSchemaVersion(version: number | null) {
     persistedSchemaVersion = version;
@@ -60,9 +59,8 @@ function markCurrentSchemaReady(version: number = CURRENT_SCHEMA_VERSION) {
 //   - 创建时间: 2026-09-17
 //   - 更新内容: 新增漂移修复路径所需的标记复位，使各 ensure* 真正执行 DDL。
 //
-// 说明: hasCurrentSchemaVersion() 会通过 markCurrentSchemaReady() 把所有标记置为 ready，
-// 而各 ensure* 又以这些标记做快速返回。发现结构漂移后必须先复位，
-// 否则增量迁移会被逐个短路，缺表/缺列依然补不上。
+// 说明: 全局快速路径会把各 ensure* 标记为 ready。探测到结构漂移后必须先复位，
+// 才能让本次增量迁移重新执行所有幂等 DDL。
 function resetSchemaReadyFlags() {
     dbInitialized = false;
     loginUsersSchemaReady = false;
@@ -136,18 +134,12 @@ async function getPersistedSchemaVersion(): Promise<number | null> {
 
 async function hasCurrentSchemaVersion() {
     const version = await getPersistedSchemaVersion();
-    if (version !== null && isSchemaVersionSatisfied(version, CURRENT_SCHEMA_VERSION)) {
-        markCurrentSchemaReady(version);
-        return true;
-    }
-    return false;
+    return version !== null && isSchemaVersionSatisfied(version, CURRENT_SCHEMA_VERSION);
 }
 
 async function ensureColumnsOnce(key: ColumnEnsureKey, task: () => Promise<void>) {
     const state = columnEnsureState[key];
     if (state.ready) return;
-    // 结构漂移时必须放行：版本号达标不代表列已存在
-    if (!schemaDriftDetected && await hasCurrentSchemaVersion()) return;
     if (state.pending) {
         await state.pending;
         return;
@@ -246,7 +238,6 @@ async function ensureIndexes() {
 
 async function ensureReviewRepliesTable() {
     if (reviewRepliesEnsureState.ready) return;
-    if (!schemaDriftDetected && await hasCurrentSchemaVersion()) return;
     if (reviewRepliesEnsureState.pending) {
         await reviewRepliesEnsureState.pending;
         return;
@@ -326,10 +317,10 @@ export async function ensureDatabaseInitialized() {
             if (versionSatisfied) {
                 driftDetected = await detectSchemaDrift();
                 if (!shouldReRunIncrementalMigration({ versionSatisfied, driftDetected })) {
+                    markCurrentSchemaReady();
                     return;
                 }
                 console.warn("[DB] schema drift detected: schema_version is current but structure is incomplete, re-running structural migration");
-                schemaDriftDetected = true;
                 resetSchemaReadyFlags();
             }
 
@@ -357,14 +348,11 @@ export async function ensureDatabaseInitialized() {
                 if (!versionSatisfied) {
                     await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
                 }
-                schemaDriftDetected = false;
                 markCurrentSchemaReady();
             } catch (migrationError) {
-                // Keep the existing database usable for read paths and retry the
-                // migration on the next isolate instead of running bootstrap SQL.
                 console.error("Incremental database migration failed:", migrationError);
-                schemaDriftDetected = false;
-                dbInitialized = true;
+                resetSchemaReadyFlags();
+                throw migrationError;
             }
             return;
         }
@@ -462,11 +450,14 @@ export async function ensureDatabaseInitialized() {
             user_id TEXT PRIMARY KEY,
             username TEXT,
             nickname TEXT,
+            email TEXT,
             points INTEGER DEFAULT 0,
             is_blocked INTEGER DEFAULT 0,
             desktop_notifications_enabled INTEGER DEFAULT 0,
             created_at INTEGER DEFAULT (unixepoch() * 1000),
-            last_login_at INTEGER DEFAULT (unixepoch() * 1000)
+            last_login_at INTEGER DEFAULT (unixepoch() * 1000),
+            last_checkin_at INTEGER,
+            consecutive_days INTEGER DEFAULT 0
         );
         
         -- Daily checkins table
@@ -666,6 +657,10 @@ async function ensureOrdersColumns() {
         await safeAddColumn('orders', 'pricing_snapshot', 'TEXT');
         await safeAddColumn('orders', 'manual_stock_quantity', 'INTEGER NOT NULL DEFAULT 0');
     });
+}
+
+export async function ensureProductWriteSchema() {
+    await ensureProductsColumns();
 }
 
 async function ensureManualStockTriggers() {
@@ -874,23 +869,16 @@ async function ensureCardsColumns() {
 
 async function ensureLoginUsersColumns() {
     await ensureColumnsOnce('loginUsers', async () => {
-        await safeAddColumn('login_users', 'last_checkin_at', 'INTEGER');
-        await safeAddColumn('login_users', 'consecutive_days', 'INTEGER DEFAULT 0');
-        await safeAddColumn('login_users', 'desktop_notifications_enabled', 'INTEGER DEFAULT 0');
-        await safeAddColumn('login_users', 'nickname', 'TEXT');
+        for (const [column, definition] of LOGIN_USERS_COLUMN_DEFINITIONS) {
+            await safeAddColumn('login_users', column, definition);
+        }
     });
 }
 
 export async function ensureLoginUsersSchema() {
     if (loginUsersSchemaReady) return;
-    if (!schemaDriftDetected && await hasCurrentSchemaVersion()) return;
     await ensureLoginUsersTable();
     await ensureLoginUsersColumns();
-    await safeAddColumn('login_users', 'email', 'TEXT');
-    await safeAddColumn('login_users', 'points', 'INTEGER DEFAULT 0 NOT NULL');
-    await safeAddColumn('login_users', 'is_blocked', 'INTEGER DEFAULT 0');
-    await safeAddColumn('login_users', 'desktop_notifications_enabled', 'INTEGER DEFAULT 0');
-    await safeAddColumn('login_users', 'nickname', 'TEXT');
     loginUsersSchemaReady = true;
 }
 
@@ -2551,19 +2539,7 @@ async function migrateTimestampColumnsToMs() {
 }
 
 async function ensureLoginUsersTable() {
-    await db.run(sql`
-        CREATE TABLE IF NOT EXISTS login_users(
-        user_id TEXT PRIMARY KEY,
-        username TEXT,
-        nickname TEXT,
-        email TEXT,
-        points INTEGER DEFAULT 0 NOT NULL,
-        is_blocked BOOLEAN DEFAULT FALSE,
-        desktop_notifications_enabled INTEGER DEFAULT 0,
-        created_at INTEGER DEFAULT (unixepoch() * 1000),
-        last_login_at INTEGER DEFAULT (unixepoch() * 1000)
-    )
-        `);
+    await db.run(sql.raw(LOGIN_USERS_CREATE_TABLE_STATEMENT));
 }
 
 async function ensureSettingsTable() {

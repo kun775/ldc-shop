@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth"
 import { updateLoginUserEmail, updateLoginUserDesktopNotificationsEnabled, updateLoginUserNickname } from "@/lib/db/queries"
 import { validateNickname } from "@/lib/nickname"
 import { revalidatePath } from "next/cache"
+import { logServerError } from "@/lib/errors/safe-error"
 
 function isValidEmail(value: string) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
@@ -46,8 +47,8 @@ export async function updateProfileNickname(nicknameInput: string) {
         revalidatePath('/wishlist')
         return { success: true, nickname: validation.nickname }
     } catch (error) {
-        console.error('[Profile] updateProfileNickname failed:', error)
-        return { success: false, error: 'common.error' }
+        const errorId = logServerError('profile.updateNickname', error)
+        return { success: false, error: 'common.error', errorId }
     }
 }
 
