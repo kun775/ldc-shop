@@ -99,6 +99,17 @@ export const USER_POINT_LEDGER_BALANCE_TRIGGER_NAME = 'user_point_ledger_apply_b
  *     永久失败且错误原因完全误导。COALESCE 同时把 NULL 余额归零。
  *   - 必须用 `execD1`（db.exec）执行，D1 的 prepare/bind 路径无法承载
  *     包含多条语句的触发器体。
+ *   - **触发器体内禁止出现嵌套 `CASE ... END`**。
+ *     D1 的 `exec()` 按语句边界切分 SQL，不识别嵌套块，会把内层 `END`
+ *     当作触发器体结束，于是发出一条不完整的 CREATE TRIGGER。实测该语句
+ *     稳定失败：`incomplete input: SQLITE_ERROR`（code 7500），触发器永远
+ *     建不出来（把 `CASE` 换成带 `WHERE` 的 `RAISE` 后同一语句立刻成功）。
+ *     线上事故链：触发器缺失 → `verifyPointLedgerStructure()` 恒 false →
+ *     `detectSchemaDrift()` 恒 true → 三个升级项在每个请求上重跑并失败
+ *     （25.7s + 3.3s + 5.8s），首页与 /admin 响应被拖到 30s 以上。
+ *     因此余额不足改用「带 WHERE 的 RAISE」表达，语义完全等价：
+ *     `SELECT RAISE(ABORT, 'POINT_BALANCE_NEGATIVE') WHERE changes() = 0;`
+ *     条件不成立时不产生任何行，也就不需要 CASE 块。
  */
 export const USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT = `
     CREATE TRIGGER IF NOT EXISTS user_point_ledger_apply_balance
@@ -109,9 +120,7 @@ export const USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT = `
         SET points = COALESCE(points, 0) + NEW.delta
         WHERE user_id = NEW.user_id
           AND COALESCE(points, 0) + NEW.delta >= 0;
-        SELECT CASE
-            WHEN changes() = 0 THEN RAISE(ABORT, 'POINT_BALANCE_NEGATIVE')
-        END;
+        SELECT RAISE(ABORT, 'POINT_BALANCE_NEGATIVE') WHERE changes() = 0;
     END;
 `
 

@@ -281,6 +281,27 @@ async function repairPointLedgerStructure(): Promise<number> {
         }
     }
 
+    // 后置校验：`execD1` 曾因触发器体内的嵌套 `CASE ... END` 被 D1 的语句
+    // 切分器误判而**静默地**建不出触发器（返回 incomplete input，或解析成
+    // 一条不完整的语句而不报错）。触发器缺失会让 `verifyPointLedgerStructure()`
+    // 恒为 false，进而让漂移探测恒为 true、三个升级项在每个请求上重跑并失败，
+    // 把首页与后台拖到 30s 以上。
+    //
+    // 因此这里必须确认触发器**真的存在**，缺失时改走 `db.run`（与 manual_stock /
+    // coupon 触发器同一条已被线上验证可用的路径）再试一次。两条路径都失败才抛错，
+    // 保证「结构修复」不会以静默失败收场、演变成每请求重试的死循环。
+    if (!(await hasPointLedgerBalanceTrigger())) {
+        console.warn('[PointLedger] balance trigger missing after execD1, retrying via db.run')
+        try {
+            await db.run(sql.raw(USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT))
+        } catch (retryError) {
+            if (!isDuplicateSchemaObjectError(retryError)) throw retryError
+        }
+        if (!(await hasPointLedgerBalanceTrigger())) {
+            throw new Error('POINT_LEDGER_BALANCE_TRIGGER_CREATE_FAILED')
+        }
+    }
+
     // 历史 NULL 余额归零。必须在触发器就绪之后执行：否则触发器的
     // COALESCE 会把一次「本该失败」的扣减当作对 0 余额的扣减，
     // 而规范化本身也需要在同一轮修复里完成，才能让后续调整正常工作。
@@ -294,6 +315,22 @@ async function repairPointLedgerStructure(): Promise<number> {
     markPointLedgerSchemaReady()
 
     return verdict.complete ? 0 : 1
+}
+
+/**
+ * hasPointLedgerBalanceTrigger 只读确认余额触发器是否真的存在于数据库中。
+ *
+ * 用于 `repairPointLedgerStructure` 的后置校验：语句「执行未报错」并不等于
+ * 结构已就绪（D1 的语句切分器可能把 CREATE TRIGGER 解析成一条不完整语句），
+ * 必须回到 sqlite_master 核实。
+ */
+async function hasPointLedgerBalanceTrigger(): Promise<boolean> {
+    const result = await db.run(sql`
+        SELECT name FROM sqlite_master
+        WHERE type = 'trigger' AND name = ${USER_POINT_LEDGER_BALANCE_TRIGGER_NAME}
+        LIMIT 1
+    `)
+    return rowsFromResult<{ name?: unknown }>(result).length > 0
 }
 
 /**
