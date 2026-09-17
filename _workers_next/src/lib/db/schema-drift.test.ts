@@ -41,6 +41,10 @@ test("drift probes cover the objects that historically went missing", () => {
         'operator_user_id',
         'rule_snapshot',
         'refund_policy',
+        'audit_events',
+        'platform_error_logs',
+        'fingerprint_bucket',
+        'handle_note',
     ]) {
         assert.ok(joined.includes(required), `missing drift probe coverage: ${required}`)
     }

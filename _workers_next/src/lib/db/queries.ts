@@ -2,6 +2,7 @@ import { db } from "./index";
 import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger, refundRequests, userMessages } from "./schema";
 import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/lib/constants";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema, repairPointLedgerStructureIfNeeded, resetPointLedgerSchemaReady, verifyPointLedgerStructure } from "@/lib/points/ledger-db";
+import { ensureAuditTables, repairAuditStructureIfNeeded, resetAuditSchemaReady, verifyAuditStructure } from "@/lib/audit/service";
 import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once";
 import { SCHEMA_DRIFT_PROBES, isSchemaDriftError } from "./schema-drift";
 import {
@@ -22,7 +23,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 29;
+const CURRENT_SCHEMA_VERSION = 30;
 const dbInitializationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
@@ -76,6 +77,8 @@ function resetSchemaReadyFlags() {
     // 否则 ensureStructuralSchema 里的 ensureUserPointLedgerSchema 会被短路，
     // 使漂移修复路径无法真正重建积分表结构（历史故障即由此产生）。
     resetPointLedgerSchemaReady();
+    // 审计表的 ready 标记同理：不复位则漂移路径无法补建审计表。
+    resetAuditSchemaReady();
 
     for (const key of Object.keys(columnEnsureState) as ColumnEnsureKey[]) {
         columnEnsureState[key].ready = false;
@@ -122,6 +125,9 @@ async function detectSchemaDrift(): Promise<boolean> {
         // 只校验触发器名字不够：早期版本触发器缺少 changes() = 0 守卫，
         // 会让余额静默变负或变更丢失，必须判定为漂移并触发重建。
         if (!(await verifyPointLedgerStructure())) return true;
+        // 审计表要「两张表 + 全部列 + 全部索引 + 指纹唯一索引」齐全。
+        // 索引无法用 SELECT 探测（缺索引不会让查询报错），因此单独只读校验。
+        if (!(await verifyAuditStructure())) return true;
     } catch (error: unknown) {
         if (isSchemaDriftError(error)) return true;
         // 与列探测一致，瞬时错误不触发结构迁移
@@ -300,6 +306,7 @@ async function ensureStructuralSchema() {
     await ensureBroadcastTables();
     await ensureWishlistTables();
     await ensureUserPointLedgerSchema();
+    await ensureAuditTables();
 }
 
 async function verifyCurrentDatabaseStructure() {
@@ -324,6 +331,14 @@ async function runRegisteredDatabaseUpgrades() {
                 // 结构完整时零 DDL，因此可安全重复执行。
                 resetPointLedgerSchemaReady();
                 await repairPointLedgerStructureIfNeeded();
+            },
+            async '0030_audit_infrastructure'() {
+                // 独立升级项：只创建审计两张表与索引。
+                // 与 0029 同一理由 —— 不复用 ensureStructuralSchema，避免
+                // 为一个新增表在 D1 上重跑全部结构 DDL。
+                // repairAuditStructureIfNeeded 先只读探测，完整时零 DDL。
+                resetAuditSchemaReady();
+                await repairAuditStructureIfNeeded();
             },
         },
         verifyStructure: verifyCurrentDatabaseStructure,

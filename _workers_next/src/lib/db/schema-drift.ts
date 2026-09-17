@@ -45,6 +45,8 @@ export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT event_type, delta, balance_after, business_key, source_type, source_id, reason, operator_user_id, operator_username, metadata, status, claim_id, claimed_at, created_at FROM user_point_ledger LIMIT 0",
     "SELECT user_id, points, last_checkin_at, consecutive_days FROM login_users LIMIT 0",
     "SELECT name, description, status, claim_id, started_at, executed_at, duration_ms, error_id, error_message, updated_at FROM database_migrations LIMIT 0",
+    "SELECT event_name, category, severity, result, actor_type, actor_user_id, actor_username, target_type, target_id, error_id, error_key, source, ip_hash, user_agent, metadata, created_at FROM audit_events LIMIT 0",
+    "SELECT fingerprint, fingerprint_bucket, scope, severity, error_code, message, stack, error_chain, actor_type, actor_user_id, actor_username, request_method, request_path, ip_hash, user_agent, occurrence_count, first_seen_at, last_seen_at, status, handled_at, handled_by, handle_note, created_at, updated_at FROM platform_error_logs LIMIT 0",
 ]
 
 /**

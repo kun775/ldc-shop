@@ -53,6 +53,23 @@ test('the point ledger trigger rebuild is registered as a separate upgrade item'
     assert.ok(item.description.length > 0)
 })
 
+test('the audit infrastructure is registered as its own upgrade item', () => {
+    // 新增表同样必须独立成项：审计表与积分账本无关，
+    // 混进任一项都会让「只为建一张表」被迫重跑别处的结构 DDL。
+    const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
+    assert.ok(ids.includes('0030_audit_infrastructure'))
+
+    const item = DATABASE_UPGRADE_DEFINITIONS.find(
+        (entry: { id: string }) => entry.id === '0030_audit_infrastructure',
+    )
+    assert.equal(item.verifiesStructure, true, '结构修复项必须参与结构校验')
+    assert.ok(item.description.length > 0)
+    assert.ok(
+        ids.indexOf('0030_audit_infrastructure') > ids.indexOf('0029_point_ledger_balance_trigger'),
+        'ids must stay in ascending order so the status list reads chronologically',
+    )
+})
+
 test('registered upgrades start from the schema version before the registry was introduced', () => {
     assert.equal(DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION, 27)
     assert.equal(supportsRegisteredDatabaseUpgrades(null), false)

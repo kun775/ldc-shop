@@ -14,6 +14,12 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
         description: '重建积分账本余额触发器，补齐余额不足守卫与 NULL 余额处理，并把历史 NULL 余额归零，保证账本与余额始终一致。',
         verifiesStructure: true,
     },
+    {
+        id: '0030_audit_infrastructure',
+        name: '审计基础设施',
+        description: '新增 audit_events 与 platform_error_logs 两张审计表及全部查询索引，建立事件记录与错误聚合的持久化基础。',
+        verifiesStructure: true,
+    },
 ] as const
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']
