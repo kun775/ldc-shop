@@ -19,6 +19,7 @@ import {
     setCouponStatusAction,
 } from '@/actions/coupons'
 import { centsToLdcNumber } from '@/lib/coupons/money'
+import { resolveClientActionErrorKey } from '@/lib/errors/safe-error'
 import type { CouponListRow } from '@/lib/coupons/repository'
 
 type DerivedStatus = 'draft' | 'scheduled' | 'active' | 'expired' | 'exhausted' | 'disabled'
@@ -151,7 +152,7 @@ export function AdminCouponsContent({
                 toast.error(result?.error ? t(result.error) : t('common.error'))
             }
         } catch (error: any) {
-            toast.error(error?.message || t('common.error'))
+            toast.error(t(resolveClientActionErrorKey(error)))
         } finally {
             setActionId(null)
         }
@@ -164,7 +165,7 @@ export function AdminCouponsContent({
                 toast.success(t('common.success'))
                 router.refresh()
             } catch (error: any) {
-                toast.error(error?.message || t('common.error'))
+                toast.error(t(resolveClientActionErrorKey(error)))
             }
         })
     }

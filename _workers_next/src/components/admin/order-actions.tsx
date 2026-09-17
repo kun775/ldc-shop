@@ -8,6 +8,7 @@ import { toast } from "sonner"
 import { useI18n } from "@/lib/i18n/context"
 import { CheckCircle, Truck, XCircle, ExternalLink } from "lucide-react"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 
 export function AdminOrderActions({ order }: { order: any }) {
   const { t } = useI18n()
@@ -71,7 +72,7 @@ export function AdminOrderActions({ order }: { order: any }) {
         toast.success(t('common.success'))
       }
     } catch (e: any) {
-      toast.error(e.message)
+      toast.error(t(resolveClientActionErrorKey(e)))
     } finally {
       setLoading(false)
       loadingRef.current = false

@@ -16,6 +16,7 @@ import { useRouter } from "next/navigation"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { AdminPageShell } from "@/components/admin/admin-page-shell"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 
 interface CardData {
     id: number
@@ -93,7 +94,7 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
             setSelectedIds([])
             router.refresh()
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setBatchDeleting(false)
             batchDeleteLock.current = false
@@ -115,7 +116,7 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
             formRef.current?.reset()
             setPendingCount(0)
         } catch (e: any) {
-            toast.error(e?.message || t('common.error'))
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSubmitting(false)
             submitLock.current = false
@@ -170,7 +171,7 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
             }
             router.refresh()
         } catch (e: any) {
-            toast.error(e?.message || t('common.error'))
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingApi(false)
         }
@@ -191,7 +192,7 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
             }
             router.refresh()
         } catch (e: any) {
-            toast.error(e?.message || t('common.error'))
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setTogglingApiEnabled(false)
         }
@@ -205,7 +206,7 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
             toast.success(t('admin.cards.apiPullSuccess'))
             router.refresh()
         } catch (e: any) {
-            toast.error(`${t('admin.cards.apiPullFailed')}: ${e?.message || ''}`)
+            toast.error(`${t('admin.cards.apiPullFailed')}: ${t(resolveClientActionErrorKey(e))}`)
         } finally {
             setPullingApi(false)
         }
@@ -395,7 +396,7 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
                                                 toast.success(t('common.success'))
                                                 router.refresh()
                                             } catch (e: any) {
-                                                toast.error(e.message)
+                                                toast.error(t(resolveClientActionErrorKey(e)))
                                             } finally {
                                                 setDeletingId(null)
                                                 deleteLock.current = null

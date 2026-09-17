@@ -9,6 +9,7 @@ import { Loader2, ExternalLink, CheckCircle, RefreshCcw, AlertTriangle } from "l
 import { useI18n } from "@/lib/i18n/context"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/components/confirm-dialog-provider"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 
 export function RefundButton({ order }: { order: any }) {
     const [loading, setLoading] = useState(false)
@@ -45,7 +46,7 @@ export function RefundButton({ order }: { order: any }) {
                 setShowMarkDone(true)
             }
         } catch (e: any) {
-            toast.error(e.message || "Refund failed", { duration: 8000 })
+            toast.error(t(resolveClientActionErrorKey(e)), { duration: 8000 })
             setShowMarkDone(true)
         } finally {
             setLoading(false)
@@ -68,7 +69,7 @@ export function RefundButton({ order }: { order: any }) {
             toast.success(t('admin.orders.refundSuccess'))
             setShowMarkDone(false)
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setLoading(false)
         }
@@ -91,7 +92,7 @@ export function RefundButton({ order }: { order: any }) {
                 toast.error(result.error || t('common.error'))
             }
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setLoading(false)
         }

@@ -42,6 +42,7 @@ import {
   Package
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 
 function formatFileSize(bytes: number) {
   if (!bytes || bytes <= 0) return '0 B'
@@ -152,10 +153,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
         toast.success(t('common.success'))
       }
     } catch (e: any) {
-      const message = typeof e?.message === 'string' && e.message.startsWith('admin.orders.')
-        ? t(e.message)
-        : e.message
-      toast.error(message)
+      toast.error(t(resolveClientActionErrorKey(e)))
     } finally {
       setActionLoading(false)
       actionLock.current = false
@@ -168,7 +166,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
       await updateOrderEmail(order.orderId, email)
       toast.success(t('common.success'))
     } catch (e: any) {
-      toast.error(e.message)
+      toast.error(t(resolveClientActionErrorKey(e)))
     } finally {
       setSavingEmail(false)
     }
@@ -260,7 +258,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                     toast.success(t('common.success'))
                     router.push('/admin/orders')
                   } catch (e: any) {
-                    toast.error(e.message)
+                    toast.error(t(resolveClientActionErrorKey(e)))
                   } finally {
                     setActionLoading(false)
                     actionLock.current = false

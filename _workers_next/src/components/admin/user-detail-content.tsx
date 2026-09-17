@@ -125,11 +125,15 @@ export function AdminUserDetailContent(props: {
 
                             setBlocking(true)
                             try {
-                                await toggleBlock(props.user.userId, nextBlocked)
+                                const result = await toggleBlock(props.user.userId, nextBlocked)
+                                if (!result.success) {
+                                    toast.error(t(result.error))
+                                    return
+                                }
                                 toast.success(t("common.success"))
                                 router.refresh()
-                            } catch (error: any) {
-                                toast.error(error?.message || t("common.error"))
+                            } catch {
+                                toast.error(t("common.error"))
                             } finally {
                                 setBlocking(false)
                             }

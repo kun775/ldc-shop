@@ -11,6 +11,7 @@ import { saveCategory, deleteCategory } from "@/actions/admin"
 import { toast } from "sonner"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 
 type CategoryRow = { id: number; name: string; icon: string | null; sortOrder: number }
 
@@ -41,7 +42,7 @@ export function AdminCategoriesContent({ categories }: { categories: CategoryRow
       setIcon("")
       setSortOrder("0")
     } catch (e: any) {
-      toast.error(e.message)
+      toast.error(t(resolveClientActionErrorKey(e)))
     } finally {
       setSaving(false)
     }
@@ -57,7 +58,7 @@ export function AdminCategoriesContent({ categories }: { categories: CategoryRow
       await saveCategory(formData)
       toast.success(t('common.success'))
     } catch (e: any) {
-      toast.error(e.message)
+      toast.error(t(resolveClientActionErrorKey(e)))
     }
   }
 
@@ -154,7 +155,7 @@ export function AdminCategoriesContent({ categories }: { categories: CategoryRow
                         await deleteCategory(c.id)
                         toast.success(t('common.success'))
                       } catch (e: any) {
-                        toast.error(e.message)
+                        toast.error(t(resolveClientActionErrorKey(e)))
                       } finally {
                         setDeletingId(null)
                         deleteLock.current = null

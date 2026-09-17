@@ -6,6 +6,7 @@ const {
     isInternalErrorMessage,
     sanitizeClientErrorMessage,
     createErrorId,
+    resolveClientActionErrorKey,
     resolveClientErrorKey,
 } = mod
 
@@ -55,6 +56,21 @@ test("sanitize replaces internal messages with the fallback", () => {
     assert.equal(sanitizeClientErrorMessage(undefined, 'common.error'), 'common.error')
 })
 
+test("client action errors only expose stable i18n keys", () => {
+    assert.equal(
+        resolveClientActionErrorKey(new Error('admin.orders.deliveryContentRequired')),
+        'admin.orders.deliveryContentRequired'
+    )
+    assert.equal(
+        resolveClientActionErrorKey(new Error('Minified React error #441; visit https://react.dev/errors/441')),
+        'common.error'
+    )
+    assert.equal(
+        resolveClientActionErrorKey(new Error('D1_ERROR: no such column: nickname')),
+        'common.error'
+    )
+})
+
 test("over-long messages are treated as internal", () => {
     assert.equal(isInternalErrorMessage('x'.repeat(400)), true)
 })
@@ -78,6 +94,26 @@ test("resolveClientErrorKey only exposes mapped business codes", () => {
     assert.equal(resolveClientErrorKey(asError(REAL_LEAK), mapping, 'checkin.failed'), 'checkin.failed')
     assert.equal(resolveClientErrorKey(asError('POINT_LEDGER_CLAIM_LOST'), mapping, 'checkin.failed'), 'checkin.failed')
     assert.equal(resolveClientErrorKey(new Error('weird'), mapping, 'checkin.failed'), 'checkin.failed')
+})
+
+test("resolveClientErrorKey reads mapped codes from nested database causes", () => {
+    const mapping = {
+        POINT_BALANCE_NEGATIVE: 'admin.users.adjustNegativeNotAllowed',
+    }
+    const error = Object.assign(new Error('Failed query: update login_users'), {
+        cause: Object.assign(new Error('D1_ERROR: POINT_BALANCE_NEGATIVE'), {
+            cause: { code: 'SQLITE_CONSTRAINT_TRIGGER' },
+        }),
+    })
+
+    assert.equal(
+        resolveClientErrorKey(error, mapping, 'common.error'),
+        'admin.users.adjustNegativeNotAllowed'
+    )
+    assert.equal(
+        resolveClientErrorKey({ cause: new Error('POINT_BALANCE_NEGATIVE_EXTRA') }, mapping, 'common.error'),
+        'common.error'
+    )
 })
 
 test("createErrorId produces distinct readable ids", () => {

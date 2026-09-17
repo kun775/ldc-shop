@@ -39,6 +39,7 @@ const INTERNAL_ERROR_PATTERNS: RegExp[] = [
 const INTERNAL_CODE_PATTERN = /^[A-Z][A-Z0-9_]{6,}$/
 
 const MAX_CLIENT_MESSAGE_LENGTH = 160
+const CLIENT_I18N_KEY_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[A-Za-z0-9_-]+)+$/
 
 /**
  * createErrorId 生成用于日志对账的短错误 ID
@@ -79,6 +80,19 @@ export function sanitizeClientErrorMessage(
 }
 
 /**
+ * resolveClientActionErrorKey 只接受稳定的 i18n key。
+ * React/Next 生产错误和服务端原始消息一律退化为通用错误。
+ */
+export function resolveClientActionErrorKey(
+    error: unknown,
+    fallbackKey: string = 'common.error'
+): string {
+    const raw = String((error as { message?: unknown })?.message ?? '').trim()
+    if (!raw || raw.length > MAX_CLIENT_MESSAGE_LENGTH) return fallbackKey
+    return CLIENT_I18N_KEY_PATTERN.test(raw) ? raw : fallbackKey
+}
+
+/**
  * logServerError 在服务端记录完整错误并返回 errorId
  *
  * 参数:
@@ -109,10 +123,55 @@ export function resolveClientErrorKey(
     mapping: Record<string, string>,
     fallbackKey: string
 ): string {
-    const raw = String((error as { message?: unknown })?.message ?? error ?? '').trim()
-    if (!raw) return fallbackKey
-    if (Object.prototype.hasOwnProperty.call(mapping, raw)) {
-        return mapping[raw]
+    const seen = new Set<object>()
+    let current: unknown = error
+
+    for (let depth = 0; current != null && depth < 8; depth += 1) {
+        const candidates: unknown[] = []
+
+        if (typeof current === 'object' || typeof current === 'function') {
+            const record = current as object
+            if (seen.has(record)) break
+            seen.add(record)
+
+            for (const field of ['code', 'message'] as const) {
+                try {
+                    candidates.push((current as { code?: unknown; message?: unknown })[field])
+                } catch {
+                    // 忽略异常 getter，继续检查嵌套 cause。
+                }
+            }
+        } else {
+            candidates.push(current)
+        }
+
+        for (const candidate of candidates) {
+            const raw = String(candidate ?? '').trim()
+            if (!raw) continue
+            if (Object.prototype.hasOwnProperty.call(mapping, raw)) {
+                return mapping[raw]
+            }
+
+            for (const [code, key] of Object.entries(mapping)) {
+                const index = raw.indexOf(code)
+                if (index < 0) continue
+
+                const before = index > 0 ? raw[index - 1] : ''
+                const after = index + code.length < raw.length ? raw[index + code.length] : ''
+                const isCodeChar = (char: string) => /[A-Za-z0-9_]/.test(char)
+                if (!isCodeChar(before) && !isCodeChar(after)) {
+                    return key
+                }
+            }
+        }
+
+        if (typeof current !== 'object' && typeof current !== 'function') break
+        try {
+            current = (current as { cause?: unknown }).cause
+        } catch {
+            break
+        }
     }
+
     return fallbackKey
 }

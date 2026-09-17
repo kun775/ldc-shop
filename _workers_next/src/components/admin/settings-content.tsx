@@ -16,6 +16,7 @@ import { joinRegistry, leaveRegistry } from "@/actions/registry"
 import { checkForUpdatesClient, type ClientUpdateCheckResult } from "@/lib/update-check-client"
 import { toast } from "sonner"
 import { normalizeCurrencyUnit } from "@/lib/currency-unit"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 
 interface AdminSettingsContentProps {
     shopName: string | null
@@ -111,7 +112,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             await saveShopName(trimmed)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingShopName(false)
         }
@@ -123,7 +124,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             await saveShopDescription(shopDescValue)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingShopDesc(false)
         }
@@ -135,7 +136,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             await saveShopLogo(shopLogoValue)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingShopLogo(false)
         }
@@ -149,7 +150,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             router.refresh()
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingCurrencyUnit(false)
         }
@@ -194,7 +195,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             await saveLowStockThreshold(thresholdValue)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingThreshold(false)
         }
@@ -206,7 +207,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             await saveCheckinReward(rewardValue)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingReward(false)
         }
@@ -219,7 +220,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             setEnabledCheckin(checked)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingEnabled(false)
         }
@@ -232,7 +233,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             setRefundReclaimEnabled(checked)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingRefundReclaim(false)
         }
@@ -245,7 +246,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             setEnabledNoIndex(checked)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingNoIndex(false)
         }
@@ -258,7 +259,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             setEnabledWishlist(checked)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingWishlist(false)
         }
@@ -271,7 +272,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             setHideRegistryNav(checked)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingRegistryNav(false)
         }
@@ -283,7 +284,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             await saveShopFooter(shopFooterValue)
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingShopFooter(false)
         }
@@ -298,7 +299,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             // Refresh the page to apply theme
             window.location.reload()
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingTheme(false)
         }
@@ -312,7 +313,7 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             toast.success(t('common.success'))
             window.location.reload()
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingThemeFont(false)
         }

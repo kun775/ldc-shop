@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ClientDate } from "@/components/client-date"
 import { deleteReview, deleteReviewReply } from "@/actions/admin"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 import { toast } from "sonner"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { useConfirm } from "@/components/confirm-dialog-provider"
@@ -88,7 +89,7 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
       setItems((prev) => prev.filter((r) => r.id !== id))
       toast.success(t('common.success'))
     } catch (e: any) {
-      toast.error(e.message)
+      toast.error(t(resolveClientActionErrorKey(e)))
     } finally {
       setDeletingId(null)
       deletingRef.current = null
@@ -117,7 +118,7 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
       )))
       toast.success(t('common.success'))
     } catch (e: any) {
-      toast.error(e.message)
+      toast.error(t(resolveClientActionErrorKey(e)))
     } finally {
       setDeletingId(null)
       deletingRef.current = null

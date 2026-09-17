@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { AdminOrderActions } from "@/components/admin/order-actions"
 import { deleteOrders } from "@/actions/admin-orders"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 import { toast } from "sonner"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
@@ -223,7 +224,7 @@ export function AdminOrdersContent({
             setSelected({})
             router.refresh()
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setDeleting(false)
             deleteLock.current = false

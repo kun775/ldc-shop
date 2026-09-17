@@ -14,6 +14,7 @@ import { clearUserMessages, deleteUserMessage, markUserMessageRead } from "@/act
 import { useRouter } from "next/navigation"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { AdminPageShell } from "@/components/admin/admin-page-shell"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 
 type TargetType = "all" | "username" | "userId"
 
@@ -169,7 +170,7 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                                         toast.error(res?.error ? t(res.error) : t('common.error'))
                                     }
                                 } catch (e: any) {
-                                    toast.error(e.message || t('common.error'))
+                                    toast.error(t(resolveClientActionErrorKey(e)))
                                 } finally {
                                     setSending(false)
                                 }
@@ -206,7 +207,7 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                                     setHistoryItems([])
                                     toast.success(t('admin.messages.cleared'))
                                 } catch (e: any) {
-                                    toast.error(e.message || t('common.error'))
+                                    toast.error(t(resolveClientActionErrorKey(e)))
                                 } finally {
                                     setClearingHistory(false)
                                 }
@@ -257,7 +258,7 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                                                             setHistoryItems((prev) => prev.filter((item: any) => item.id !== row.id))
                                                             toast.success(t('common.success'))
                                                         } catch (e: any) {
-                                                            toast.error(e.message || t('common.error'))
+                                                            toast.error(t(resolveClientActionErrorKey(e)))
                                                         } finally {
                                                             setDeleting(null)
                                                         }
@@ -303,7 +304,7 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                                     }
                                     toast.success(t('admin.messages.cleared'))
                                 } catch (e: any) {
-                                    toast.error(e.message || t('common.error'))
+                                    toast.error(t(resolveClientActionErrorKey(e)))
                                 } finally {
                                     setClearingInbox(false)
                                 }
@@ -384,7 +385,7 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                                                                             window.dispatchEvent(new CustomEvent("ldc:user-messages-updated"))
                                                                         }
                                                                     } catch (e: any) {
-                                                                        toast.error(e.message || t('common.error'))
+                                                                        toast.error(t(resolveClientActionErrorKey(e)))
                                                                     } finally {
                                                                         setInboxReading(null)
                                                                     }
@@ -407,7 +408,7 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                                                                         window.dispatchEvent(new CustomEvent("ldc:user-messages-updated"))
                                                                     }
                                                                 } catch (e: any) {
-                                                                    toast.error(e.message || t('common.error'))
+                                                                    toast.error(t(resolveClientActionErrorKey(e)))
                                                                 } finally {
                                                                     setInboxDeleting(null)
                                                                 }

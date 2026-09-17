@@ -11,6 +11,7 @@ import type { FormEvent } from "react"
 import { saveNotificationSettings, testBarkNotification, testEmailNotification, testNotification } from "@/actions/admin"
 import { Bell, CreditCard, RotateCcw, MessageSquare, ExternalLink, Mail, Smartphone } from "lucide-react"
 import { AdminPageShell } from "@/components/admin/admin-page-shell"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 
 interface NotificationsContentProps {
     settings: {
@@ -71,7 +72,7 @@ export function NotificationsContent({ settings }: NotificationsContentProps) {
             setEmailLanguage(saved.emailLanguage || 'zh')
             toast.success(t('common.success'))
         } catch (e: any) {
-            toast.error(e.message || t('common.error'))
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setIsLoading(false)
         }

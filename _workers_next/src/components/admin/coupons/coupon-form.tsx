@@ -17,6 +17,7 @@ import { ArrowLeft, Loader2, Sparkles } from 'lucide-react'
 import { createCouponAction, updateCouponAction } from '@/actions/coupons'
 import { centsToLdcNumber } from '@/lib/coupons/money'
 import { generateCouponCode } from '@/lib/coupons/code'
+import { resolveClientActionErrorKey } from '@/lib/errors/safe-error'
 import type { CouponRecord } from '@/lib/coupons/types'
 
 export interface CouponFormInitial {
@@ -167,7 +168,7 @@ export function CouponForm({
                 router.push(`/admin/coupons/${result.id}`)
                 router.refresh()
             } catch (submitError: any) {
-                const message = submitError?.message || t('common.error')
+                const message = t(resolveClientActionErrorKey(submitError))
                 setError(message)
                 toast.error(message)
             }

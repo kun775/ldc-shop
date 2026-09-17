@@ -91,11 +91,15 @@ export function UsersContent({ data }: UsersContentProps) {
         try {
             blockLock.current = user.userId
             setBlockingId(user.userId)
-            await toggleBlock(user.userId, !user.isBlocked)
+            const result = await toggleBlock(user.userId, !user.isBlocked)
+            if (!result.success) {
+                toast.error(t(result.error))
+                return
+            }
             toast.success(t('common.success'))
             router.refresh()
-        } catch (e: any) {
-            toast.error(e.message || t('common.error'))
+        } catch {
+            toast.error(t('common.error'))
         } finally {
             setBlockingId(null)
             blockLock.current = null

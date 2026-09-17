@@ -11,19 +11,6 @@ import { useI18n } from "@/lib/i18n/context"
 import { Loader2, Coins } from "lucide-react"
 import { toast } from "sonner"
 
-function getAdjustmentErrorMessage(message: string | undefined, t: (key: string, params?: Record<string, string>) => string) {
-    switch (message) {
-        case "POINT_BALANCE_NEGATIVE":
-            return t("admin.users.adjustNegativeNotAllowed")
-        case "POINT_REASON_REQUIRED":
-            return t("admin.users.adjustReasonRequired")
-        case "POINT_AMOUNT_INVALID":
-            return t("admin.users.adjustAmountInvalid")
-        default:
-            return message || t("common.error")
-    }
-}
-
 export function UserPointAdjustmentDialog(props: {
     open: boolean
     onOpenChange: (open: boolean) => void
@@ -151,17 +138,21 @@ export function UserPointAdjustmentDialog(props: {
                             if (!canSubmit) return
                             setSaving(true)
                             try {
-                                await adjustUserPoints({
+                                const result = await adjustUserPoints({
                                     userId: props.userId,
                                     direction,
                                     amount: parsedAmount,
                                     reason,
                                 })
+                                if (!result.success) {
+                                    toast.error(t(result.error))
+                                    return
+                                }
                                 toast.success(t("common.success"))
                                 props.onOpenChange(false)
                                 props.onSuccess?.()
-                            } catch (error: any) {
-                                toast.error(getAdjustmentErrorMessage(error?.message, t))
+                            } catch {
+                                toast.error(t("common.error"))
                             } finally {
                                 setSaving(false)
                             }

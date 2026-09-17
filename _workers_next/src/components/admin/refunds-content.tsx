@@ -14,6 +14,7 @@ import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-li
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
 import { ChevronLeft, ChevronRight } from "lucide-react"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 
 function statusVariant(status: string | null) {
   switch (status) {
@@ -89,7 +90,7 @@ export function AdminRefundsContent({ requests }: { requests: any[] }) {
         window.dispatchEvent(new CustomEvent("ldc:refunds-updated"))
       }
     } catch (e: any) {
-      toast.error(e.message)
+      toast.error(t(resolveClientActionErrorKey(e)))
     } finally {
       setProcessingId(null)
       processingRef.current = null

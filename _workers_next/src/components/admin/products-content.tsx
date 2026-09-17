@@ -15,6 +15,7 @@ import { INFINITE_STOCK } from "@/lib/constants"
 import { toast } from "sonner"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
+import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 
 interface Product {
     id: string
@@ -92,7 +93,7 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
             toast.success(t('common.success'))
             router.refresh()
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setBusy(false)
             busyRef.current = false
@@ -108,7 +109,7 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
             toast.success(t('common.success'))
             router.refresh()
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setBusy(false)
             busyRef.current = false
@@ -136,7 +137,7 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
             toast.success(t('common.success'))
             router.refresh()
         } catch (e: any) {
-            toast.error(e.message)
+            toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setBusy(false)
             busyRef.current = false
