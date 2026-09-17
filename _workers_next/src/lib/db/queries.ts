@@ -1270,6 +1270,8 @@ export async function getProducts() {
             isHot: products.isHot,
             isActive: products.isActive,
             isShared: products.isShared,
+            fulfillmentMode: products.fulfillmentMode,
+            manualStockCount: sql<number>`COALESCE(${products.manualStockCount}, 0)`,
             visibilityLevel: products.visibilityLevel,
             sortOrder: products.sortOrder,
             purchaseLimit: products.purchaseLimit,
@@ -3479,12 +3481,13 @@ export async function getUsers(page = 1, pageSize = 20, q = '') {
 
     try {
         await backfillLoginUsersFromOrdersAndReviews();
-        await ensureLoginUsersTable();
+        await ensureLoginUsersSchema();
 
         let whereClause = undefined
         if (search) {
             const like = `%${search}%`
             whereClause = or(
+                sql`${loginUsers.nickname} LIKE ${like}`,
                 sql`${loginUsers.username} LIKE ${like}`,
                 sql`${loginUsers.userId} LIKE ${like}`
             )
@@ -3492,6 +3495,7 @@ export async function getUsers(page = 1, pageSize = 20, q = '') {
 
         const itemsPromise = db.select({
             userId: loginUsers.userId,
+            nickname: loginUsers.nickname,
             username: loginUsers.username,
             points: loginUsers.points,
             isBlocked: sql<boolean>`COALESCE(${loginUsers.isBlocked}, FALSE)`,

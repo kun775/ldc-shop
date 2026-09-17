@@ -647,6 +647,7 @@ export async function getAdminUserDetail(
 
     let userRow = await db.select({
         userId: loginUsers.userId,
+        nickname: loginUsers.nickname,
         username: loginUsers.username,
         email: loginUsers.email,
         points: loginUsers.points,
@@ -677,6 +678,7 @@ export async function getAdminUserDetail(
             })
             userRow = await db.select({
                 userId: loginUsers.userId,
+                nickname: loginUsers.nickname,
                 username: loginUsers.username,
                 email: loginUsers.email,
                 points: loginUsers.points,

@@ -596,6 +596,7 @@
         },
         "users": {
             "title": "顾客管理",
+            "nickname": "昵称",
             "username": "用户名",
             "userId": "用户ID",
             "email": "邮箱",

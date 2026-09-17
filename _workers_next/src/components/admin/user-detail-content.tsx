@@ -34,6 +34,7 @@ function getOrderStatusVariant(status: string | null) {
 export function AdminUserDetailContent(props: {
     user: {
         userId: string
+        nickname: string | null
         username: string | null
         email: string | null
         points: number
@@ -145,6 +146,11 @@ export function AdminUserDetailContent(props: {
                     <CardTitle>{t("admin.users.profileSection")}</CardTitle>
                 </CardHeader>
                 <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="space-y-1">
+                        <div className="text-sm text-muted-foreground">{t("admin.users.nickname")}</div>
+                        <div className="font-medium">{props.user.nickname?.trim() || "-"}</div>
+                    </div>
+
                     <div className="space-y-1">
                         <div className="text-sm text-muted-foreground">{t("admin.users.username")}</div>
                         {props.user.username ? (

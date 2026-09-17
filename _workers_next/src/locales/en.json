@@ -596,6 +596,7 @@
         },
         "users": {
             "title": "Customer Management",
+            "nickname": "Nickname",
             "username": "Username",
             "userId": "User ID",
             "email": "Email",

@@ -23,11 +23,14 @@ export default async function AdminPage() {
         <AdminProductsContent
             products={products.map((p: any) => {
                 const stat = liveStats.get(p.id) || { unused: 0, available: 0, locked: 0 }
-                const available = p.isShared
-                    ? (stat.unused > 0 ? INFINITE_STOCK : 0)
-                    : stat.available
-                const locked = stat.locked
-                const stockCount = available >= INFINITE_STOCK ? INFINITE_STOCK : (available + locked)
+                const stockCount = p.fulfillmentMode === 'manual'
+                    ? Math.max(0, Number(p.manualStockCount || 0))
+                    : (() => {
+                        const available = p.isShared
+                            ? (stat.unused > 0 ? INFINITE_STOCK : 0)
+                            : stat.available
+                        return available >= INFINITE_STOCK ? INFINITE_STOCK : (available + stat.locked)
+                    })()
                 return {
                     id: p.id,
                     name: p.name,

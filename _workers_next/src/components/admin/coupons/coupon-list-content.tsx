@@ -324,7 +324,18 @@ export function AdminCouponsContent({
             }
         >
             <AdminListScroll>
-                <Table className="min-w-[1080px] table-fixed">
+                <Table className="min-w-[1330px] table-fixed">
+                    <colgroup>
+                        <col className="w-[160px]" />
+                        <col className="w-[160px]" />
+                        <col className="w-[120px]" />
+                        <col className="w-[150px]" />
+                        <col className="w-[200px]" />
+                        <col className="w-[140px]" />
+                        <col className="w-[90px]" />
+                        <col className="w-[80px]" />
+                        <col className="w-[230px]" />
+                    </colgroup>
                     <TableHeader className="bg-muted/40">
                         <TableRow className="border-b border-border/60 hover:bg-transparent">
                             <TableHead className="sticky top-0 z-10 bg-muted/95 px-3 backdrop-blur">优惠券</TableHead>
@@ -363,7 +374,7 @@ export function AdminCouponsContent({
                                             </div>
                                         </TableCell>
                                         <TableCell className="px-3 align-top">
-                                            <span className="text-xs text-foreground">{describeRule(coupon)}</span>
+                                            <span className="block whitespace-normal text-xs leading-5 text-foreground">{describeRule(coupon)}</span>
                                         </TableCell>
                                         <TableCell className="px-3 align-top">
                                             <span className="text-xs text-muted-foreground">
@@ -373,10 +384,10 @@ export function AdminCouponsContent({
                                             </span>
                                         </TableCell>
                                         <TableCell className="px-3 align-top">
-                                            <span className="text-xs text-muted-foreground">{describeLimits(coupon)}</span>
+                                            <span className="block whitespace-normal text-xs leading-5 text-muted-foreground">{describeLimits(coupon)}</span>
                                         </TableCell>
                                         <TableCell className="px-3 align-top">
-                                            <span className="text-xs text-muted-foreground">{formatWindow(coupon)}</span>
+                                            <span className="block whitespace-normal text-xs leading-5 text-muted-foreground">{formatWindow(coupon)}</span>
                                         </TableCell>
                                         <TableCell className="px-3 align-top">
                                             <div className="flex flex-col gap-0.5 text-xs">
@@ -400,8 +411,8 @@ export function AdminCouponsContent({
                                                 {DERIVED_STATUS_LABELS[derived]}
                                             </Badge>
                                         </TableCell>
-                                        <TableCell className="px-3 align-top">
-                                            <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                        <TableCell className="px-3 align-top whitespace-nowrap">
+                                            <div className="flex flex-nowrap items-center justify-end gap-1.5">
                                                 <Button asChild variant="outline" size="sm" className="h-8 px-2 text-xs">
                                                     <Link href={`/admin/coupons/${coupon.id}`}>详情</Link>
                                                 </Button>

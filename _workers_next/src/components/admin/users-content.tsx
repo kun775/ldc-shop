@@ -17,6 +17,7 @@ import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-sh
 
 interface User {
     userId: string
+    nickname: string | null
     username: string | null
     points: number
     lastLoginAt: Date | null
@@ -153,10 +154,11 @@ export function UsersContent({ data }: UsersContentProps) {
             }
         >
             <AdminListScroll>
-                <Table>
+                <Table className="min-w-[1080px]">
                     <TableHeader className="bg-muted/40">
                         <TableRow className="border-b border-border/60 hover:bg-transparent">
                             <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.userId')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.nickname')}</TableHead>
                             <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.username')}</TableHead>
                             <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.points')}</TableHead>
                             <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.users.orders')}</TableHead>
@@ -168,7 +170,7 @@ export function UsersContent({ data }: UsersContentProps) {
                     <TableBody>
                         {data.items.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={7} className="text-center h-24 text-muted-foreground">
+                                <TableCell colSpan={8} className="text-center h-24 text-muted-foreground">
                                     {t('search.noResults')}
                                 </TableCell>
                             </TableRow>
@@ -176,6 +178,11 @@ export function UsersContent({ data }: UsersContentProps) {
                             data.items.map((user) => (
                                 <TableRow key={user.userId}>
                                     <TableCell className="font-mono text-xs">{user.userId}</TableCell>
+                                    <TableCell>
+                                        <Link href={`/admin/users/${user.userId}`} className="font-medium text-sm hover:underline text-primary">
+                                            {user.nickname?.trim() || '-'}
+                                        </Link>
+                                    </TableCell>
                                     <TableCell>
                                         <Link href={`/admin/users/${user.userId}`} className="font-medium text-sm hover:underline text-primary">
                                             {user.username ? getDisplayUsername(user.username, user.userId) : user.userId}
