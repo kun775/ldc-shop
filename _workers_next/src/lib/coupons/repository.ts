@@ -1,7 +1,8 @@
 import { db } from '@/lib/db'
 import { coupons, couponProducts, couponUsages, couponUserCounters, orders, products } from '@/lib/db/schema'
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm'
-import { ensureDatabaseInitialized } from '@/lib/db/queries'
+import { ensureCouponTables, ensureDatabaseInitialized } from '@/lib/db/queries'
+import { withSchemaSelfHeal } from '@/lib/db/schema-self-heal.ts'
 import { normalizeCouponCode, orderCouponEntriesByCode } from './code.ts'
 import type {
     CouponRecord,
@@ -15,6 +16,39 @@ import type {
 
 const COUPON_LIST_MAX_PAGE_SIZE = 100
 const COUPON_PAGE_SIZE_DEFAULT = 20
+
+/**
+ * 优惠券表全部依赖清单。
+ *
+ * 与 ensureCouponTables 中的 CREATE TABLE 一一对应：只要探测到其中任意一张缺失，
+ * 就重跑一次幂等结构修复。新增优惠券表时必须同步这里，否则自愈会漏项。
+ */
+export const COUPON_TABLE_NAMES = [
+    'coupons',
+    'coupon_products',
+    'coupon_usages',
+    'coupon_user_counters',
+] as const
+
+/**
+ * runWithCouponSchemaSelfHeal 执行优惠券读写操作，遇到结构缺失时自愈一次并重试。
+ *
+ * 契约细节见 `@/lib/db/schema-self-heal`：
+ *   - 只有**确认是结构错误**（缺表/缺列）才重跑幂等 DDL，瞬时错误直接抛出；
+ *   - 自愈只执行一次，避免结构性问题演变成无限重试；
+ *   - 自愈失败时保留原始错误，不掩盖真实原因。
+ *
+ * 为什么不先用 `hasCurrentSchemaVersion()` 走快速路径：
+ *   版本号可能领先于真实结构（历史事故已固化此约定），而 ensureCouponTables
+ *   本身是幂等的 CREATE/ALTER IF NOT EXISTS，直接执行成本可控。
+ */
+function runWithCouponSchemaSelfHeal<T>(run: () => Promise<T>): Promise<T> {
+    return withSchemaSelfHeal({
+        run,
+        repair: () => ensureCouponTables(),
+        label: 'Coupon',
+    })
+}
 
 export interface CouponAdminFilters {
     page?: number
@@ -58,11 +92,6 @@ function toMs(value: unknown): number | null {
     if (value instanceof Date) return value.getTime()
     const parsed = Number(value)
     return Number.isFinite(parsed) ? parsed : null
-}
-
-function isMissingCouponSchemaError(error: any): boolean {
-    const text = (JSON.stringify(error ?? '') + String(error ?? '') + (error?.message || '')).toLowerCase()
-    return text.includes('no such table') || text.includes('does not exist')
 }
 
 function clampPage(value: unknown, fallback: number): number {
@@ -182,7 +211,8 @@ export async function listAdminCoupons(filters: CouponAdminFilters = {}) {
 
     const whereExpr = whereParts.length ? and(...whereParts) : undefined
 
-    try {
+    // 列表读取：结构缺失时自愈一次重跑；查询异常一律上抛，由调用方统一脱敏
+    return runWithCouponSchemaSelfHeal(async () => {
         const countQuery = db.select({ count: sql<number>`count(*)` }).from(coupons)
         const rowsQuery = db.select().from(coupons)
             .orderBy(desc(coupons.createdAt))
@@ -227,26 +257,20 @@ export async function listAdminCoupons(filters: CouponAdminFilters = {}) {
         })
 
         return { items, total, page, pageSize }
-    } catch (error: any) {
-        if (isMissingCouponSchemaError(error)) {
-            return { items: [] as CouponListRow[], total: 0, page, pageSize }
-        }
-        throw error
-    }
+    })
 }
 
 export async function getCouponById(id: string): Promise<CouponRecord | null> {
     if (!id) return null
     await ensureDatabaseInitialized()
-    try {
+
+    // null 严格表示「记录不存在」；结构或查询异常一律抛出，由上层转为可追踪失败
+    return runWithCouponSchemaSelfHeal(async () => {
         const rows = await db.select().from(coupons).where(eq(coupons.id, id)).limit(1)
         if (!rows.length) return null
         const productMap = await loadProductIdsByCoupon([id])
         return mapCouponRow(rows[0], productMap.get(id) || [])
-    } catch (error: any) {
-        if (isMissingCouponSchemaError(error)) return null
-        throw error
-    }
+    })
 }
 
 // getCouponRuntimeState 读取单张优惠券的总次数与用户次数占用
@@ -264,28 +288,30 @@ export async function getCouponRuntimeState(couponId: string, userId: string | n
     }
     if (!couponId) return base
 
-    const rows = await db
-        .select({ reservedCount: coupons.reservedCount, consumedCount: coupons.consumedCount })
-        .from(coupons)
-        .where(eq(coupons.id, couponId))
-        .limit(1)
-    base.totalReserved = Number(rows[0]?.reservedCount || 0)
-    base.totalConsumed = Number(rows[0]?.consumedCount || 0)
-
-    if (userId) {
-        const counterRows = await db
-            .select({
-                reservedCount: couponUserCounters.reservedCount,
-                consumedCount: couponUserCounters.consumedCount,
-            })
-            .from(couponUserCounters)
-            .where(and(eq(couponUserCounters.couponId, couponId), eq(couponUserCounters.userId, userId)))
+    return runWithCouponSchemaSelfHeal(async () => {
+        const rows = await db
+            .select({ reservedCount: coupons.reservedCount, consumedCount: coupons.consumedCount })
+            .from(coupons)
+            .where(eq(coupons.id, couponId))
             .limit(1)
-        base.userReserved = Number(counterRows[0]?.reservedCount || 0)
-        base.userConsumed = Number(counterRows[0]?.consumedCount || 0)
-    }
+        base.totalReserved = Number(rows[0]?.reservedCount || 0)
+        base.totalConsumed = Number(rows[0]?.consumedCount || 0)
 
-    return base
+        if (userId) {
+            const counterRows = await db
+                .select({
+                    reservedCount: couponUserCounters.reservedCount,
+                    consumedCount: couponUserCounters.consumedCount,
+                })
+                .from(couponUserCounters)
+                .where(and(eq(couponUserCounters.couponId, couponId), eq(couponUserCounters.userId, userId)))
+                .limit(1)
+            base.userReserved = Number(counterRows[0]?.reservedCount || 0)
+            base.userConsumed = Number(counterRows[0]?.consumedCount || 0)
+        }
+
+        return base
+    })
 }
 
 // loadCouponRuntimeEntries 按优惠码批量加载优惠券及其占用状态
@@ -301,35 +327,41 @@ export async function loadCouponRuntimeEntries(codes: string[], userId: string |
 
     await ensureDatabaseInitialized()
 
-    const rows = await db
-        .select()
-        .from(coupons)
-        .where(normalized.length === 1
-            ? sql`upper(${coupons.code}) = ${normalized[0]}`
-            : or(...normalized.map((code) => sql`upper(${coupons.code}) = ${code}`)))
+    // 读取整表：结构缺失时自愈一次；查询异常上抛，由上层转为可追踪失败，
+    // 不允许把系统错误伪装成「优惠码不存在」。
+    const { rows, productMap, counterMap } = await runWithCouponSchemaSelfHeal(async () => {
+        const rows = await db
+            .select()
+            .from(coupons)
+            .where(normalized.length === 1
+                ? sql`upper(${coupons.code}) = ${normalized[0]}`
+                : or(...normalized.map((code) => sql`upper(${coupons.code}) = ${code}`)))
 
-    const productMap = await loadProductIdsByCoupon(rows.map((row: any) => String(row.id)))
+        const productMap = await loadProductIdsByCoupon(rows.map((row: any) => String(row.id)))
 
-    const counterMap = new Map<string, { reservedCount: number; consumedCount: number }>()
-    if (userId && rows.length > 0) {
-        const counterRows = await db
-            .select({
-                couponId: couponUserCounters.couponId,
-                reservedCount: couponUserCounters.reservedCount,
-                consumedCount: couponUserCounters.consumedCount,
-            })
-            .from(couponUserCounters)
-            .where(and(
-                eq(couponUserCounters.userId, userId),
-                inArray(couponUserCounters.couponId, rows.map((row: any) => String(row.id)))
-            ))
-        for (const counter of counterRows) {
-            counterMap.set(String(counter.couponId), {
-                reservedCount: Number(counter.reservedCount || 0),
-                consumedCount: Number(counter.consumedCount || 0),
-            })
+        const counterMap = new Map<string, { reservedCount: number; consumedCount: number }>()
+        if (userId && rows.length > 0) {
+            const counterRows = await db
+                .select({
+                    couponId: couponUserCounters.couponId,
+                    reservedCount: couponUserCounters.reservedCount,
+                    consumedCount: couponUserCounters.consumedCount,
+                })
+                .from(couponUserCounters)
+                .where(and(
+                    eq(couponUserCounters.userId, userId),
+                    inArray(couponUserCounters.couponId, rows.map((row: any) => String(row.id)))
+                ))
+            for (const counter of counterRows) {
+                counterMap.set(String(counter.couponId), {
+                    reservedCount: Number(counter.reservedCount || 0),
+                    consumedCount: Number(counter.consumedCount || 0),
+                })
+            }
         }
-    }
+
+        return { rows, productMap, counterMap }
+    })
 
     const unorderedEntries = rows.map((row: any) => {
         const coupon = mapCouponRow(row, productMap.get(String(row.id)) || [])
@@ -388,34 +420,40 @@ export async function listCouponUsages(input: {
     }
     const whereExpr = and(...whereParts)
 
-    const [countRows, usageRows] = await Promise.all([
-        db.select({ count: sql<number>`count(*)` }).from(couponUsages).where(whereExpr),
-        db.select().from(couponUsages)
-            .where(whereExpr)
-            .orderBy(desc(couponUsages.createdAt), desc(couponUsages.sequence))
-            .limit(pageSize)
-            .offset(offset),
-    ])
+    // 使用记录读取同样自愈一次：缺表时补结构，查询异常上抛，
+    // 避免「优惠券详情页显示 0 条使用记录」而实际是结构漂移。
+    const { total, usageRows, orderMap } = await runWithCouponSchemaSelfHeal(async () => {
+        const [countRows, usageRows] = await Promise.all([
+            db.select({ count: sql<number>`count(*)` }).from(couponUsages).where(whereExpr),
+            db.select().from(couponUsages)
+                .where(whereExpr)
+                .orderBy(desc(couponUsages.createdAt), desc(couponUsages.sequence))
+                .limit(pageSize)
+                .offset(offset),
+        ])
 
-    const total = Number(countRows[0]?.count || 0)
-    const orderIds = Array.from(new Set(usageRows.map((row: any) => String(row.orderId))))
-    const orderMap = new Map<string, any>()
-    if (orderIds.length > 0) {
-        const orderRows = await db
-            .select({
-                orderId: orders.orderId,
-                status: orders.status,
-                amount: orders.amount,
-                productName: orders.productName,
-                pointsUsed: orders.pointsUsed,
-                createdAt: orders.createdAt,
-            })
-            .from(orders)
-            .where(inArray(orders.orderId, orderIds))
-        for (const order of orderRows) {
-            orderMap.set(String(order.orderId), order)
+        const total = Number(countRows[0]?.count || 0)
+        const orderIds = Array.from(new Set(usageRows.map((row: any) => String(row.orderId))))
+        const orderMap = new Map<string, any>()
+        if (orderIds.length > 0) {
+            const orderRows = await db
+                .select({
+                    orderId: orders.orderId,
+                    status: orders.status,
+                    amount: orders.amount,
+                    productName: orders.productName,
+                    pointsUsed: orders.pointsUsed,
+                    createdAt: orders.createdAt,
+                })
+                .from(orders)
+                .where(inArray(orders.orderId, orderIds))
+            for (const order of orderRows) {
+                orderMap.set(String(order.orderId), order)
+            }
         }
-    }
+
+        return { total, usageRows, orderMap }
+    })
 
     const items: CouponUsageRow[] = usageRows.map((row: any) => {
         const order = orderMap.get(String(row.orderId))
@@ -465,7 +503,10 @@ export async function getCouponUsageSummary(couponId: string) {
     if (!couponId) return empty
     await ensureDatabaseInitialized()
 
-    try {
+    // 统计读取：结构缺失时自愈后重跑；查询异常上抛。
+    // 详情页会把这个失败显示为「统计不可用」而不是静默显示 0，
+    // 避免结构漂移被误读成「这张券没人用过」。
+    return runWithCouponSchemaSelfHeal(async () => {
         const rows = await db
             .select({
                 status: couponUsages.status,
@@ -503,10 +544,7 @@ export async function getCouponUsageSummary(couponId: string) {
         result.userCount = Number(userRows[0]?.userCount || 0)
 
         return result
-    } catch (error: any) {
-        if (isMissingCouponSchemaError(error)) return empty
-        throw error
-    }
+    })
 }
 
 export interface CouponWriteInput {
@@ -597,21 +635,50 @@ export async function setCouponStatusRecord(id: string, status: CouponStatus): P
 //   - 作者: Codex
 //   - 创建时间: 2026-03-05
 //   - 更新内容: 新增适用商品全量替换逻辑，避免残留失效关联。
+//
+// 2026-09-17 调整：从「先全删再全插」改为**集合差分**（只插缺的、只删多的）。
+//   原因：`coupon_products` 没有唯一约束，旧写法一旦在 delete 之后 insert 失败
+//   （例如结构漂移、请求超时），该券的适用商品会被清空且无法回滚，
+//   直接表现为「编辑保存后满减券变成了全场券」。集合差分天然幂等，
+//   自愈重跑与并发重入都不会丢数据。
 export async function replaceCouponProducts(couponId: string, productIds: string[]): Promise<void> {
-    await db.delete(couponProducts).where(eq(couponProducts.couponId, couponId))
     const unique = Array.from(new Set(productIds.map((id) => String(id || '').trim()).filter(Boolean)))
-    if (!unique.length) return
-    await db.insert(couponProducts).values(
-        unique.map((productId) => ({ couponId, productId, createdAt: new Date() }))
-    )
+
+    await runWithCouponSchemaSelfHeal(async () => {
+        const existingRows = await db
+            .select({ productId: couponProducts.productId })
+            .from(couponProducts)
+            .where(eq(couponProducts.couponId, couponId))
+        const existing = new Set(existingRows.map((row) => String(row.productId)))
+        const desired = new Set(unique)
+
+        const toInsert = unique.filter((productId) => !existing.has(productId))
+        const toDelete = Array.from(existing).filter((productId) => !desired.has(productId))
+
+        if (toInsert.length) {
+            await db.insert(couponProducts).values(
+                toInsert.map((productId) => ({ couponId, productId, createdAt: new Date() }))
+            )
+        }
+        if (toDelete.length) {
+            await db.delete(couponProducts).where(and(
+                eq(couponProducts.couponId, couponId),
+                inArray(couponProducts.productId, toDelete)
+            ))
+        }
+    })
 }
 
 export async function deleteCouponProducts(couponId: string): Promise<void> {
-    await db.delete(couponProducts).where(eq(couponProducts.couponId, couponId))
+    await runWithCouponSchemaSelfHeal(async () => {
+        await db.delete(couponProducts).where(eq(couponProducts.couponId, couponId))
+    })
 }
 
 export async function deleteCouponRecord(couponId: string): Promise<void> {
-    await db.delete(coupons).where(eq(coupons.id, couponId))
+    await runWithCouponSchemaSelfHeal(async () => {
+        await db.delete(coupons).where(eq(coupons.id, couponId))
+    })
 }
 
 export async function getProductNamesByIds(productIds: string[]): Promise<Map<string, string>> {
@@ -640,10 +707,14 @@ export async function listActiveProductOptions(): Promise<Array<{ id: string; na
 export async function findCouponIdByCode(code: string): Promise<string | null> {
     const normalized = normalizeCouponCode(code)
     if (!normalized) return null
-    const rows = await db
-        .select({ id: coupons.id })
-        .from(coupons)
-        .where(eq(sql`upper(${coupons.code})`, normalized))
-        .limit(1)
-    return rows.length ? String(rows[0].id) : null
+    // null 只表示「优惠码未被占用」；结构/查询异常上抛，避免把系统错误
+    // 当成「可用优惠码」，进而在保存时撞上真实唯一约束。
+    return runWithCouponSchemaSelfHeal(async () => {
+        const rows = await db
+            .select({ id: coupons.id })
+            .from(coupons)
+            .where(eq(sql`upper(${coupons.code})`, normalized))
+            .limit(1)
+        return rows.length ? String(rows[0].id) : null
+    })
 }

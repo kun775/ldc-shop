@@ -7,6 +7,7 @@ const {
     PAGE_LOADING_DELAY_MS,
     PAGE_LOADING_FADE_OUT_MS,
     PAGE_LOADING_STUCK_MS,
+    PAGE_LOADING_INTERACTION_TAIL_MS,
 } = mod
 
 /** 手动推进的假计时器，便于确定性验证状态迁移 */
@@ -286,4 +287,135 @@ test("dispose clears tasks, listeners and timers", () => {
 
     store.end('a')
     assert.equal(getNotifications(), before)
+})
+
+// —— 交互抑制：业务提交期间不得点亮路由级全屏遮罩 ——
+
+test("beginInteraction suppresses route-origin tasks so submit refresh never shows the overlay", () => {
+    const { store, clock } = createStore()
+    const release = store.beginInteraction()
+
+    assert.equal(store.getSnapshot().suppressed, true)
+
+    // router.refresh() 触发的 loading.tsx fallback 上报
+    store.begin('route:fallback', 'common.loading')
+    assert.equal(store.getSnapshot().activeCount, 0)
+
+    clock.advance(PAGE_LOADING_DELAY_MS)
+    assert.equal(store.getSnapshot().visible, false)
+    assert.equal(store.getSnapshot().status, 'idle')
+
+    release()
+    // 尾随窗口仍在，用于覆盖 router.refresh() 之后才挂载的 fallback
+    assert.equal(store.getSnapshot().suppressed, true, 'tail window still holds')
+
+    clock.advance(PAGE_LOADING_INTERACTION_TAIL_MS)
+    assert.equal(store.getSnapshot().suppressed, false)
+})
+
+test("interaction-origin tasks stay visible while suppressed", () => {
+    const { store, clock } = createStore()
+    const release = store.beginInteraction()
+
+    store.begin('page:explicit', 'common.loading', 'interaction')
+    clock.advance(PAGE_LOADING_DELAY_MS)
+
+    const snapshot = store.getSnapshot()
+    assert.equal(snapshot.visible, true)
+    assert.equal(snapshot.activeCount, 1)
+
+    release()
+    store.end('page:explicit')
+})
+
+test("beginInteraction clears a route overlay already on screen", () => {
+    const { store, clock } = createStore()
+    store.begin('route:nav')
+    clock.advance(PAGE_LOADING_DELAY_MS)
+    assert.equal(store.getSnapshot().visible, true)
+
+    const release = store.beginInteraction()
+    assert.equal(store.getSnapshot().visible, false)
+    assert.equal(store.getSnapshot().status, 'idle')
+    release()
+})
+
+test("ending a suppressed task is a safe no-op", () => {
+    const { store } = createStore()
+    const release = store.beginInteraction()
+
+    store.begin('route:fallback')
+    // fallback 卸载时无条件调用 end，即使 begin 被忽略也不能破坏计数
+    store.end('route:fallback')
+    assert.equal(store.getSnapshot().activeCount, 0)
+
+    release()
+    assert.equal(store.getSnapshot().status, 'idle')
+})
+
+test("nested interactions only restore visibility after the last release", () => {
+    const { store, clock } = createStore()
+    const releaseOuter = store.beginInteraction()
+    const releaseInner = store.beginInteraction()
+
+    store.begin('route:a')
+    assert.equal(store.getSnapshot().activeCount, 0)
+
+    releaseInner()
+    assert.equal(store.getSnapshot().suppressed, true, 'outer interaction still holds')
+
+    store.begin('route:b')
+    assert.equal(store.getSnapshot().activeCount, 0)
+
+    releaseOuter()
+    // 计数归零，但尾随窗口仍在
+    clock.advance(PAGE_LOADING_INTERACTION_TAIL_MS)
+    assert.equal(store.getSnapshot().suppressed, false)
+
+    // 抑制解除后路由任务重新可用
+    store.begin('route:c')
+    assert.equal(store.getSnapshot().activeCount, 1)
+    store.end('route:c')
+})
+
+test("release function is idempotent so finally blocks cannot underflow the depth", () => {
+    const { store, clock } = createStore()
+    const release = store.beginInteraction()
+
+    release()
+    release()
+    release()
+
+    clock.advance(PAGE_LOADING_INTERACTION_TAIL_MS)
+    assert.equal(store.getSnapshot().suppressed, false)
+    // 计数归零后可正常展示遮罩
+    store.begin('route:after')
+    assert.equal(store.getSnapshot().activeCount, 1)
+})
+
+test("a new interaction restarts the suppression window", () => {
+    const { store, clock } = createStore()
+    const releaseFirst = store.beginInteraction()
+    releaseFirst()
+
+    // 尾随窗口内发起第二次提交：窗口应重新计时而不是提前结束
+    clock.advance(PAGE_LOADING_INTERACTION_TAIL_MS - 1)
+    const releaseSecond = store.beginInteraction()
+    releaseSecond()
+
+    clock.advance(PAGE_LOADING_INTERACTION_TAIL_MS - 1)
+    assert.equal(store.getSnapshot().suppressed, true, 'window restarted from the second release')
+
+    clock.advance(1)
+    assert.equal(store.getSnapshot().suppressed, false)
+})
+
+test("dispose clears a pending tail window", () => {
+    const { store, clock } = createStore()
+    const release = store.beginInteraction()
+    release()
+
+    store.dispose()
+    assert.equal(store.getSnapshot().suppressed, false)
+    assert.equal(clock.pendingCount, 0)
 })

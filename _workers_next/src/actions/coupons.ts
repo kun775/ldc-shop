@@ -12,6 +12,7 @@ import { generateCouponCode } from '@/lib/coupons/code'
 import { isCouponsEnabled, COUPONS_ENABLED_SETTING_KEY } from '@/lib/coupons/flag'
 import { centsToLdcNumber } from '@/lib/coupons/money'
 import { resolveCouponQuote } from '@/lib/coupons/checkout-quote'
+import { COUPON_ADMIN_ERROR_KEY_MAP } from '@/lib/coupons/errors'
 import {
     deleteCouponProducts,
     deleteCouponRecord,
@@ -24,6 +25,7 @@ import {
 } from '@/lib/coupons/repository'
 import { COUPON_STATUSES } from '@/lib/coupons/types'
 import type { CouponStatus } from '@/lib/coupons/types'
+import { logServerError, resolveClientErrorKey } from '@/lib/errors/safe-error'
 
 export interface CouponPreviewLine {
     code: string
@@ -47,6 +49,25 @@ export interface CouponPreviewPayload {
 }
 
 export type CouponPreviewResponse = CouponPreviewPayload | { success: false; error: string }
+
+/**
+ * 后台优惠券写操作的统一返回协议。
+ *
+ * 为什么不继续 throw：
+ *   Server Action 的**返回值**不会被 Next.js 脱敏，只有 throw 才会。反过来说，
+ *   throw 出去的错误在客户端只能拿到被 Next.js 替换过的通用消息（或 digest），
+ *   业务错误与系统错误无法区分，用户看到的永远是「错误」两个字。
+ *   因此这里统一改为「显式 return」：服务端脱敏 → 稳定 i18n key + errorId。
+ */
+export type CouponActionResult =
+    | { ok: true; id?: string }
+    | { ok: false; errorKey: string; errorId: string }
+
+function failure(scope: string, error: unknown): CouponActionResult {
+    const errorId = logServerError(scope, error)
+    const errorKey = resolveClientErrorKey(error, COUPON_ADMIN_ERROR_KEY_MAP, 'common.error')
+    return { ok: false, errorKey, errorId }
+}
 
 // previewCoupons 结算页优惠码实时校验与报价（不占用次数）
 //
@@ -138,12 +159,16 @@ export async function getCouponFeatureFlag(): Promise<boolean> {
 //   - 作者: Codex
 //   - 创建时间: 2026-03-05
 //   - 更新内容: 新增运营侧开关，作为上线验证与回滚的控制点。
-export async function setCouponFeatureFlag(enabled: boolean) {
-    await checkAdmin()
-    await setSetting(COUPONS_ENABLED_SETTING_KEY, enabled ? 'true' : 'false')
-    revalidatePath('/admin/coupons')
-    revalidatePath('/')
-    return { success: true, enabled }
+export async function setCouponFeatureFlag(enabled: boolean): Promise<CouponActionResult> {
+    try {
+        await checkAdmin()
+        await setSetting(COUPONS_ENABLED_SETTING_KEY, enabled ? 'true' : 'false')
+        revalidatePath('/admin/coupons')
+        revalidatePath('/')
+        return { ok: true }
+    } catch (error) {
+        return failure('admin.coupon.setFeatureFlag', error)
+    }
 }
 
 async function readAdminIdentity() {
@@ -157,28 +182,25 @@ async function readAdminIdentity() {
 //   - 作者: Codex
 //   - 创建时间: 2026-03-05
 //   - 更新内容: 新增管理员创建优惠券入口，服务端强校验并锁定计数字段。
-export async function createCouponAction(formData: FormData) {
-    await checkAdmin()
-    await ensureDatabaseInitialized()
-
-    const parsed = parseCouponForm(formData, { createdBy: await readAdminIdentity() })
-    if (!parsed.ok) return { success: false, error: parsed.error }
-
-    const existingId = await findCouponIdByCode(parsed.value.code)
-    if (existingId) return { success: false, error: 'coupon.admin.errors.codeTaken' }
-
+export async function createCouponAction(formData: FormData): Promise<CouponActionResult> {
     try {
-        await insertCoupon(parsed.value)
-    } catch (error: any) {
-        const text = String(error?.message || error).toLowerCase()
-        if (text.includes('unique') || text.includes('constraint')) {
-            return { success: false, error: 'coupon.admin.errors.codeTaken' }
-        }
-        throw error
-    }
+        await checkAdmin()
+        await ensureDatabaseInitialized()
 
-    revalidatePath('/admin/coupons')
-    return { success: true, id: parsed.value.id }
+        const parsed = parseCouponForm(formData, { createdBy: await readAdminIdentity() })
+        if (!parsed.ok) return { ok: false, errorKey: parsed.error, errorId: '' }
+
+        const existingId = await findCouponIdByCode(parsed.value.code)
+        if (existingId) return { ok: false, errorKey: 'coupon.admin.errors.codeTaken', errorId: '' }
+
+        await insertCoupon(parsed.value)
+
+        revalidatePath('/admin/coupons')
+        return { ok: true, id: parsed.value.id }
+    } catch (error) {
+        // 唯一约束（并发创建同码）由 COUPON_ADMIN_ERROR_KEY_MAP 映射为 codeTaken
+        return failure('admin.coupon.create', error)
+    }
 }
 
 // updateCouponAction 后台编辑优惠券
@@ -187,48 +209,54 @@ export async function createCouponAction(formData: FormData) {
 //   - 作者: Codex
 //   - 创建时间: 2026-03-05
 //   - 更新内容: 新增编辑入口；已产生使用记录时锁定经济规则。
-export async function updateCouponAction(formData: FormData) {
-    await checkAdmin()
-    await ensureDatabaseInitialized()
+export async function updateCouponAction(formData: FormData): Promise<CouponActionResult> {
+    try {
+        await checkAdmin()
+        await ensureDatabaseInitialized()
 
-    const id = String(formData.get('id') || '').trim()
-    if (!id) return { success: false, error: 'coupon.admin.errors.notFound' }
+        const id = String(formData.get('id') || '').trim()
+        if (!id) return { ok: false, errorKey: 'coupon.admin.errors.notFound', errorId: '' }
 
-    const existing = await getCouponById(id)
-    if (!existing) return { success: false, error: 'coupon.admin.errors.notFound' }
+        const existing = await getCouponById(id)
+        if (!existing) return { ok: false, errorKey: 'coupon.admin.errors.notFound', errorId: '' }
 
-    const parsed = parseCouponForm(formData, { existingId: id, createdBy: existing.createdBy })
-    if (!parsed.ok) return { success: false, error: parsed.error }
+        const parsed = parseCouponForm(formData, { existingId: id, createdBy: existing.createdBy })
+        if (!parsed.ok) return { ok: false, errorKey: parsed.error, errorId: '' }
 
-    const otherId = await findCouponIdByCode(parsed.value.code)
-    if (otherId && otherId !== id) return { success: false, error: 'coupon.admin.errors.codeTaken' }
-
-    const hasUsage = existing.reservedCount + existing.consumedCount > 0
-    if (hasUsage) {
-        const lockedChanged =
-            parsed.value.code !== existing.code ||
-            parsed.value.discountType !== existing.discountType ||
-            parsed.value.rateBps !== existing.rateBps ||
-            parsed.value.discountAmountCents !== existing.discountAmountCents ||
-            parsed.value.minSpendCents !== existing.minSpendCents ||
-            parsed.value.maxDiscountCents !== existing.maxDiscountCents ||
-            parsed.value.scope !== existing.scope ||
-            parsed.value.totalUseLimit !== existing.totalUseLimit ||
-            parsed.value.perUserLimit !== existing.perUserLimit ||
-            parsed.value.stackableWithCoupons !== existing.stackableWithCoupons ||
-            parsed.value.stackableWithPoints !== existing.stackableWithPoints ||
-            parsed.value.productIds.slice().sort().join(',') !== existing.productIds.slice().sort().join(',')
-
-        if (lockedChanged) {
-            return { success: false, error: 'coupon.admin.errors.lockedAfterUsage' }
+        const otherId = await findCouponIdByCode(parsed.value.code)
+        if (otherId && otherId !== id) {
+            return { ok: false, errorKey: 'coupon.admin.errors.codeTaken', errorId: '' }
         }
+
+        const hasUsage = existing.reservedCount + existing.consumedCount > 0
+        if (hasUsage) {
+            const lockedChanged =
+                parsed.value.code !== existing.code ||
+                parsed.value.discountType !== existing.discountType ||
+                parsed.value.rateBps !== existing.rateBps ||
+                parsed.value.discountAmountCents !== existing.discountAmountCents ||
+                parsed.value.minSpendCents !== existing.minSpendCents ||
+                parsed.value.maxDiscountCents !== existing.maxDiscountCents ||
+                parsed.value.scope !== existing.scope ||
+                parsed.value.totalUseLimit !== existing.totalUseLimit ||
+                parsed.value.perUserLimit !== existing.perUserLimit ||
+                parsed.value.stackableWithCoupons !== existing.stackableWithCoupons ||
+                parsed.value.stackableWithPoints !== existing.stackableWithPoints ||
+                parsed.value.productIds.slice().sort().join(',') !== existing.productIds.slice().sort().join(',')
+
+            if (lockedChanged) {
+                return { ok: false, errorKey: 'coupon.admin.errors.lockedAfterUsage', errorId: '' }
+            }
+        }
+
+        await updateCouponRecord(parsed.value)
+
+        revalidatePath('/admin/coupons')
+        revalidatePath(`/admin/coupons/${id}`)
+        return { ok: true, id }
+    } catch (error) {
+        return failure('admin.coupon.update', error)
     }
-
-    await updateCouponRecord(parsed.value)
-
-    revalidatePath('/admin/coupons')
-    revalidatePath(`/admin/coupons/${id}`)
-    return { success: true, id }
 }
 
 // setCouponStatusAction 启用、停用或转草稿
@@ -237,24 +265,28 @@ export async function updateCouponAction(formData: FormData) {
 //   - 作者: Codex
 //   - 创建时间: 2026-03-05
 //   - 更新内容: 新增状态切换，停用不影响历史订单与使用记录。
-export async function setCouponStatusAction(id: string, status: string) {
-    await checkAdmin()
-    await ensureDatabaseInitialized()
+export async function setCouponStatusAction(id: string, status: string): Promise<CouponActionResult> {
+    try {
+        await checkAdmin()
+        await ensureDatabaseInitialized()
 
-    const couponId = String(id || '').trim()
-    const nextStatus = String(status || '').trim() as CouponStatus
-    if (!couponId || !COUPON_STATUSES.includes(nextStatus)) {
-        return { success: false, error: 'coupon.admin.errors.notFound' }
+        const couponId = String(id || '').trim()
+        const nextStatus = String(status || '').trim() as CouponStatus
+        if (!couponId || !COUPON_STATUSES.includes(nextStatus)) {
+            return { ok: false, errorKey: 'coupon.admin.errors.notFound', errorId: '' }
+        }
+
+        const existing = await getCouponById(couponId)
+        if (!existing) return { ok: false, errorKey: 'coupon.admin.errors.notFound', errorId: '' }
+
+        await setCouponStatusRecord(couponId, nextStatus)
+
+        revalidatePath('/admin/coupons')
+        revalidatePath(`/admin/coupons/${couponId}`)
+        return { ok: true }
+    } catch (error) {
+        return failure('admin.coupon.setStatus', error)
     }
-
-    const existing = await getCouponById(couponId)
-    if (!existing) return { success: false, error: 'coupon.admin.errors.notFound' }
-
-    await setCouponStatusRecord(couponId, nextStatus)
-
-    revalidatePath('/admin/coupons')
-    revalidatePath(`/admin/coupons/${couponId}`)
-    return { success: true }
 }
 
 // duplicateCouponAction 复制优惠券为新草稿
@@ -263,47 +295,60 @@ export async function setCouponStatusAction(id: string, status: string) {
 //   - 作者: Codex
 //   - 创建时间: 2026-03-05
 //   - 更新内容: 新增复制入口，避免直接修改已使用的优惠券规则。
-export async function duplicateCouponAction(id: string) {
-    await checkAdmin()
-    await ensureDatabaseInitialized()
+export async function duplicateCouponAction(id: string): Promise<CouponActionResult> {
+    try {
+        await checkAdmin()
+        await ensureDatabaseInitialized()
 
-    const couponId = String(id || '').trim()
-    const existing = await getCouponById(couponId)
-    if (!existing) return { success: false, error: 'coupon.admin.errors.notFound' }
+        const couponId = String(id || '').trim()
+        if (!couponId) return { ok: false, errorKey: 'coupon.admin.errors.notFound', errorId: '' }
 
-    let code = generateCouponCode(8, 'CP')
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-        const taken = await findCouponIdByCode(code)
-        if (!taken) break
-        code = generateCouponCode(8, 'CP')
+        const existing = await getCouponById(couponId)
+        if (!existing) return { ok: false, errorKey: 'coupon.admin.errors.notFound', errorId: '' }
+
+        // 生成不冲突的优惠码：最多重试 5 次。
+        // 注意循环结束后必须复查一次 —— 旧实现重试耗尽时不再校验，
+        // 会把一个「可能已存在」的码直接拿去插入，撞唯一约束报错。
+        let code = generateCouponCode(8, 'CP')
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+            const taken = await findCouponIdByCode(code)
+            if (!taken) break
+            code = generateCouponCode(8, 'CP')
+        }
+        if (await findCouponIdByCode(code)) {
+            return { ok: false, errorKey: 'coupon.admin.errors.codeTaken', errorId: '' }
+        }
+
+        const newId = `cpn_${crypto.randomUUID()}`
+        await insertCoupon({
+            id: newId,
+            code,
+            name: `${existing.name} 副本`,
+            description: existing.description,
+            discountType: existing.discountType,
+            rateBps: existing.rateBps,
+            discountAmountCents: existing.discountAmountCents,
+            minSpendCents: existing.minSpendCents,
+            maxDiscountCents: existing.maxDiscountCents,
+            scope: existing.scope,
+            productIds: existing.productIds,
+            totalUseLimit: existing.totalUseLimit,
+            perUserLimit: existing.perUserLimit,
+            stackableWithCoupons: existing.stackableWithCoupons,
+            stackableWithPoints: existing.stackableWithPoints,
+            refundPolicy: existing.refundPolicy,
+            // 副本一律以草稿落地，避免复制后立即对外生效
+            status: 'draft',
+            startsAt: existing.startsAt,
+            endsAt: existing.endsAt,
+            createdBy: await readAdminIdentity(),
+        })
+
+        revalidatePath('/admin/coupons')
+        return { ok: true, id: newId }
+    } catch (error) {
+        return failure('admin.coupon.duplicate', error)
     }
-
-    const newId = `cpn_${crypto.randomUUID()}`
-    await insertCoupon({
-        id: newId,
-        code,
-        name: `${existing.name} 副本`,
-        description: existing.description,
-        discountType: existing.discountType,
-        rateBps: existing.rateBps,
-        discountAmountCents: existing.discountAmountCents,
-        minSpendCents: existing.minSpendCents,
-        maxDiscountCents: existing.maxDiscountCents,
-        scope: existing.scope,
-        productIds: existing.productIds,
-        totalUseLimit: existing.totalUseLimit,
-        perUserLimit: existing.perUserLimit,
-        stackableWithCoupons: existing.stackableWithCoupons,
-        stackableWithPoints: existing.stackableWithPoints,
-        refundPolicy: existing.refundPolicy,
-        status: 'draft',
-        startsAt: existing.startsAt,
-        endsAt: existing.endsAt,
-        createdBy: await readAdminIdentity(),
-    })
-
-    revalidatePath('/admin/coupons')
-    return { success: true, id: newId }
 }
 
 // deleteCouponAction 删除未产生任何使用记录的优惠券
@@ -312,22 +357,36 @@ export async function duplicateCouponAction(id: string) {
 //   - 作者: Codex
 //   - 创建时间: 2026-03-05
 //   - 更新内容: 新增删除入口，存在使用记录时禁止删除以保留审计链。
-export async function deleteCouponAction(id: string) {
-    await checkAdmin()
-    await ensureDatabaseInitialized()
+export async function deleteCouponAction(id: string): Promise<CouponActionResult> {
+    try {
+        await checkAdmin()
+        await ensureDatabaseInitialized()
 
-    const couponId = String(id || '').trim()
-    const existing = await getCouponById(couponId)
-    if (!existing) return { success: false, error: 'coupon.admin.errors.notFound' }
+        const couponId = String(id || '').trim()
+        if (!couponId) return { ok: false, errorKey: 'coupon.admin.errors.notFound', errorId: '' }
 
-    const usages = await listCouponUsages({ couponId, page: 1, pageSize: 1 })
-    if (usages.total > 0) {
-        return { success: false, error: 'coupon.admin.errors.hasUsage' }
+        const existing = await getCouponById(couponId)
+        if (!existing) return { ok: false, errorKey: 'coupon.admin.errors.notFound', errorId: '' }
+
+        const usages = await listCouponUsages({ couponId, page: 1, pageSize: 1 })
+        if (usages.total > 0) {
+            return { ok: false, errorKey: 'coupon.admin.errors.hasUsage', errorId: '' }
+        }
+
+        // 先删主记录（权威对象），再清理关联商品。
+        // 顺序不能反：若先删关联商品而主记录删除失败，会留下一张
+        // 「指定商品但商品列表为空」的券（语义已变）；反过来只会留下
+        // 指向不存在券的孤儿关联行，无副作用且可随时清理。
+        await deleteCouponRecord(couponId)
+        try {
+            await deleteCouponProducts(couponId)
+        } catch (cleanupError) {
+            console.error('[Coupon] orphan product links cleanup failed', cleanupError)
+        }
+
+        revalidatePath('/admin/coupons')
+        return { ok: true }
+    } catch (error) {
+        return failure('admin.coupon.delete', error)
     }
-
-    await deleteCouponProducts(couponId)
-    await deleteCouponRecord(couponId)
-
-    revalidatePath('/admin/coupons')
-    return { success: true }
 }

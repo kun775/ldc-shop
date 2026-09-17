@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, useRef } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
@@ -17,9 +17,11 @@ import {
     duplicateCouponAction,
     setCouponFeatureFlag,
     setCouponStatusAction,
+    type CouponActionResult,
 } from '@/actions/coupons'
 import { centsToLdcNumber } from '@/lib/coupons/money'
 import { resolveClientActionErrorKey } from '@/lib/errors/safe-error'
+import { pageLoadingStore } from '@/lib/ui/page-loading-store'
 import type { CouponListRow } from '@/lib/coupons/repository'
 
 type DerivedStatus = 'draft' | 'scheduled' | 'active' | 'expired' | 'exhausted' | 'disabled'
@@ -119,6 +121,8 @@ export function AdminCouponsContent({
     const [pending, startTransition] = useTransition()
     const [search, setSearch] = useState(query)
     const [actionId, setActionId] = useState<string | null>(null)
+    /** 同步互斥锁：state 更新是异步的，无法阻止同一帧内的重复点击 */
+    const actionRef = useRef(false)
     const now = Date.now()
 
     const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -140,32 +144,62 @@ export function AdminCouponsContent({
         router.push(queryString ? `/admin/coupons?${queryString}` : '/admin/coupons')
     }
 
-    const runAction = async (id: string, task: () => Promise<{ success?: boolean; error?: string }>) => {
-        if (actionId) return
+    /**
+     * 统一的写操作执行器。
+     *
+     * 四点约束：
+     *   1. 返回值协议是 { ok, errorKey, errorId }，不再有 success/error 双字段；
+     *   2. `actionRef` 是同步互斥锁 —— `actionId` 是 state，setState 异步生效，
+     *      同一渲染帧内的快速双击会同时通过 `if (actionId)` 判断并发出两个请求；
+     *   3. `actionId` 只用于界面呈现（按钮 spinner / 禁用）；
+     *   4. 刷新前先声明业务交互（beginInteraction），避免 router.refresh()
+     *      触发的 loading.tsx 全屏遮罩盖住列表、拦截点击。
+     */
+    const runAction = async (id: string, task: () => Promise<CouponActionResult>) => {
+        if (actionRef.current) return
+        actionRef.current = true
         setActionId(id)
+        const release = pageLoadingStore.beginInteraction()
         try {
             const result = await task()
-            if (result?.success) {
+            if (result.ok) {
                 toast.success(t('common.success'))
                 startTransition(() => router.refresh())
             } else {
-                toast.error(result?.error ? t(result.error) : t('common.error'))
+                toast.error(
+                    result.errorId
+                        ? `${t(result.errorKey || 'common.error')} · ${t('common.errorIdLabel')} ${result.errorId}`
+                        : t(result.errorKey || 'common.error')
+                )
             }
-        } catch (error: any) {
+        } catch (error) {
             toast.error(t(resolveClientActionErrorKey(error)))
         } finally {
+            actionRef.current = false
             setActionId(null)
+            release()
         }
     }
 
     const handleToggleFeature = () => {
         startTransition(async () => {
+            const release = pageLoadingStore.beginInteraction()
             try {
-                await setCouponFeatureFlag(!featureEnabled)
-                toast.success(t('common.success'))
-                router.refresh()
-            } catch (error: any) {
+                const result = await setCouponFeatureFlag(!featureEnabled)
+                if (result.ok) {
+                    toast.success(t('common.success'))
+                    router.refresh()
+                } else {
+                    toast.error(
+                        result.errorId
+                            ? `${t(result.errorKey || 'common.error')} · ${t('common.errorIdLabel')} ${result.errorId}`
+                            : t(result.errorKey || 'common.error')
+                    )
+                }
+            } catch (error) {
                 toast.error(t(resolveClientActionErrorKey(error)))
+            } finally {
+                release()
             }
         })
     }

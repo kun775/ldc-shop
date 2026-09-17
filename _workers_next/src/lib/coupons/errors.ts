@@ -58,3 +58,31 @@ export function getCouponErrorI18nKey(code: CouponErrorCode): string {
 export function couponFailure(code: CouponErrorCode): CouponValidationFailure {
     return { ok: false, error: getCouponErrorI18nKey(code) }
 }
+
+/**
+ * 后台优惠券操作的错误码 → 文案 key 映射。
+ *
+ * 用于把底层抛出的错误（SQL 唯一约束、D1 结构漂移、驱动内部错误码）
+ * 收敛为稳定的 i18n key。映射表未命中的错误一律退化为 `common.error`，
+ * 保证任何内部信息（SQL 原文、绑定参数、表结构）都不会经返回值泄漏到前台。
+ *
+ * 注意：这里刻意**不**收录 `notFound` / `codeTaken` 之类的业务结论 ——
+ * 那些由 Action 显式返回，不应从异常文本里反推。
+ */
+export const COUPON_ADMIN_ERROR_KEY_MAP: Record<string, string> = {
+    // —— 结构类：确认是缺表/缺列时给出「功能暂时不可用」而不是通用错误
+    'no such table': 'coupon.errors.unavailable',
+    'no such view': 'coupon.errors.unavailable',
+    no_such_table: 'coupon.errors.unavailable',
+    d1_relation_notfound: 'coupon.errors.unavailable',
+    'no such column': 'coupon.errors.unavailable',
+    'column not found': 'coupon.errors.unavailable',
+    d1_column_notfound: 'coupon.errors.unavailable',
+    // —— 唯一约束：优惠码被并发占用
+    'unique constraint': 'coupon.admin.errors.codeTaken',
+    'constraint failed': 'coupon.admin.errors.codeTaken',
+    // —— 结算/预占阶段可能冒到后台的业务错误
+    COUPON_RESERVATION_CONFLICT: 'coupon.errors.reservationConflict',
+    COUPON_SCHEMA_UNAVAILABLE: 'coupon.errors.unavailable',
+    COUPON_NOT_FOUND: 'coupon.admin.errors.notFound',
+}

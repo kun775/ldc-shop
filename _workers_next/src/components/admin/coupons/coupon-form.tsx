@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -18,6 +18,7 @@ import { createCouponAction, updateCouponAction } from '@/actions/coupons'
 import { centsToLdcNumber } from '@/lib/coupons/money'
 import { generateCouponCode } from '@/lib/coupons/code'
 import { resolveClientActionErrorKey } from '@/lib/errors/safe-error'
+import { pageLoadingStore } from '@/lib/ui/page-loading-store'
 import type { CouponRecord } from '@/lib/coupons/types'
 
 export interface CouponFormInitial {
@@ -116,7 +117,22 @@ export function CouponForm({
     const router = useRouter()
     const [pending, startTransition] = useTransition()
     const [form, setForm] = useState<CouponFormInitial>(initial || EMPTY_INITIAL)
-    const [error, setError] = useState<string | null>(null)
+    const [error, setError] = useState<{ key: string; errorId: string } | null>(null)
+
+    /**
+     * 提交锁与挂载标记。
+     *
+     * - submitLock：防止 `pending` 尚未翻转为 true 的极短窗口内重复点击
+     *   （useTransition 的 pending 是异步生效的，快速双击会发出两个请求）；
+     * - mountedRef：成功分支会先 toast 再 router.push，组件此时可能已卸载，
+     *   避免对已卸载组件 setState。
+     */
+    const submitLock = useRef(false)
+    const mountedRef = useRef(true)
+    useEffect(() => {
+        mountedRef.current = true
+        return () => { mountedRef.current = false }
+    }, [])
 
     const locked = mode === 'edit' && usageLocked
 
@@ -124,7 +140,15 @@ export function CouponForm({
         setForm((prev) => ({ ...prev, [key]: value }))
     }
 
+    const showError = (key: string, errorId: string) => {
+        if (!mountedRef.current) return
+        setError({ key, errorId })
+        toast.error(errorId ? `${t(key)} · ${t('common.errorIdLabel')} ${errorId}` : t(key))
+    }
+
     const handleSubmit = async () => {
+        if (submitLock.current || pending) return
+        submitLock.current = true
         setError(null)
 
         const formData = new FormData()
@@ -152,25 +176,29 @@ export function CouponForm({
         if (endsAtMs !== null) formData.set('endsAtMs', String(endsAtMs))
 
         startTransition(async () => {
+            // 抑制路由级全屏遮罩：保存成功后 router.push + router.refresh
+            // 会挂载 loading.tsx fallback，若不抑制会在表单上方闪出全屏遮罩
+            const releaseInteraction = pageLoadingStore.beginInteraction()
             try {
                 const result = mode === 'create'
                     ? await createCouponAction(formData)
                     : await updateCouponAction(formData)
 
-                if (!result?.success) {
-                    const message = result?.error ? t(result.error) : t('common.error')
-                    setError(message)
-                    toast.error(message)
+                if (!result.ok) {
+                    // 表单内容不重置：失败后用户可直接修正校验项再提交
+                    showError(result.errorKey || 'common.error', result.errorId)
                     return
                 }
 
                 toast.success(t('common.success'))
-                router.push(`/admin/coupons/${result.id}`)
+                router.push(`/admin/coupons/${result.id || form.id}`)
                 router.refresh()
-            } catch (submitError: any) {
-                const message = t(resolveClientActionErrorKey(submitError))
-                setError(message)
-                toast.error(message)
+            } catch (submitError) {
+                // 兜底：Server Action 网络层异常（离线、超时、部署切换）
+                showError(resolveClientActionErrorKey(submitError), '')
+            } finally {
+                submitLock.current = false
+                releaseInteraction()
             }
         })
     }
@@ -202,8 +230,16 @@ export function CouponForm({
                 )}
 
                 {error && (
-                    <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-3.5 text-xs text-destructive">
-                        {error}
+                    <div
+                        role="alert"
+                        className="rounded-xl border border-destructive/40 bg-destructive/10 p-3.5 text-xs text-destructive space-y-1"
+                    >
+                        <p className="font-medium">{t(error.key)}</p>
+                        {error.errorId && (
+                            <p className="font-mono text-[11px] text-destructive/80">
+                                {t('common.errorIdLabel')}: {error.errorId}
+                            </p>
+                        )}
                     </div>
                 )}
 

@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button"
 import { AdminOrderActions } from "@/components/admin/order-actions"
 import { deleteOrders } from "@/actions/admin-orders"
 import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
+import { pageLoadingStore } from "@/lib/ui/page-loading-store"
 import { toast } from "sonner"
 import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
@@ -227,6 +228,8 @@ export function AdminOrdersContent({
         if (!ok) return
         deleteLock.current = true
         setDeleting(true)
+        // 抑制提交后刷新触发的全屏遮罩
+        const releaseInteraction = pageLoadingStore.beginInteraction()
         try {
             const result = await deleteOrders(selectedIds)
             if (!mountedRef.current) return
@@ -239,11 +242,12 @@ export function AdminOrdersContent({
             } else {
                 toast.error(t(result.errorKey))
             }
-        } catch (e: any) {
+        } catch (e) {
             if (!mountedRef.current) return
             toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             deleteLock.current = false
+            releaseInteraction()
             if (mountedRef.current) setDeleting(false)
         }
     }

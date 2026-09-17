@@ -8,7 +8,8 @@ export default async function AdminCouponEditPage({ params }: { params: Promise<
     const { id } = await params
 
     const [coupon, products] = await Promise.all([
-        getCouponById(id).catch(() => null),
+        // 同上：null 只表示不存在，查询异常上抛给本段落 error.tsx
+        getCouponById(id),
         listActiveProductOptions().catch(() => []),
     ])
 

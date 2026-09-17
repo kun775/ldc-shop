@@ -10,6 +10,7 @@ import { useI18n } from "@/lib/i18n/context"
 import { CheckCircle, Truck, XCircle, ExternalLink } from "lucide-react"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
+import { pageLoadingStore } from "@/lib/ui/page-loading-store"
 
 export function AdminOrderActions({ order }: { order: any }) {
   const { t } = useI18n()
@@ -66,6 +67,9 @@ export function AdminOrderActions({ order }: { order: any }) {
 
     loadingRef.current = true
     setLoading(true)
+    // 抑制路由级全屏遮罩：提交后的 router.refresh() 会挂载 loading.tsx
+    // fallback，若不抑制会盖住列表并拦截点击
+    const releaseInteraction = pageLoadingStore.beginInteraction()
     try {
       const result =
         action === 'paid'
@@ -89,6 +93,7 @@ export function AdminOrderActions({ order }: { order: any }) {
       toast.error(t(resolveClientActionErrorKey(error)))
     } finally {
       loadingRef.current = false
+      releaseInteraction()
       if (mountedRef.current) setLoading(false)
     }
   }

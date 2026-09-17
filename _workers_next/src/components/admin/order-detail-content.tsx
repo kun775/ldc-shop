@@ -39,6 +39,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
+import { pageLoadingStore } from "@/lib/ui/page-loading-store"
 
 /**
  * 提交状态机：同一时刻只允许一个显式状态，禁止再用多个互不关联的布尔值
@@ -119,12 +120,21 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
     }
   }, [])
 
-  /** 统一的提交执行器：成功、业务失败、网络失败、异常抛出后都必须释放状态 */
+  /**
+   * 统一的提交执行器：成功、业务失败、网络失败、异常抛出后都必须释放状态。
+   *
+   * 关键点：整个提交期间声明一次业务交互，抑制路由级全屏遮罩。
+   * 提交成功后 `router.refresh()` 会让 `loading.tsx` 的 Suspense fallback
+   * 挂载，从而点亮 z-[90] 的全屏遮罩 —— 那会把本组件的提交反馈和整个
+   * 订单页面一起盖住并拦截点击，是「页面级遮罩遮挡手动发货操作」的根因。
+   * 业务交互计数在 finally 中释放，任何异常路径都不会让抑制永久残留。
+   */
   const runSubmit = async (runner: () => Promise<OrderActionResult>) => {
     if (submitLock.current) return
     submitLock.current = true
     setSubmitError(null)
     setPhase('submitting')
+    const releaseInteraction = pageLoadingStore.beginInteraction()
     try {
       const result = await runner()
       if (!mountedRef.current) return
@@ -149,6 +159,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
       toast.error(t(errorKey))
     } finally {
       submitLock.current = false
+      releaseInteraction()
       if (mountedRef.current) {
         setPhase((current) => (current === 'submitting' ? 'idle' : current))
       }

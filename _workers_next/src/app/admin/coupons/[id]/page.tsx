@@ -64,7 +64,11 @@ export default async function AdminCouponDetailPage(props: {
     const usagesPage = parseIntParam(firstParam(searchParams.upage), 1)
     const usagesStatus = (firstParam(searchParams.ustatus) || '').trim()
 
-    const coupon = await getCouponById(id).catch(() => null)
+    // getCouponById 只在「记录确实不存在」时返回 null，结构与查询异常一律抛出。
+    // 因此这里不能再用 .catch(() => null) 兜底 —— 那会把数据库故障伪装成 404，
+    // 管理员看到「优惠券不存在」而真正的原因被完全隐藏。异常交给本段落的
+    // error.tsx 呈现（安全文案 + errorId），后台布局保持可用。
+    const coupon = await getCouponById(id)
     if (!coupon) return notFound()
 
     const [summary, usages, productNames] = await Promise.all([
