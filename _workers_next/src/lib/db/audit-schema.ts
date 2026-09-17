@@ -3,7 +3,7 @@
  *
  * 为什么独立成文件：
  *   与 `point-ledger-schema.ts` 同一约定 —— 结构语句集中一处，便于
- *     1. 被 `ensureAuditTables()` 无条件幂等执行；
+ *     1. 被管理员手动升级路径中的审计结构修复函数幂等执行；
  *     2. 被漂移探测（`schema-drift.ts` / `queries.ts`）以只读方式校验；
  *     3. 单元测试直接断言语句幂等性与字段覆盖。
  *
@@ -163,6 +163,14 @@ export const PLATFORM_ERROR_LOGS_COLUMN_DEFINITIONS = [
     ['updated_at', 'INTEGER'],
 ] as const
 
+/**
+ * 0031 独立升级项新增的错误 ID 列。
+ *
+ * 不能把它并回上面的 0030 列清单：0030 已经发布，修改既有升级项会让
+ * 数据库升级记录失去不可变性，也会导致结构漂移被错误归属到旧升级项。
+ */
+export const PLATFORM_ERROR_LOGS_ERROR_ID_COLUMN_DEFINITION = ['error_id', 'TEXT'] as const
+
 export const PLATFORM_ERROR_LOGS_INDEX_STATEMENTS: readonly string[] = [
     `CREATE INDEX IF NOT EXISTS platform_error_logs_created_idx
         ON platform_error_logs (created_at DESC, id DESC)`,
@@ -183,6 +191,13 @@ export const PLATFORM_ERROR_LOGS_INDEX_NAMES = [
     'platform_error_logs_scope_idx',
     'platform_error_logs_actor_idx',
 ] as const
+
+export const PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_NAME = 'platform_error_logs_error_id_idx'
+
+export const PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_STATEMENT = `
+    CREATE INDEX IF NOT EXISTS platform_error_logs_error_id_idx
+    ON platform_error_logs (error_id, last_seen_at DESC)
+`
 
 /**
  * 错误聚合唯一约束。
@@ -215,6 +230,11 @@ export const PLATFORM_ERROR_LOGS_ALL_INDEX_STATEMENTS: readonly string[] = [
 export const PLATFORM_ERROR_LOGS_ALL_INDEX_NAMES = [
     ...PLATFORM_ERROR_LOGS_INDEX_NAMES,
     PLATFORM_ERROR_LOGS_FINGERPRINT_UNIQUE_INDEX_NAME,
+] as const
+
+export const PLATFORM_ERROR_LOGS_CURRENT_INDEX_NAMES = [
+    ...PLATFORM_ERROR_LOGS_ALL_INDEX_NAMES,
+    PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_NAME,
 ] as const
 
 export const AUDIT_EVENTS_REQUIRED_COLUMNS = [
@@ -265,6 +285,11 @@ export const PLATFORM_ERROR_LOGS_REQUIRED_COLUMNS = [
     'updated_at',
 ] as const
 
+export const PLATFORM_ERROR_LOGS_CURRENT_REQUIRED_COLUMNS = [
+    ...PLATFORM_ERROR_LOGS_REQUIRED_COLUMNS,
+    'error_id',
+] as const
+
 export interface AuditTableStructureSnapshot {
     auditEventsTableExists: boolean
     auditEventsColumns: readonly string[]
@@ -288,7 +313,7 @@ export interface AuditTableStructureVerdict {
  * 与积分账本判定一致，索引缺失也算不完整 —— 后台按时间分页依赖这些索引，
  * 缺索引会退化成全表扫描。
  */
-export function evaluateAuditStructure(
+export function evaluateAuditBaseStructure(
     snapshot: AuditTableStructureSnapshot,
 ): AuditTableStructureVerdict {
     const missingTables: string[] = []
@@ -334,5 +359,30 @@ export function evaluateAuditStructure(
         missingColumns,
         missingIndexes,
         missingTables,
+    }
+}
+
+/** 当前完整结构判定：0030 基础结构 + 0031 错误 ID 查询能力。 */
+export function evaluateAuditStructure(
+    snapshot: AuditTableStructureSnapshot,
+): AuditTableStructureVerdict {
+    const base = evaluateAuditBaseStructure(snapshot)
+    const missingColumns = [...base.missingColumns]
+    const missingIndexes = [...base.missingIndexes]
+
+    if (!snapshot.platformErrorTableExists || !snapshot.platformErrorColumns.includes('error_id')) {
+        missingColumns.push('error_id')
+    }
+    if (!snapshot.platformErrorIndexes.includes(PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_NAME)) {
+        missingIndexes.push(PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_NAME)
+    }
+
+    return {
+        complete: base.missingTables.length === 0
+            && missingColumns.length === 0
+            && missingIndexes.length === 0,
+        missingColumns,
+        missingIndexes,
+        missingTables: base.missingTables,
     }
 }

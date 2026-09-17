@@ -6,7 +6,7 @@ import { useEffect, useState } from "react"
 import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger, SheetClose } from "@/components/ui/sheet"
-import { Package, CreditCard, Megaphone, Star, Download, Tags, RotateCcw, Users, Settings, QrCode, Bell, Menu, MessageSquare, LayoutDashboard, TicketPercent, Database } from "lucide-react"
+import { Package, CreditCard, Megaphone, Star, Download, Tags, RotateCcw, Users, Settings, QrCode, Bell, Menu, MessageSquare, LayoutDashboard, TicketPercent, Database, ShieldCheck } from "lucide-react"
 import { useI18n } from "@/lib/i18n/context"
 import { getPendingRefundRequestCount } from "@/actions/refund-requests"
 import { getUnreadUserMessageCount } from "@/actions/user-messages"
@@ -172,6 +172,7 @@ function SidebarContent({ closeOnNavigate = false, showTitle = true, username, t
                     </div>
                     <NavLink href="/admin/announcement" icon={<Megaphone className="h-4 w-4" />} label={t('announcement.title')} closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/data" icon={<Download className="h-4 w-4" />} label={t('common.dataExport')} closeOnNavigate={closeOnNavigate} />
+                    <NavLink href="/admin/audit" icon={<ShieldCheck className="h-4 w-4" />} label="审计与错误" closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/database" icon={<Database className="h-4 w-4" />} label="数据库升级" closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/collect" icon={<QrCode className="h-4 w-4" />} label={t('payment.adminMenu')} closeOnNavigate={closeOnNavigate} />
                     <NavLink href="/admin/notifications" icon={<Bell className="h-4 w-4" />} label={t('admin.settings.notifications.title')} closeOnNavigate={closeOnNavigate} />

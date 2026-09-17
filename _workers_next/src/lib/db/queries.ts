@@ -2,7 +2,13 @@ import { db } from "./index";
 import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger, refundRequests, userMessages } from "./schema";
 import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/lib/constants";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema, repairPointLedgerStructureIfNeeded, resetPointLedgerSchemaReady, verifyPointLedgerStructure } from "@/lib/points/ledger-db";
-import { repairAuditStructureIfNeeded, resetAuditSchemaReady, verifyAuditStructure } from "@/lib/audit/service";
+import {
+    repairAuditErrorIdStructureIfNeeded,
+    repairAuditStructureIfNeeded,
+    resetAuditSchemaReady,
+    verifyAuditBaseStructure,
+    verifyAuditStructure,
+} from "@/lib/audit/service";
 import { createAsyncOnceState, ensureOnce, parseSchemaVersion } from "@/lib/runtime/async-once";
 import { BASELINE_SCHEMA_DRIFT_PROBES, isSchemaDriftError } from "./schema-drift";
 import {
@@ -24,7 +30,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 30;
+const CURRENT_SCHEMA_VERSION = 31;
 const dbInitializationState = createAsyncOnceState();
 const databaseUpgradePreparationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
@@ -113,15 +119,17 @@ async function verifyBaselineDatabaseStructure(): Promise<boolean> {
 }
 
 async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth> {
-    const [baseline, pointLedger, audit] = await Promise.all([
+    const [baseline, pointLedger, auditBase, auditCurrent] = await Promise.all([
         verifyBaselineDatabaseStructure(),
         verifyPointLedgerStructure(),
+        verifyAuditBaseStructure(),
         verifyAuditStructure(),
     ]);
     return {
         '0028_database_upgrade_registry': baseline,
         '0029_point_ledger_balance_trigger': pointLedger,
-        '0030_audit_infrastructure': audit,
+        '0030_audit_infrastructure': auditBase,
+        '0031_audit_error_id_lookup': auditCurrent,
     };
 }
 
@@ -324,6 +332,9 @@ async function runRegisteredDatabaseUpgrades() {
                 // repairAuditStructureIfNeeded 先只读探测，完整时零 DDL。
                 resetAuditSchemaReady();
                 await repairAuditStructureIfNeeded();
+            },
+            async '0031_audit_error_id_lookup'() {
+                await repairAuditErrorIdStructureIfNeeded();
             },
         },
         verifyStructures: verifyDatabaseUpgradeStructures,

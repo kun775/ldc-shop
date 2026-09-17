@@ -11,13 +11,18 @@ const {
     AUDIT_EVENTS_INDEX_STATEMENTS,
     AUDIT_EVENTS_REQUIRED_COLUMNS,
     AUDIT_EVENTS_TABLE,
-    PLATFORM_ERROR_LOGS_ALL_INDEX_NAMES,
     PLATFORM_ERROR_LOGS_COLUMN_DEFINITIONS,
     PLATFORM_ERROR_LOGS_CREATE_TABLE_STATEMENT,
+    PLATFORM_ERROR_LOGS_CURRENT_INDEX_NAMES,
+    PLATFORM_ERROR_LOGS_CURRENT_REQUIRED_COLUMNS,
+    PLATFORM_ERROR_LOGS_ERROR_ID_COLUMN_DEFINITION,
+    PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_NAME,
+    PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_STATEMENT,
     PLATFORM_ERROR_LOGS_FINGERPRINT_UNIQUE_INDEX_STATEMENT,
     PLATFORM_ERROR_LOGS_INDEX_STATEMENTS,
     PLATFORM_ERROR_LOGS_REQUIRED_COLUMNS,
     PLATFORM_ERROR_LOGS_TABLE,
+    evaluateAuditBaseStructure,
     evaluateAuditStructure,
 } = schemaMod
 
@@ -38,8 +43,8 @@ function fullSnapshot() {
         auditEventsColumns: [...AUDIT_EVENTS_REQUIRED_COLUMNS],
         auditEventsIndexes: [...AUDIT_EVENTS_INDEX_NAMES],
         platformErrorTableExists: true,
-        platformErrorColumns: [...PLATFORM_ERROR_LOGS_REQUIRED_COLUMNS],
-        platformErrorIndexes: [...PLATFORM_ERROR_LOGS_ALL_INDEX_NAMES],
+        platformErrorColumns: [...PLATFORM_ERROR_LOGS_CURRENT_REQUIRED_COLUMNS],
+        platformErrorIndexes: [...PLATFORM_ERROR_LOGS_CURRENT_INDEX_NAMES],
     }
 }
 
@@ -64,6 +69,7 @@ test('column definitions are safe for ALTER TABLE ADD COLUMN', () => {
     for (const [column, definition] of [
         ...AUDIT_EVENTS_COLUMN_DEFINITIONS,
         ...PLATFORM_ERROR_LOGS_COLUMN_DEFINITIONS,
+        PLATFORM_ERROR_LOGS_ERROR_ID_COLUMN_DEFINITION,
     ]) {
         assert.ok(String(definition).trim().length > 0, `${column} must have a definition`)
         if (/NOT NULL/i.test(String(definition))) {
@@ -86,6 +92,11 @@ test('required columns match the create statements and definitions', () => {
     for (const column of PLATFORM_ERROR_LOGS_REQUIRED_COLUMNS) {
         assert.ok(hasColumn(PLATFORM_ERROR_LOGS_CREATE_TABLE_STATEMENT, column), `platform_error_logs missing declaration for ${column}`)
     }
+    assert.equal(
+        hasColumn(PLATFORM_ERROR_LOGS_CREATE_TABLE_STATEMENT, 'error_id'),
+        false,
+        '0031 column must not be folded into the already-published 0030 CREATE TABLE',
+    )
 })
 
 test('fingerprint unique index is a composite of fingerprint and bucket', () => {
@@ -103,6 +114,7 @@ test('every lookup index is time-anchored so paging stays stable', () => {
     for (const statement of [
         ...AUDIT_EVENTS_INDEX_STATEMENTS,
         ...PLATFORM_ERROR_LOGS_INDEX_STATEMENTS,
+        PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_STATEMENT,
     ]) {
         const columns = statement.replace(/\s+/g, ' ').match(/\(([^)]*)\)/)?.[1] ?? ''
         assert.ok(
@@ -110,6 +122,21 @@ test('every lookup index is time-anchored so paging stays stable', () => {
             `index must be time-anchored: ${statement}`,
         )
     }
+})
+
+test('error id lookup is owned by the current structure, not the 0030 base structure', () => {
+    const current = fullSnapshot()
+    const legacy = {
+        ...current,
+        platformErrorColumns: current.platformErrorColumns.filter((column) => column !== 'error_id'),
+        platformErrorIndexes: current.platformErrorIndexes.filter((name) => name !== PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_NAME),
+    }
+
+    assert.equal(evaluateAuditBaseStructure(legacy).complete, true)
+    const verdict = evaluateAuditStructure(legacy)
+    assert.equal(verdict.complete, false)
+    assert.deepEqual(verdict.missingColumns, ['error_id'])
+    assert.deepEqual(verdict.missingIndexes, [PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_NAME])
 })
 
 test('the aggregation unique index intentionally carries no time column', () => {
@@ -143,10 +170,10 @@ test('structure verdict reports both missing tables', () => {
     })
     assert.equal(verdict.complete, false)
     assert.deepEqual(verdict.missingTables, [AUDIT_EVENTS_TABLE, PLATFORM_ERROR_LOGS_TABLE])
-    assert.equal(verdict.missingColumns.length, AUDIT_EVENTS_REQUIRED_COLUMNS.length + PLATFORM_ERROR_LOGS_REQUIRED_COLUMNS.length)
+    assert.equal(verdict.missingColumns.length, AUDIT_EVENTS_REQUIRED_COLUMNS.length + PLATFORM_ERROR_LOGS_CURRENT_REQUIRED_COLUMNS.length)
     assert.equal(
         verdict.missingIndexes.length,
-        AUDIT_EVENTS_INDEX_NAMES.length + PLATFORM_ERROR_LOGS_ALL_INDEX_NAMES.length,
+        AUDIT_EVENTS_INDEX_NAMES.length + PLATFORM_ERROR_LOGS_CURRENT_INDEX_NAMES.length,
         'the fingerprint unique index must be verified too',
     )
 })

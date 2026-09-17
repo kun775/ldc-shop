@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { and, gte, lte, sql, type SQL } from 'drizzle-orm'
-import { ensureAuditTables } from './service'
+import { assertAuditStructureReady } from './service'
 import {
     AUDIT_CATEGORIES,
     AUDIT_EVENT_NAMES,
@@ -53,6 +53,7 @@ export interface AuditEventRecord {
 
 export interface PlatformErrorRecord {
     id: string
+    errorId: string | null
     fingerprint: string
     scope: string
     severity: string
@@ -233,13 +234,13 @@ function buildPlatformErrorConditions(filters: PlatformErrorFilters): SQL[] {
         conditions.push(sql`actor_user_id = ${actorUserId}`)
     }
 
-    // 错误 ID 可填「平台错误记录 id」或「业务错误指纹」，两者都支持，
-    // 因为管理员既可能从审计事件里复制 error_id，也可能从错误列表复制指纹。
+    // 错误 ID 支持用户可见 errorId、平台记录 id 与指纹三种口径。
     const errorId = normalizeText(filters.errorId, 80)
     if (errorId) {
         const pattern = `%${escapeLikePattern(errorId)}%`
         conditions.push(sql`(
-            id LIKE ${pattern} ESCAPE '\\'
+            COALESCE(error_id, '') LIKE ${pattern} ESCAPE '\\'
+            OR id LIKE ${pattern} ESCAPE '\\'
             OR fingerprint LIKE ${pattern} ESCAPE '\\'
         )`)
     }
@@ -256,8 +257,8 @@ function buildPlatformErrorConditions(filters: PlatformErrorFilters): SQL[] {
     }
 
     const { start, end } = buildTimeRange(filters.from, filters.to)
-    if (start !== null) conditions.push(gte(sql`created_at`, start))
-    if (end !== null) conditions.push(lte(sql`created_at`, end))
+    if (start !== null) conditions.push(gte(sql`last_seen_at`, start))
+    if (end !== null) conditions.push(lte(sql`last_seen_at`, end))
 
     return conditions
 }
@@ -279,11 +280,10 @@ function rowsFromResult<T>(result: unknown): T[] {
 export async function readAuditEvents(
     filters: AuditEventFilters = {},
 ): Promise<PagedResult<AuditEventRecord>> {
-    await ensureAuditTables()
+    await assertAuditStructureReady()
 
-    const page = normalizePositiveInt(filters.page, 1, 100000)
+    const requestedPage = normalizePositiveInt(filters.page, 1, 100000)
     const pageSize = normalizePositiveInt(filters.pageSize, AUDIT_PAGE_SIZE_DEFAULT, AUDIT_PAGE_SIZE_MAX)
-    const offset = (page - 1) * pageSize
     const where = whereClause(buildAuditEventConditions(filters))
 
     const countResult = await db.run(sql`
@@ -291,11 +291,13 @@ export async function readAuditEvents(
         ${where ? sql`WHERE ${where}` : sql``}
     `)
     const total = Number(rowsFromResult<{ total?: unknown }>(countResult)[0]?.total || 0)
+    const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)))
 
     if (total === 0) {
         return { items: [], total: 0, page, pageSize }
     }
 
+    const offset = (page - 1) * pageSize
     const rowsResult = await db.run(sql`
         SELECT
             id,
@@ -333,7 +335,7 @@ export async function readAuditEvents(
 export async function readAuditEvent(id: string): Promise<AuditEventRecord | null> {
     const normalized = normalizeText(id, 120)
     if (!normalized) return null
-    await ensureAuditTables()
+    await assertAuditStructureReady()
 
     const result = await db.run(sql`
         SELECT
@@ -368,11 +370,10 @@ export async function readAuditEvent(id: string): Promise<AuditEventRecord | nul
 export async function readPlatformErrors(
     filters: PlatformErrorFilters = {},
 ): Promise<PagedResult<PlatformErrorRecord>> {
-    await ensureAuditTables()
+    await assertAuditStructureReady()
 
-    const page = normalizePositiveInt(filters.page, 1, 100000)
+    const requestedPage = normalizePositiveInt(filters.page, 1, 100000)
     const pageSize = normalizePositiveInt(filters.pageSize, AUDIT_PAGE_SIZE_DEFAULT, AUDIT_PAGE_SIZE_MAX)
-    const offset = (page - 1) * pageSize
     const where = whereClause(buildPlatformErrorConditions(filters))
 
     const countResult = await db.run(sql`
@@ -380,14 +381,17 @@ export async function readPlatformErrors(
         ${where ? sql`WHERE ${where}` : sql``}
     `)
     const total = Number(rowsFromResult<{ total?: unknown }>(countResult)[0]?.total || 0)
+    const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / pageSize)))
 
     if (total === 0) {
         return { items: [], total: 0, page, pageSize }
     }
 
+    const offset = (page - 1) * pageSize
     const rowsResult = await db.run(sql`
         SELECT
             id,
+            error_id AS errorId,
             fingerprint,
             scope,
             severity,
@@ -429,11 +433,12 @@ export async function readPlatformErrors(
 export async function readPlatformError(id: string): Promise<PlatformErrorRecord | null> {
     const normalized = normalizeText(id, 120)
     if (!normalized) return null
-    await ensureAuditTables()
+    await assertAuditStructureReady()
 
     const result = await db.run(sql`
         SELECT
             id,
+            error_id AS errorId,
             fingerprint,
             scope,
             severity,
@@ -475,7 +480,7 @@ export interface AuditSummary {
  * 三条 COUNT 一律带索引列条件，避免全表扫描。
  */
 export async function readAuditSummary(nowMs: number = Date.now()): Promise<AuditSummary> {
-    await ensureAuditTables()
+    await assertAuditStructureReady()
     const dayAgo = nowMs - 24 * 60 * 60 * 1000
 
     const [eventResult, failureResult, openErrorResult, errorTotalResult] = await Promise.all([
@@ -507,7 +512,7 @@ export interface AuditFilterOption {
  * 也没法按发生频次排序。取实际值 + 兜底常量，两者合并。
  */
 export async function readAuditEventNameOptions(): Promise<string[]> {
-    await ensureAuditTables()
+    await assertAuditStructureReady()
     const result = await db.run(sql`
         SELECT event_name AS name, COUNT(*) AS total
         FROM audit_events
@@ -541,7 +546,7 @@ export async function markPlatformErrorHandled(input: {
 }): Promise<number> {
     const id = normalizeText(input.id, 120)
     if (!id) return 0
-    await ensureAuditTables()
+    await assertAuditStructureReady()
 
     const now = input.nowMs ?? Date.now()
     const note = input.note ? normalizeText(input.note, 1000) : null
@@ -574,7 +579,7 @@ export async function reopenPlatformError(input: {
 }): Promise<number> {
     const id = normalizeText(input.id, 120)
     if (!id) return 0
-    await ensureAuditTables()
+    await assertAuditStructureReady()
 
     const now = input.nowMs ?? Date.now()
     const result = await db.run(sql`

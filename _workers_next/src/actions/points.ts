@@ -8,7 +8,8 @@ import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib
 import { POINT_CHECKIN_ERROR_KEY_MAP } from "@/lib/points/point-errors"
 import { and, eq, isNull, lt, or, sql } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
-import { logServerError, resolveClientErrorKey } from "@/lib/errors/safe-error"
+import { resolveClientErrorKey } from "@/lib/errors/safe-error"
+import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
 
 export async function checkIn() {
     const session = await auth()
@@ -77,6 +78,16 @@ export async function checkIn() {
             .returning({ consecutiveDays: loginUsers.consecutiveDays });
 
         if (!updated.length) {
+            await recordAuditEvent({
+                eventName: 'points.checkin',
+                result: 'failure',
+                actorType: 'user',
+                actorUserId: userId,
+                actorUsername: session.user.username ?? null,
+                targetId: userId,
+                errorKey: 'checkin.alreadyCheckedIn',
+                source: 'checkin',
+            })
             return { success: false, error: "checkin.alreadyCheckedIn" }
         }
 
@@ -109,10 +120,35 @@ export async function checkIn() {
         revalidatePath('/')
         revalidatePath('/admin/users')
         revalidatePath(`/admin/users/${userId}`)
+        await recordAuditEvent({
+            eventName: 'points.checkin',
+            actorType: 'user',
+            actorUserId: userId,
+            actorUsername: session.user.username ?? null,
+            targetId: userId,
+            source: 'checkin',
+            metadata: {
+                points: reward,
+                status: 'completed',
+            },
+        })
         return { success: true, points: reward, consecutiveDays: updated[0]?.consecutiveDays ?? 1 }
     } catch (error: any) {
-        const errorId = logServerError('checkin', error)
         const errorKey = resolveClientErrorKey(error, POINT_CHECKIN_ERROR_KEY_MAP, "checkin.failed")
+        const errorId = await recordServerError('checkin', error, {
+            actorType: 'user',
+            actorUserId: userId,
+            actorUsername: session.user.username ?? null,
+            auditEvent: {
+                eventName: 'points.checkin',
+                actorType: 'user',
+                actorUserId: userId,
+                actorUsername: session.user.username ?? null,
+                targetId: userId,
+                errorKey,
+                source: 'checkin',
+            },
+        })
         return { success: false, error: errorKey, errorId }
     }
 }

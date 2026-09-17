@@ -76,6 +76,7 @@ export const AUDIT_METADATA_ALLOWED_KEYS: readonly string[] = [
     'changedFields',
     'errorKey',
     'errorId',
+    'noteLength',
 ]
 
 /**

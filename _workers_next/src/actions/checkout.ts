@@ -25,6 +25,7 @@ import { isCouponsEnabled } from "@/lib/coupons/flag"
 import { parseCheckoutFieldConfigs, validateCheckoutFieldValues } from "@/lib/checkout-fields"
 import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
 import { createOrderAccessToken, ORDER_ACCESS_COOKIE, ORDER_ACCESS_TTL_SECONDS } from "@/lib/order-access"
+import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
 
 const MAX_ORDER_QUANTITY = 10000
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -700,24 +701,64 @@ export async function createOrder(productId: string, quantity: number = 1, email
         }
     } catch (error: any) {
         const errorMessage = String(error?.message || error || '')
+        const recordBusinessFailure = async (errorKey: string) => {
+            await recordAuditEvent({
+                eventName: 'order.created',
+                result: 'failure',
+                actorType: user?.id ? 'user' : 'system',
+                actorUserId: user?.id ?? null,
+                actorUsername: session?.user?.username ?? null,
+                targetId: orderId,
+                errorKey,
+                source: 'checkout',
+                metadata: {
+                    orderId,
+                    productId,
+                    quantity,
+                    errorKey,
+                },
+            })
+        }
         if (errorMessage.includes('manual_stock_insufficient')) {
+            await recordBusinessFailure('buy.outOfStock')
             return { success: false, error: 'buy.outOfStock' };
         }
         if (error?.message === 'stock_locked') {
+            await recordBusinessFailure('buy.stockLocked')
             return { success: false, error: 'buy.stockLocked' };
         }
         if (error?.message === 'POINT_BALANCE_NEGATIVE' || error?.message === 'insufficient_points') {
             // 必须返回稳定的 i18n key：返回值不会被 Next.js 脱敏，
             // 任何明文句子都会原样显示在下单页（历史上这里直接返回英文句子）。
-            return { success: false, error: resolveClientErrorKey(error, POINT_AUTOMATIC_ERROR_KEY_MAP, 'common.error') };
+            const errorKey = resolveClientErrorKey(error, POINT_AUTOMATIC_ERROR_KEY_MAP, 'common.error')
+            await recordBusinessFailure(errorKey)
+            return { success: false, error: errorKey };
         }
         if (error?.couponError) {
-            return { success: false, error: String(error.couponError) };
+            const errorKey = String(error.couponError)
+            await recordBusinessFailure(errorKey)
+            return { success: false, error: errorKey };
         }
         if (error?.message === 'coupon_reservation_failed') {
+            await recordBusinessFailure('coupon.errors.reservationConflict')
             return { success: false, error: 'coupon.errors.reservationConflict' };
         }
-        throw error;
+        const errorId = await recordServerError('order.create', error, {
+            actorType: user?.id ? 'user' : 'system',
+            actorUserId: user?.id ?? null,
+            actorUsername: session?.user?.username ?? null,
+            auditEvent: {
+                eventName: 'order.created',
+                actorType: user?.id ? 'user' : 'system',
+                actorUserId: user?.id ?? null,
+                actorUsername: session?.user?.username ?? null,
+                targetId: orderId,
+                errorKey: 'common.error',
+                source: 'checkout',
+                metadata: { orderId, productId, quantity },
+            },
+        })
+        return { success: false, error: 'common.error', errorId }
     }
 
     const cookieStore = await cookies()
@@ -727,6 +768,26 @@ export async function createOrder(productId: string, quantity: number = 1, email
         path: '/',
         sameSite: 'lax',
         maxAge: ORDER_ACCESS_TTL_SECONDS,
+    })
+
+    await recordAuditEvent({
+        eventName: 'order.created',
+        actorType: user?.id ? 'user' : 'system',
+        actorUserId: user?.id ?? null,
+        actorUsername: session?.user?.username ?? null,
+        targetId: orderId,
+        source: 'checkout',
+        metadata: {
+            orderId,
+            productId,
+            productName: product.name,
+            amountCents: finalAmountCents,
+            quantity,
+            status: isZeroPrice ? (manualFulfillment ? 'paid' : 'delivered') : 'pending',
+            fulfillmentMode,
+            points: pointsToUse,
+            couponCount: couponReservationLines.length,
+        },
     })
 
     if (isZeroPrice) {

@@ -25,7 +25,8 @@ import {
 } from '@/lib/coupons/repository'
 import { COUPON_STATUSES } from '@/lib/coupons/types'
 import type { CouponStatus } from '@/lib/coupons/types'
-import { logServerError, resolveClientErrorKey } from '@/lib/errors/safe-error'
+import { resolveClientErrorKey } from '@/lib/errors/safe-error'
+import { recordAuditEvent, recordServerError } from '@/lib/audit/record'
 
 export interface CouponPreviewLine {
     code: string
@@ -63,9 +64,28 @@ export type CouponActionResult =
     | { ok: true; id?: string }
     | { ok: false; errorKey: string; errorId: string }
 
-function failure(scope: string, error: unknown): CouponActionResult {
-    const errorId = logServerError(scope, error)
+async function failure(
+    scope: string,
+    error: unknown,
+    eventName?: 'coupon.created' | 'coupon.updated',
+    targetId?: string | null,
+): Promise<CouponActionResult> {
     const errorKey = resolveClientErrorKey(error, COUPON_ADMIN_ERROR_KEY_MAP, 'common.error')
+    const session = await auth()
+    const errorId = await recordServerError(scope, error, {
+        actorType: 'admin',
+        actorUserId: session?.user?.id ?? null,
+        actorUsername: session?.user?.username ?? null,
+        auditEvent: eventName ? {
+            eventName,
+            actorType: 'admin',
+            actorUserId: session?.user?.id ?? null,
+            actorUsername: session?.user?.username ?? null,
+            targetId: targetId || null,
+            errorKey,
+            source: 'admin.coupons',
+        } : undefined,
+    })
     return { ok: false, errorKey, errorId }
 }
 
@@ -171,9 +191,16 @@ export async function setCouponFeatureFlag(enabled: boolean): Promise<CouponActi
     }
 }
 
-async function readAdminIdentity() {
-    const session = await auth()
-    return session?.user?.id ?? null
+async function readAdminActor() {
+    try {
+        const session = await auth()
+        return {
+            id: session?.user?.id ?? null,
+            username: session?.user?.username ?? null,
+        }
+    } catch {
+        return { id: null, username: null }
+    }
 }
 
 // createCouponAction 后台创建优惠券
@@ -186,8 +213,9 @@ export async function createCouponAction(formData: FormData): Promise<CouponActi
     try {
         await checkAdmin()
         await ensureDatabaseInitialized()
+        const actor = await readAdminActor()
 
-        const parsed = parseCouponForm(formData, { createdBy: await readAdminIdentity() })
+        const parsed = parseCouponForm(formData, { createdBy: actor.id })
         if (!parsed.ok) return { ok: false, errorKey: parsed.error, errorId: '' }
 
         const existingId = await findCouponIdByCode(parsed.value.code)
@@ -195,11 +223,25 @@ export async function createCouponAction(formData: FormData): Promise<CouponActi
 
         await insertCoupon(parsed.value)
 
+        await recordAuditEvent({
+            eventName: 'coupon.created',
+            actorType: 'admin',
+            actorUserId: actor.id,
+            actorUsername: actor.username,
+            targetId: parsed.value.id,
+            source: 'admin.coupons',
+            metadata: {
+                couponId: parsed.value.id,
+                couponCode: parsed.value.code,
+                status: parsed.value.status,
+            },
+        })
+
         revalidatePath('/admin/coupons')
         return { ok: true, id: parsed.value.id }
     } catch (error) {
         // 唯一约束（并发创建同码）由 COUPON_ADMIN_ERROR_KEY_MAP 映射为 codeTaken
-        return failure('admin.coupon.create', error)
+        return failure('admin.coupon.create', error, 'coupon.created')
     }
 }
 
@@ -213,6 +255,7 @@ export async function updateCouponAction(formData: FormData): Promise<CouponActi
     try {
         await checkAdmin()
         await ensureDatabaseInitialized()
+        const actor = await readAdminActor()
 
         const id = String(formData.get('id') || '').trim()
         if (!id) return { ok: false, errorKey: 'coupon.admin.errors.notFound', errorId: '' }
@@ -251,11 +294,26 @@ export async function updateCouponAction(formData: FormData): Promise<CouponActi
 
         await updateCouponRecord(parsed.value)
 
+        await recordAuditEvent({
+            eventName: 'coupon.updated',
+            actorType: 'admin',
+            actorUserId: actor.id,
+            actorUsername: actor.username,
+            targetId: id,
+            source: 'admin.coupons',
+            metadata: {
+                couponId: id,
+                couponCode: parsed.value.code,
+                status: parsed.value.status,
+            },
+        })
+
         revalidatePath('/admin/coupons')
         revalidatePath(`/admin/coupons/${id}`)
         return { ok: true, id }
     } catch (error) {
-        return failure('admin.coupon.update', error)
+        const targetId = String(formData.get('id') || '').trim() || null
+        return failure('admin.coupon.update', error, 'coupon.updated', targetId)
     }
 }
 
@@ -299,6 +357,7 @@ export async function duplicateCouponAction(id: string): Promise<CouponActionRes
     try {
         await checkAdmin()
         await ensureDatabaseInitialized()
+        const actor = await readAdminActor()
 
         const couponId = String(id || '').trim()
         if (!couponId) return { ok: false, errorKey: 'coupon.admin.errors.notFound', errorId: '' }
@@ -341,13 +400,27 @@ export async function duplicateCouponAction(id: string): Promise<CouponActionRes
             status: 'draft',
             startsAt: existing.startsAt,
             endsAt: existing.endsAt,
-            createdBy: await readAdminIdentity(),
+            createdBy: actor.id,
+        })
+
+        await recordAuditEvent({
+            eventName: 'coupon.created',
+            actorType: 'admin',
+            actorUserId: actor.id,
+            actorUsername: actor.username,
+            targetId: newId,
+            source: 'admin.coupons',
+            metadata: {
+                couponId: newId,
+                couponCode: code,
+                status: 'draft',
+            },
         })
 
         revalidatePath('/admin/coupons')
         return { ok: true, id: newId }
     } catch (error) {
-        return failure('admin.coupon.duplicate', error)
+        return failure('admin.coupon.duplicate', error, 'coupon.created')
     }
 }
 

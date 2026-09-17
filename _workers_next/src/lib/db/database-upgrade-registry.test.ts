@@ -76,6 +76,15 @@ test('the audit infrastructure is registered as its own upgrade item', () => {
     )
 })
 
+test('the audit error id lookup is registered after the base audit infrastructure', () => {
+    const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
+    assert.ok(ids.includes('0031_audit_error_id_lookup'))
+    assert.ok(
+        ids.indexOf('0031_audit_error_id_lookup') > ids.indexOf('0030_audit_infrastructure'),
+        'new audit columns must be owned by a new immutable upgrade item',
+    )
+})
+
 test('registered upgrades start from the schema version before the registry was introduced', () => {
     assert.equal(DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION, 27)
     assert.equal(supportsRegisteredDatabaseUpgrades(null), false)

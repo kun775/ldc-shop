@@ -19,6 +19,8 @@ import {
     sanitizeClientErrorMessage,
 } from "@/lib/errors/safe-error"
 import { ORDER_ERROR_KEY_MAP } from "@/lib/orders/order-errors"
+import { auth } from "@/lib/auth"
+import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
 
 /**
  * 订单写操作的统一返回协议。
@@ -89,14 +91,21 @@ export async function markOrderPaid(orderId: string): Promise<OrderActionResult>
 
 export async function markOrderDelivered(orderId: string, formData?: FormData): Promise<OrderActionResult> {
     let savedFileIds: number[] = []
+    let actorUserId: string | null = null
+    let actorUsername: string | null = null
+    let auditFulfillmentMode: string | null = null
     try {
         await checkAdmin()
+        const session = await auth()
+        actorUserId = session?.user?.id ?? null
+        actorUsername = session?.user?.username ?? null
         await ensureDatabaseInitialized()
         if (!orderId) throw new Error("admin.orders.orderMissing")
 
         const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
         if (!order) throw new Error("admin.orders.orderMissing")
         const manual = isManualFulfillment(order.fulfillmentMode)
+        auditFulfillmentMode = order.fulfillmentMode ?? null
 
         // 幂等/状态保护：只有已支付且未发货的订单允许发货。
         // 并发或重复提交时，后到的请求命中这里并直接返回失败，
@@ -222,14 +231,48 @@ export async function markOrderDelivered(orderId: string, formData?: FormData): 
         } catch {
             // best effort
         }
+        await recordAuditEvent({
+            eventName: 'admin.order.fulfillment',
+            actorType: 'admin',
+            actorUserId,
+            actorUsername,
+            targetId: orderId,
+            source: 'admin.orders',
+            metadata: {
+                orderId,
+                productId: order.productId,
+                fulfillmentMode: order.fulfillmentMode,
+                deliveryFileCount: savedFileIds.length,
+                status: 'delivered',
+            },
+        })
         return { ok: true }
     } catch (error) {
         // 订单写入失败时回滚本次上传的附件，避免留下孤儿文件
         if (savedFileIds.length) {
             await deleteDeliveryFileIds(orderId, savedFileIds)
         }
-        const errorId = logServerError('admin.markOrderDelivered', error)
-        return { ok: false, errorKey: resolveOrderErrorKey(error), errorId }
+        const errorKey = resolveOrderErrorKey(error)
+        const errorId = await recordServerError('admin.markOrderDelivered', error, {
+            actorType: 'admin',
+            actorUserId,
+            actorUsername,
+            auditEvent: {
+                eventName: 'admin.order.fulfillment',
+                actorType: 'admin',
+                actorUserId,
+                actorUsername,
+                targetId: orderId || null,
+                errorKey,
+                source: 'admin.orders',
+                metadata: {
+                    orderId,
+                    fulfillmentMode: auditFulfillmentMode,
+                    deliveryFileCount: savedFileIds.length,
+                },
+            },
+        })
+        return { ok: false, errorKey, errorId }
     }
 }
 

@@ -52,7 +52,7 @@ export const POINT_LEDGER_SCHEMA_DRIFT_PROBES: readonly string[] = [
 
 export const AUDIT_SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT event_name, category, severity, result, actor_type, actor_user_id, actor_username, target_type, target_id, error_id, error_key, source, ip_hash, user_agent, metadata, created_at FROM audit_events LIMIT 0",
-    "SELECT fingerprint, fingerprint_bucket, scope, severity, error_code, message, stack, error_chain, actor_type, actor_user_id, actor_username, request_method, request_path, ip_hash, user_agent, occurrence_count, first_seen_at, last_seen_at, status, handled_at, handled_by, handle_note, created_at, updated_at FROM platform_error_logs LIMIT 0",
+    "SELECT fingerprint, fingerprint_bucket, scope, severity, error_id, error_code, message, stack, error_chain, actor_type, actor_user_id, actor_username, request_method, request_path, ip_hash, user_agent, occurrence_count, first_seen_at, last_seen_at, status, handled_at, handled_by, handle_note, created_at, updated_at FROM platform_error_logs LIMIT 0",
 ]
 
 export const SCHEMA_DRIFT_PROBES: readonly string[] = [

@@ -5,7 +5,8 @@ import { checkAdmin } from "./admin"
 import { applyUserManualPointAdjustment } from "@/lib/points/ledger-db"
 import { POINT_ADMIN_ERROR_KEY_MAP } from "@/lib/points/point-errors"
 import { revalidatePath } from "next/cache"
-import { createErrorId, logServerError, resolveClientErrorKey } from "@/lib/errors/safe-error"
+import { logServerError, resolveClientErrorKey } from "@/lib/errors/safe-error"
+import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
 
 /**
  * 后台积分调整结果协议。
@@ -24,14 +25,23 @@ export async function adjustUserPoints(input: {
     amount: number
     reason: string
 }): Promise<AdjustUserPointsResult> {
+    const session = await auth()
     try {
-        const session = await auth()
         await checkAdmin()
 
         // userId 缺失时必须在进入账本写入前拦下：否则会插出一条 user_id 为空
         // 的账本记录（外键失败或成为孤儿），错误信息还完全指不到根因。
         const userId = String(input.userId || "").trim()
         if (!userId) {
+            await recordAuditEvent({
+                eventName: 'admin.points.adjusted',
+                result: 'failure',
+                actorType: 'admin',
+                actorUserId: session?.user?.id ?? null,
+                actorUsername: session?.user?.username ?? null,
+                errorKey: 'admin.users.adjustUserMissing',
+                source: 'admin.users',
+            })
             return { ok: false, errorKey: "admin.users.adjustUserMissing", errorId: "" }
         }
 
@@ -49,12 +59,43 @@ export async function adjustUserPoints(input: {
 
         revalidatePath('/admin/users')
         revalidatePath(`/admin/users/${userId}`)
+        await recordAuditEvent({
+            eventName: 'admin.points.adjusted',
+            actorType: 'admin',
+            actorUserId: session?.user?.id ?? null,
+            actorUsername: session?.user?.username ?? null,
+            targetId: userId,
+            source: 'admin.users',
+            metadata: {
+                direction: input.direction,
+                points: input.amount,
+                reason: input.reason,
+            },
+        })
         return { ok: true, errorKey: null, errorId: null }
     } catch (error) {
-        const errorId = logServerError('admin.adjustUserPoints', error)
+        const errorKey = resolveClientErrorKey(error, POINT_ADMIN_ERROR_KEY_MAP, 'common.error')
+        const errorId = await recordServerError('admin.adjustUserPoints', error, {
+            actorType: 'admin',
+            actorUserId: session?.user?.id ?? null,
+            actorUsername: session?.user?.username ?? null,
+            auditEvent: {
+                eventName: 'admin.points.adjusted',
+                actorType: 'admin',
+                actorUserId: session?.user?.id ?? null,
+                actorUsername: session?.user?.username ?? null,
+                targetId: String(input.userId || '').trim() || null,
+                errorKey,
+                source: 'admin.users',
+                metadata: {
+                    direction: input.direction,
+                    points: input.amount,
+                },
+            },
+        })
         return {
             ok: false,
-            errorKey: resolveClientErrorKey(error, POINT_ADMIN_ERROR_KEY_MAP, 'common.error'),
+            errorKey,
             errorId,
         }
     }

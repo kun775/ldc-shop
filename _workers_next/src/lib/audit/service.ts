@@ -10,10 +10,13 @@ import {
     AUDIT_EVENTS_TABLE,
     PLATFORM_ERROR_LOGS_COLUMN_DEFINITIONS,
     PLATFORM_ERROR_LOGS_CREATE_TABLE_STATEMENT,
+    PLATFORM_ERROR_LOGS_ERROR_ID_COLUMN_DEFINITION,
+    PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_STATEMENT,
     PLATFORM_ERROR_LOGS_FINGERPRINT_UNIQUE_INDEX_NAME,
     PLATFORM_ERROR_LOGS_FINGERPRINT_UNIQUE_INDEX_STATEMENT,
     PLATFORM_ERROR_LOGS_INDEX_STATEMENTS,
     PLATFORM_ERROR_LOGS_TABLE,
+    evaluateAuditBaseStructure,
     evaluateAuditStructure,
     type AuditTableStructureSnapshot,
 } from '@/lib/db/audit-schema'
@@ -165,7 +168,7 @@ async function readAuditStructure(): Promise<AuditTableStructureSnapshot> {
 }
 
 /**
- * repairAuditStructure 幂等修复审计结构（无条件 DDL）。
+ * repairAuditBaseStructure 幂等修复 0030 审计基础结构（无条件 DDL）。
  *
  * 铁律（与积分账本一致）：
  *   - **不**用版本号短路 DDL。结构标记可能领先真实结构，一旦如此，
@@ -173,13 +176,13 @@ async function readAuditStructure(): Promise<AuditTableStructureSnapshot> {
  *   - 唯一索引必须走独立 `CREATE UNIQUE INDEX IF NOT EXISTS`（不带在
  *     CREATE TABLE 里），这样历史表也能补上约束。
  */
-async function repairAuditStructure(): Promise<number> {
+async function repairAuditBaseStructure(): Promise<number> {
     const persistedVersion = await getSettingValue('audit_schema_version')
 
     // 先探测，再按需修复：探测失败（瞬时网络错误）向上抛出，
     // 不会退化成「无条件重跑一遍 DDL」。
     const snapshot = await readAuditStructure()
-    const verdict = evaluateAuditStructure(snapshot)
+    const verdict = evaluateAuditBaseStructure(snapshot)
 
     if (!snapshot.auditEventsTableExists) {
         await db.run(sql.raw(AUDIT_EVENTS_CREATE_TABLE_STATEMENT))
@@ -216,20 +219,39 @@ async function repairAuditStructure(): Promise<number> {
 
 export const AUDIT_SCHEMA_VERSION = '1'
 
+/** 0031：仅补充平台错误与用户可见 errorId 的关联能力。 */
+async function repairAuditErrorIdStructure(): Promise<number> {
+    const snapshot = await readAuditStructure()
+    const verdict = evaluateAuditStructure(snapshot)
+    const [column, definition] = PLATFORM_ERROR_LOGS_ERROR_ID_COLUMN_DEFINITION
+
+    if (!snapshot.platformErrorTableExists) {
+        throw new Error('AUDIT_BASE_STRUCTURE_NOT_READY')
+    }
+    if (!snapshot.platformErrorColumns.includes(column)) {
+        await safeAddColumn(PLATFORM_ERROR_LOGS_TABLE, column, definition)
+    }
+    await safeRunStatement(PLATFORM_ERROR_LOGS_ERROR_ID_INDEX_STATEMENT)
+    return verdict.complete ? 0 : 1
+}
+
 /**
- * ensureAuditTables 确保审计表与索引存在（isolate 级只执行一次）。
+ * ensureAuditTables 确保 0030 审计基础表与索引存在（isolate 级只执行一次）。
+ *
+ * 仅供管理员手动数据库升级或显式结构修复路径调用；普通页面、后台查询和
+ * 审计写入不得调用本函数，避免业务请求隐式执行 DDL。
  *
  * 参数:
  *   - force: 跳过 isolate 级 ready 标记，强制重新探测并修复（漂移路径使用）
  */
 export async function ensureAuditTables(options?: { force?: boolean }) {
     if (options?.force) {
-        await repairAuditStructure()
+        await repairAuditBaseStructure()
         return
     }
     if (auditSchemaReady) return
     await ensureOnce(auditSchemaState, async () => {
-        await repairAuditStructure()
+        await repairAuditBaseStructure()
     })
 }
 
@@ -267,14 +289,44 @@ export async function verifyAuditStructure(): Promise<boolean> {
     }
 }
 
+/** 只校验 0030 所拥有的基础结构，不把 0031 的列错误归属给旧升级项。 */
+export async function verifyAuditBaseStructure(): Promise<boolean> {
+    try {
+        const snapshot = await readAuditStructure()
+        return evaluateAuditBaseStructure(snapshot).complete
+    } catch (error) {
+        if (isEmptySchemaError(error)) return true
+        console.warn('[Audit] base structure verification failed:', error)
+        return true
+    }
+}
+
 /**
- * repairAuditStructureIfNeeded 按探测结果修复，完整时零 DDL。
+ * 后台查询前的只读就绪检查。
+ *
+ * 普通请求和审计写入都不得执行 DDL；未升级时明确抛出稳定错误码，由后台
+ * 展示“请先执行数据库升级”，而不是访问页面时隐式建表。
+ */
+export async function assertAuditStructureReady(): Promise<void> {
+    const snapshot = await readAuditStructure()
+    if (!evaluateAuditStructure(snapshot).complete) {
+        throw new Error('AUDIT_INFRASTRUCTURE_NOT_READY')
+    }
+}
+
+/**
+ * repairAuditStructureIfNeeded 按探测结果修复 0030 基础结构，完整时零 DDL。
  *
  * 与 ensureAuditTables 的区别：本函数**不依赖 isolate 级 ready 标记**，
  * 用于结构漂移路径下的强制复查。
  */
 export async function repairAuditStructureIfNeeded(): Promise<boolean> {
-    const repaired = await repairAuditStructure()
+    const repaired = await repairAuditBaseStructure()
+    return repaired > 0
+}
+
+export async function repairAuditErrorIdStructureIfNeeded(): Promise<boolean> {
+    const repaired = await repairAuditErrorIdStructure()
     return repaired > 0
 }
 
@@ -385,8 +437,6 @@ function extractStack(error: unknown): string | null {
 export async function writeAuditEvent(input: AuditEventInput): Promise<void> {
     if (!enterAuditWrite()) return
     try {
-        await ensureAuditTables()
-
         const resolved = resolveAuditEvent(input)
         if (!resolved.eventName) return
 
@@ -454,8 +504,6 @@ export interface PlatformErrorInput {
 export async function writePlatformError(input: PlatformErrorInput): Promise<void> {
     if (!enterAuditWrite()) return
     try {
-        await ensureAuditTables()
-
         const scope = String(input.scope ?? '').trim().slice(0, 80) || 'unknown'
         const errorCode = extractErrorCode(input.error)
         const rawMessage = input.error && typeof input.error === 'object'
@@ -473,13 +521,14 @@ export async function writePlatformError(input: PlatformErrorInput): Promise<voi
         await db.run(sql`
             INSERT INTO platform_error_logs (
                 id, fingerprint, fingerprint_bucket, scope, severity,
-                error_code, message, stack, error_chain,
+                error_id, error_code, message, stack, error_chain,
                 actor_type, actor_user_id, actor_username,
                 request_method, request_path, ip_hash, user_agent,
                 occurrence_count, first_seen_at, last_seen_at,
                 status, handled_at, handled_by, handle_note, created_at, updated_at
             ) VALUES (
                 ${createAuditId('err')}, ${fingerprint}, ${bucket}, ${scope}, ${severity},
+                ${input.errorId ? String(input.errorId).slice(0, 80) : null},
                 ${errorCode}, ${message}, ${extractStack(input.error)}, ${buildErrorChain(input.error)},
                 ${input.actorType ?? 'system'},
                 ${input.actorUserId ? String(input.actorUserId).slice(0, 120) : null},
@@ -495,6 +544,7 @@ export async function writePlatformError(input: PlatformErrorInput): Promise<voi
                 occurrence_count = platform_error_logs.occurrence_count + 1,
                 last_seen_at = ${now},
                 updated_at = ${now},
+                error_id = COALESCE(excluded.error_id, platform_error_logs.error_id),
                 message = excluded.message,
                 stack = excluded.stack,
                 error_chain = excluded.error_chain,
@@ -523,7 +573,12 @@ export async function writePlatformError(input: PlatformErrorInput): Promise<voi
  * 用于「业务失败」这一常见组合 —— 失败既要出现在用户操作视图
  * （谁在什么时候失败了），也要出现在平台错误视图（按错误 ID 追踪排查）。
  */
-export async function recordFailure(input: AuditEventInput & { error: unknown; scope: string }): Promise<void> {
+export async function recordFailure(input: AuditEventInput & {
+    error: unknown
+    scope: string
+    method?: string | null
+    path?: string | null
+}): Promise<void> {
     await Promise.all([
         writeAuditEvent({ ...input, result: 'failure' }),
         writePlatformError({
@@ -532,6 +587,8 @@ export async function recordFailure(input: AuditEventInput & { error: unknown; s
             actorType: input.actorType,
             actorUserId: input.actorUserId,
             actorUsername: input.actorUsername,
+            method: input.method,
+            path: input.path,
             ip: input.ip,
             userAgent: input.userAgent,
             errorId: input.errorId,

@@ -120,6 +120,20 @@ export const AUDIT_EVENT_DEFINITIONS: readonly AuditEventDefinition[] = [
         description: '管理员手动发货',
     },
     {
+        name: 'admin.error.handled',
+        category: 'admin',
+        severity: 'warning',
+        targetType: 'platform_error',
+        description: '管理员标记平台错误已处理',
+    },
+    {
+        name: 'admin.error.reopened',
+        category: 'admin',
+        severity: 'warning',
+        targetType: 'platform_error',
+        description: '管理员重新打开平台错误',
+    },
+    {
         name: 'coupon.created',
         category: 'coupon',
         severity: 'warning',

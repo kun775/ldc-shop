@@ -11,6 +11,7 @@ import { products } from "@/lib/db/schema"
 import { notifyAdminRefundRequest } from "@/lib/notifications"
 import { markOrderRefunded, proxyRefund } from "@/actions/refund"
 import { createUserNotification } from "@/lib/db/queries"
+import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
 
 async function ensureRefundRequestsTable() {
   await db.run(sql`
@@ -31,64 +32,142 @@ async function ensureRefundRequestsTable() {
   `)
 }
 
+class RefundRequestRejectedError extends Error {
+  constructor(
+    readonly errorKey: string,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'RefundRequestRejectedError'
+  }
+}
+
 export async function requestRefund(orderId: string, reason: string) {
   const session = await auth()
   const user = session?.user
-  if (!user?.id) throw new Error("Unauthorized")
+  const normalizedReason = (reason || '').trim()
 
-  await ensureRefundRequestsTable()
-
-  const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
-  if (!order) throw new Error("Order not found")
-  if (order.userId !== user.id) throw new Error("Unauthorized")
-
-  const status = order.status || 'pending'
-  if (status !== 'paid' && status !== 'delivered') throw new Error("Order is not refundable")
-
-  // Check 30-day limit after transaction completion (paid/delivered)
-  const completionTime = order.deliveredAt || order.paidAt || order.createdAt
-  if (completionTime) {
-    const elapsed = Date.now() - new Date(completionTime).getTime()
-    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000
-    if (elapsed > thirtyDaysMs) {
-      throw new Error("订单交易成功已超过 30 天，无法再发起退款申请")
+  try {
+    if (!user?.id) {
+      throw new RefundRequestRejectedError('refund_unauthorized', 'Unauthorized')
     }
-  }
 
-  const existing = await db.query.refundRequests.findFirst({
-    where: and(eq(refundRequests.orderId, orderId), eq(refundRequests.userId, user.id)),
-    orderBy: [desc(refundRequests.createdAt)],
-  })
-  if (existing && existing.status !== 'rejected' && existing.status !== 'processed') {
+    await ensureRefundRequestsTable()
+
+    const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
+    if (!order) {
+      throw new RefundRequestRejectedError('refund_order_not_found', 'Order not found')
+    }
+    if (order.userId !== user.id) {
+      throw new RefundRequestRejectedError('refund_unauthorized', 'Unauthorized')
+    }
+
+    const status = order.status || 'pending'
+    if (status !== 'paid' && status !== 'delivered') {
+      throw new RefundRequestRejectedError('refund_not_allowed', 'Order is not refundable')
+    }
+
+    // Check 30-day limit after transaction completion (paid/delivered)
+    const completionTime = order.deliveredAt || order.paidAt || order.createdAt
+    if (completionTime) {
+      const elapsed = Date.now() - new Date(completionTime).getTime()
+      const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000
+      if (elapsed > thirtyDaysMs) {
+        throw new RefundRequestRejectedError(
+          'refund_expired',
+          '订单交易成功已超过 30 天，无法再发起退款申请',
+        )
+      }
+    }
+
+    const existing = await db.query.refundRequests.findFirst({
+      where: and(eq(refundRequests.orderId, orderId), eq(refundRequests.userId, user.id)),
+      orderBy: [desc(refundRequests.createdAt)],
+    })
+    if (existing && existing.status !== 'rejected' && existing.status !== 'processed') {
+      await recordAuditEvent({
+        eventName: 'refund.requested',
+        actorType: 'user',
+        actorUserId: user.id,
+        actorUsername: user.username ?? null,
+        targetId: orderId,
+        source: 'refund.request',
+        metadata: { orderId, status: existing.status || 'pending' },
+      })
+      return { ok: true }
+    }
+
+    await db.insert(refundRequests).values({
+      orderId,
+      userId: user.id,
+      username: user.username || null,
+      reason: normalizedReason || null,
+      status: 'pending',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    await recordAuditEvent({
+      eventName: 'refund.requested',
+      actorType: 'user',
+      actorUserId: user.id,
+      actorUsername: user.username ?? null,
+      targetId: orderId,
+      source: 'refund.request',
+      metadata: {
+        orderId,
+        reason: normalizedReason.slice(0, 200),
+        status: 'pending',
+      },
+    })
+
+    const product = await db.query.products.findFirst({
+      where: eq(products.id, order.productId),
+      columns: { name: true }
+    })
+
+    await notifyAdminRefundRequest({
+      orderId,
+      productName: product?.name || 'Unknown',
+      amount: order.amount,
+      username: user.username,
+      reason: normalizedReason || null
+    })
+
+    revalidatePath(`/order/${orderId}`)
+    revalidatePath('/admin/refunds')
     return { ok: true }
+  } catch (error) {
+    if (error instanceof RefundRequestRejectedError) {
+      await recordAuditEvent({
+        eventName: 'refund.requested',
+        result: 'failure',
+        actorType: 'user',
+        actorUserId: user?.id ?? null,
+        actorUsername: user?.username ?? null,
+        targetId: orderId || null,
+        errorKey: error.errorKey,
+        source: 'refund.request',
+        metadata: { orderId, status: 'rejected' },
+      })
+      throw error
+    }
+
+    await recordServerError('refund.request', error, {
+      actorType: 'user',
+      actorUserId: user?.id ?? null,
+      actorUsername: user?.username ?? null,
+      auditEvent: {
+        eventName: 'refund.requested',
+        actorType: 'user',
+        actorUserId: user?.id ?? null,
+        actorUsername: user?.username ?? null,
+        targetId: orderId || null,
+        source: 'refund.request',
+      },
+    })
+    throw error
   }
-
-  await db.insert(refundRequests).values({
-    orderId,
-    userId: user.id,
-    username: user.username || null,
-    reason: (reason || '').trim() || null,
-    status: 'pending',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  })
-
-  const product = await db.query.products.findFirst({
-    where: eq(products.id, order.productId),
-    columns: { name: true }
-  })
-
-  await notifyAdminRefundRequest({
-    orderId,
-    productName: product?.name || 'Unknown',
-    amount: order.amount,
-    username: user.username,
-    reason: reason || null
-  })
-
-  revalidatePath(`/order/${orderId}`)
-  revalidatePath('/admin/refunds')
-  return { ok: true }
 }
 
 export async function adminApproveRefund(requestId: number, adminNote?: string) {
@@ -121,6 +200,20 @@ export async function adminApproveRefund(requestId: number, adminNote?: string) 
     updatedAt: new Date(),
   }).where(eq(refundRequests.id, requestId))
 
+  await recordAuditEvent({
+    eventName: 'refund.approved',
+    actorType: 'admin',
+    actorUserId: session?.user?.id ?? null,
+    actorUsername: username,
+    targetId: String(requestId),
+    source: 'admin.refunds',
+    metadata: {
+      refundId: requestId,
+      orderId: order.orderId,
+      status: 'approved',
+    },
+  })
+
   if (order.userId) {
     await createUserNotification({
       userId: order.userId,
@@ -151,8 +244,27 @@ export async function adminApproveRefund(requestId: number, adminNote?: string) 
       return { ok: true, processed: true }
     }
     return { ok: true, processed: false, error: sanitizeClientErrorMessage(result?.message, 'refund_failed') }
-  } catch (e: any) {
-    return { ok: true, processed: false, error: sanitizeClientErrorMessage(e?.message, 'refund_failed') }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : null
+    await recordServerError('refund.proxy', error, {
+      actorType: 'admin',
+      actorUserId: session?.user?.id ?? null,
+      actorUsername: username,
+      auditEvent: {
+        eventName: 'refund.completed',
+        actorType: 'admin',
+        actorUserId: session?.user?.id ?? null,
+        actorUsername: username,
+        targetId: String(requestId),
+        source: 'admin.refunds',
+        metadata: { refundId: requestId, orderId: order.orderId },
+      },
+    })
+    return {
+      ok: true,
+      processed: false,
+      error: sanitizeClientErrorMessage(errorMessage, 'refund_failed'),
+    }
   }
 }
 
@@ -182,6 +294,20 @@ export async function adminRejectRefund(requestId: number, adminNote?: string) {
     adminNote: adminNote || null,
     updatedAt: new Date(),
   }).where(eq(refundRequests.id, requestId))
+
+  await recordAuditEvent({
+    eventName: 'refund.rejected',
+    actorType: 'admin',
+    actorUserId: session?.user?.id ?? null,
+    actorUsername: username,
+    targetId: String(requestId),
+    source: 'admin.refunds',
+    metadata: {
+      refundId: requestId,
+      orderId: req.orderId,
+      status: 'rejected',
+    },
+  })
 
   if (order?.userId) {
     const note = (adminNote || "").trim()

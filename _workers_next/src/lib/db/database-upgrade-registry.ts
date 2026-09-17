@@ -20,6 +20,12 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
         description: '新增 audit_events 与 platform_error_logs 两张审计表及全部查询索引，建立事件记录与错误聚合的持久化基础。',
         verifiesStructure: true,
     },
+    {
+        id: '0031_audit_error_id_lookup',
+        name: '平台错误 ID 查询',
+        description: '为平台错误日志新增用户可见错误 ID 字段与查询索引，支持从前台错误编号直接定位后台日志。',
+        verifiesStructure: true,
+    },
 ] as const
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']

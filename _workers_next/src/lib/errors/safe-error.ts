@@ -100,9 +100,34 @@ export function resolveClientActionErrorKey(
  *   - error: 原始错误对象
  *   - errorId: 可选，复用已生成的 ID
  */
-export function logServerError(scope: string, error: unknown, errorId?: string): string {
+export function logServerError(
+    scope: string,
+    error: unknown,
+    errorId?: string,
+    options?: { persist?: boolean },
+): string {
     const id = errorId || createErrorId()
     console.error(`[${scope}] errorId=${id}`, error)
+    if (options?.persist !== false) {
+        void Promise.all([
+            import('@/lib/audit/service'),
+            import('@/lib/audit/request-context'),
+        ]).then(async ([audit, requestContext]) => {
+            const context = await requestContext.getAuditRequestContext()
+            await audit.writePlatformError({
+                scope,
+                error,
+                errorId: id,
+                method: context.method,
+                path: context.path,
+                ip: context.ip,
+                userAgent: context.userAgent,
+            })
+        }).catch((persistError) => {
+            // 不能调用 logServerError，否则平台日志故障会递归放大。
+            console.error('[Audit] failed to persist server error', scope, persistError)
+        })
+    }
     return id
 }
 

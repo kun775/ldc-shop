@@ -3,6 +3,7 @@ import GitHub from "next-auth/providers/github"
 import { sql } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { loginUsers } from "@/lib/db/schema"
+import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
 
 const githubClientId = process.env.GITHUB_ID || process.env.AUTH_GITHUB_ID
 const githubClientSecret = process.env.GITHUB_SECRET || process.env.AUTH_GITHUB_SECRET
@@ -355,6 +356,22 @@ if (githubClientId && githubClientSecret) {
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
     providers,
+    events: {
+        async signIn({ user, account }) {
+            await recordAuditEvent({
+                eventName: 'auth.login',
+                actorType: 'user',
+                actorUserId: user.id ? String(user.id) : null,
+                actorUsername: user.username ? String(user.username) : null,
+                targetId: user.id ? String(user.id) : null,
+                source: 'auth',
+                metadata: {
+                    provider: account?.provider || null,
+                    status: 'success',
+                },
+            })
+        },
+    },
     callbacks: {
         async jwt({ token, user, profile, account }) {
             if (user) {
@@ -467,6 +484,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                 // Auth.js puts provider details under error.cause when available.
                 cause: (error as Error & { cause?: unknown }).cause,
                 stack: error.stack,
+            })
+            void recordServerError('auth.login', error, {
+                actorType: 'system',
+                auditEvent: {
+                    eventName: 'auth.login',
+                    actorType: 'system',
+                    source: 'auth',
+                },
             })
         },
     },
