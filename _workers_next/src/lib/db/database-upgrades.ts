@@ -9,6 +9,7 @@ import {
     DATABASE_UPGRADE_DEFINITIONS,
     DATABASE_UPGRADE_RUNNING_TIMEOUT_MS,
     type DatabaseUpgradeId,
+    type DatabaseUpgradeHealth,
     type DatabaseUpgradeRecord,
     type DatabaseUpgradeStatus,
 } from './database-upgrade-registry'
@@ -113,10 +114,10 @@ export async function readDatabaseUpgradeRecords(): Promise<DatabaseUpgradeRecor
     }
 }
 
-export async function readDatabaseUpgradeStatus(structureHealthy: boolean): Promise<DatabaseUpgradeStatus> {
+export async function readDatabaseUpgradeStatus(structureHealth: DatabaseUpgradeHealth): Promise<DatabaseUpgradeStatus> {
     return buildDatabaseUpgradeStatus(
         await readDatabaseUpgradeRecords(),
-        structureHealthy,
+        structureHealth,
     )
 }
 
@@ -204,12 +205,12 @@ async function markDatabaseUpgradeFailed(
 
 export async function executeDatabaseUpgrades(input: {
     executors: DatabaseUpgradeExecutors
-    verifyStructure: () => Promise<boolean>
+    verifyStructures: () => Promise<DatabaseUpgradeHealth>
 }): Promise<DatabaseUpgradeRunResult> {
     await ensureDatabaseMigrationsTable()
 
-    let structureHealthy = await input.verifyStructure()
-    const initialStatus = await readDatabaseUpgradeStatus(structureHealthy)
+    let structureHealth = await input.verifyStructures()
+    const initialStatus = await readDatabaseUpgradeStatus(structureHealth)
     const result: DatabaseUpgradeRunResult = {
         appliedIds: [],
         skippedIds: [],
@@ -230,12 +231,12 @@ export async function executeDatabaseUpgrades(input: {
 
         const startedAt = Date.now()
         try {
-            await input.executors[item.id]({ structureHealthy })
+            await input.executors[item.id]({ structureHealthy: structureHealth[item.id] })
             const definition = DATABASE_UPGRADE_DEFINITIONS.find((entry) => entry.id === item.id)
             if (definition?.verifiesStructure) {
-                structureHealthy = await input.verifyStructure()
-                if (!structureHealthy) {
-                    throw new Error('DATABASE_SCHEMA_VERIFY_FAILED')
+                structureHealth = await input.verifyStructures()
+                if (!structureHealth[item.id]) {
+                    throw new Error(`DATABASE_SCHEMA_VERIFY_FAILED:${item.id}`)
                 }
             }
             await markDatabaseUpgradeApplied(item.id, claimId, startedAt)

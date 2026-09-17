@@ -24,6 +24,7 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']
 export type DatabaseUpgradeState = 'pending' | 'running' | 'applied' | 'failed'
+export type DatabaseUpgradeHealth = Record<DatabaseUpgradeId, boolean>
 
 export interface DatabaseUpgradeRecord {
     id: string
@@ -70,28 +71,35 @@ export function supportsRegisteredDatabaseUpgrades(schemaVersion: number | null)
 
 export function buildDatabaseUpgradeStatus(
     records: DatabaseUpgradeRecord[],
-    structureHealthy: boolean,
+    structureHealth: DatabaseUpgradeHealth,
     checkedAt: number = Date.now(),
 ): DatabaseUpgradeStatus {
     const recordsById = new Map(records.map((record) => [record.id, record]))
 
     const items = DATABASE_UPGRADE_DEFINITIONS.map((definition): DatabaseUpgradeItem => {
         const record = recordsById.get(definition.id)
-        const repairRequired = definition.verifiesStructure
-            && record?.status === 'applied'
-            && !structureHealthy
-
+        const itemHealthy = structureHealth[definition.id]
         let status: DatabaseUpgradeState = record?.status || 'pending'
+        let errorId = record?.errorId || null
         let errorMessage = record?.errorMessage || null
+        let repairRequired = false
+        const staleRunning = status === 'running'
+            && !!record?.startedAt
+            && checkedAt - record.startedAt >= DATABASE_UPGRADE_RUNNING_TIMEOUT_MS
 
-        if (repairRequired) {
+        if (status === 'running' && !staleRunning) {
+            // 仍在有效声明窗口内，保持 running，避免并发管理员重复执行。
+        } else if (itemHealthy) {
+            // 真实结构优先于历史记录。兼容升级注册表建立前已完成的结构，
+            // 也修复“后续升级漂移导致早期升级被误标失败”的历史状态。
+            status = 'applied'
+            errorId = null
+            errorMessage = null
+        } else if (record?.status === 'applied') {
+            repairRequired = definition.verifiesStructure
             status = 'pending'
             errorMessage = '检测到数据库结构不完整，需要重新执行结构修复。'
-        } else if (
-            status === 'running'
-            && record?.startedAt
-            && checkedAt - record.startedAt >= DATABASE_UPGRADE_RUNNING_TIMEOUT_MS
-        ) {
+        } else if (staleRunning) {
             status = 'failed'
             errorMessage = '上次升级执行已中断，可以重新执行。'
         }
@@ -105,7 +113,7 @@ export function buildDatabaseUpgradeStatus(
             startedAt: record?.startedAt || null,
             executedAt: record?.executedAt || null,
             durationMs: record?.durationMs || null,
-            errorId: record?.errorId || null,
+            errorId,
             errorMessage,
         }
     })
@@ -114,6 +122,9 @@ export function buildDatabaseUpgradeStatus(
     const running = items.filter((item) => item.status === 'running').length
     const failed = items.filter((item) => item.status === 'failed').length
     const pending = items.filter((item) => item.status === 'pending' || item.status === 'failed').length
+    const structureHealthy = DATABASE_UPGRADE_DEFINITIONS.every(
+        (definition) => structureHealth[definition.id],
+    )
 
     return {
         total: items.length,

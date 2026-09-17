@@ -2,9 +2,9 @@ import { db } from "./index";
 import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger, refundRequests, userMessages } from "./schema";
 import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/lib/constants";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema, repairPointLedgerStructureIfNeeded, resetPointLedgerSchemaReady, verifyPointLedgerStructure } from "@/lib/points/ledger-db";
-import { ensureAuditTables, repairAuditStructureIfNeeded, resetAuditSchemaReady, verifyAuditStructure } from "@/lib/audit/service";
+import { repairAuditStructureIfNeeded, resetAuditSchemaReady, verifyAuditStructure } from "@/lib/audit/service";
 import { createAsyncOnceState, ensureOnce, parseSchemaVersion } from "@/lib/runtime/async-once";
-import { SCHEMA_DRIFT_PROBES, isSchemaDriftError } from "./schema-drift";
+import { BASELINE_SCHEMA_DRIFT_PROBES, isSchemaDriftError } from "./schema-drift";
 import {
     COUPON_COUNTER_RECONCILIATION_STATEMENTS,
     COUPON_USAGE_TRIGGER_NAMES,
@@ -14,7 +14,7 @@ import { MANUAL_STOCK_TRIGGER_NAMES, MANUAL_STOCK_TRIGGER_STATEMENTS } from "@/l
 import { LOGIN_USERS_COLUMN_DEFINITIONS, LOGIN_USERS_CREATE_TABLE_STATEMENT } from "./login-users-schema";
 import { collectErrorText, isDuplicateColumnError } from "./error-utils";
 import { executeDatabaseUpgrades, ensureDatabaseMigrationsTable, readDatabaseUpgradeStatus } from "./database-upgrades";
-import { supportsRegisteredDatabaseUpgrades } from "./database-upgrade-registry";
+import { supportsRegisteredDatabaseUpgrades, type DatabaseUpgradeHealth } from "./database-upgrade-registry";
 import { isMissingRelationError } from "./schema-errors";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
@@ -75,11 +75,9 @@ function resetSchemaReadyFlags() {
     wishlistTablesReady = false;
     reviewRepliesEnsureState.ready = false;
     reviewRepliesEnsureState.pending = null;
-    // 积分账本的 ready 标记不在本模块内，必须显式复位，
-    // 否则 ensureStructuralSchema 里的 ensureUserPointLedgerSchema 会被短路，
-    // 使漂移修复路径无法真正重建积分表结构（历史故障即由此产生）。
+    // 积分账本和审计模块各自维护 isolate 级 ready 标记；管理员在同一
+    // isolate 内继续执行独立升级项时必须重新探测，不能沿用旧就绪状态。
     resetPointLedgerSchemaReady();
-    // 审计表的 ready 标记同理：不复位则漂移路径无法补建审计表。
     resetAuditSchemaReady();
 
     for (const key of Object.keys(columnEnsureState) as ColumnEnsureKey[]) {
@@ -88,24 +86,12 @@ function resetSchemaReadyFlags() {
     }
 }
 
-// detectSchemaDrift 做一次廉价只读探测，判断真实结构是否落后于版本号
-//
-// 元数据:
-//   - 作者: Codex
-//   - 创建时间: 2026-09-17
-//   - 更新内容: 新增结构漂移探测，修复「版本号达标即永久跳过迁移」的隐患。
-//
-// 安全: 只有明确的缺表/缺列错误才算漂移；瞬时错误（网络/限流/超时）一律按无漂移处理。
-async function detectSchemaDrift(): Promise<boolean> {
-    for (const probe of SCHEMA_DRIFT_PROBES) {
+async function verifyBaselineDatabaseStructure(): Promise<boolean> {
+    for (const probe of BASELINE_SCHEMA_DRIFT_PROBES) {
         try {
             await db.run(sql.raw(probe));
-        } catch (error: any) {
-            if (isSchemaDriftError(error)) {
-                console.warn(`[DB] schema drift probe failed: ${probe}`);
-                return true;
-            }
-            // 非结构类错误：忽略，避免把偶发故障升级为全量迁移
+        } catch (error: unknown) {
+            if (isSchemaDriftError(error)) return false;
         }
     }
 
@@ -117,24 +103,26 @@ async function detectSchemaDrift(): Promise<boolean> {
         };
         const rows = queryResult.results || queryResult.rows || [];
         const triggerNames = new Set(rows.map((row) => String(row.name || '')));
-        if (
+        return !(
             COUPON_USAGE_TRIGGER_NAMES.some((name) => !triggerNames.has(name))
             || MANUAL_STOCK_TRIGGER_NAMES.some((name) => !triggerNames.has(name))
-        ) {
-            return true;
-        }
-        // 积分账本要「表 + 全部列 + 索引 + 余额触发器（含余额不足守卫）」四者齐全。
-        // 只校验触发器名字不够：早期版本触发器缺少 changes() = 0 守卫，
-        // 会让余额静默变负或变更丢失，必须判定为漂移并触发重建。
-        if (!(await verifyPointLedgerStructure())) return true;
-        // 审计表要「两张表 + 全部列 + 全部索引 + 指纹唯一索引」齐全。
-        // 索引无法用 SELECT 探测（缺索引不会让查询报错），因此单独只读校验。
-        if (!(await verifyAuditStructure())) return true;
+        );
     } catch (error: unknown) {
-        if (isSchemaDriftError(error)) return true;
-        // 与列探测一致，瞬时错误不触发结构迁移
+        return !isSchemaDriftError(error);
     }
-    return false;
+}
+
+async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth> {
+    const [baseline, pointLedger, audit] = await Promise.all([
+        verifyBaselineDatabaseStructure(),
+        verifyPointLedgerStructure(),
+        verifyAuditStructure(),
+    ]);
+    return {
+        '0028_database_upgrade_registry': baseline,
+        '0029_point_ledger_balance_trigger': pointLedger,
+        '0030_audit_infrastructure': audit,
+    };
 }
 
 async function getPersistedSchemaVersion(): Promise<number | null> {
@@ -308,12 +296,6 @@ async function ensureStructuralSchema() {
     await ensureUserMessagesTable();
     await ensureBroadcastTables();
     await ensureWishlistTables();
-    await ensureUserPointLedgerSchema();
-    await ensureAuditTables();
-}
-
-async function verifyCurrentDatabaseStructure() {
-    return !(await detectSchemaDrift());
 }
 
 async function runRegisteredDatabaseUpgrades() {
@@ -344,12 +326,12 @@ async function runRegisteredDatabaseUpgrades() {
                 await repairAuditStructureIfNeeded();
             },
         },
-        verifyStructure: verifyCurrentDatabaseStructure,
+        verifyStructures: verifyDatabaseUpgradeStructures,
     });
 }
 
 export async function getDatabaseUpgradeStatus() {
-    return readDatabaseUpgradeStatus(await verifyCurrentDatabaseStructure());
+    return readDatabaseUpgradeStatus(await verifyDatabaseUpgradeStructures());
 }
 
 export async function runPendingDatabaseUpgrades() {

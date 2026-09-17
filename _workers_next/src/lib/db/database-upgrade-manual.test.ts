@@ -41,6 +41,15 @@ test('registered upgrades run only after the manual upgrade preparation path', (
     assert.match(body, /await runRegisteredDatabaseUpgrades\(\)/)
 })
 
+test('registered upgrades use per-item structure verification', () => {
+    const querySource = readSource('./queries.ts')
+    const runnerSource = readSource('./database-upgrades.ts')
+
+    assert.match(querySource, /verifyStructures:\s*verifyDatabaseUpgradeStructures/)
+    assert.match(runnerSource, /structureHealth\[item\.id\]/)
+    assert.doesNotMatch(runnerSource, /if \(!structureHealthy\)/)
+})
+
 test('reading upgrade status does not create or alter migration tables', () => {
     const source = readSource('./queries.ts')
     const body = functionSource(

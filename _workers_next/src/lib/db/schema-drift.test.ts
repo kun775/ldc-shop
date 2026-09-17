@@ -2,7 +2,14 @@ import test from "node:test"
 import assert from "node:assert/strict"
 
 const mod = await import(new URL("./schema-drift.ts", import.meta.url).href)
-const { SCHEMA_DRIFT_PROBES, isSchemaDriftError, shouldReRunIncrementalMigration } = mod
+const {
+    AUDIT_SCHEMA_DRIFT_PROBES,
+    BASELINE_SCHEMA_DRIFT_PROBES,
+    POINT_LEDGER_SCHEMA_DRIFT_PROBES,
+    SCHEMA_DRIFT_PROBES,
+    isSchemaDriftError,
+    shouldReRunIncrementalMigration,
+} = mod
 
 test("drift probes are read-only and never read rows", () => {
     assert.ok(SCHEMA_DRIFT_PROBES.length > 0)
@@ -49,6 +56,21 @@ test("drift probes cover the objects that historically went missing", () => {
         assert.ok(joined.includes(required), `missing drift probe coverage: ${required}`)
     }
     assert.ok(!/\boperator_id\b/.test(joined), 'legacy operator_id probe would force permanent drift')
+})
+
+test('upgrade-specific probes do not leak into the 0028 baseline scope', () => {
+    const baseline = BASELINE_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
+    const points = POINT_LEDGER_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
+    const audit = AUDIT_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
+
+    assert.ok(baseline.includes('products'))
+    assert.ok(baseline.includes('database_migrations'))
+    assert.ok(!baseline.includes('user_point_ledger'))
+    assert.ok(!baseline.includes('audit_events'))
+    assert.ok(!baseline.includes('platform_error_logs'))
+    assert.ok(points.includes('user_point_ledger'))
+    assert.ok(audit.includes('audit_events'))
+    assert.ok(audit.includes('platform_error_logs'))
 })
 
 test("missing table/column errors are recognised as drift", () => {

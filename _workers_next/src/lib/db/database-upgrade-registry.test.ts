@@ -10,6 +10,12 @@ const {
     supportsRegisteredDatabaseUpgrades,
 } = registry
 
+function health() {
+    return Object.fromEntries(
+        DATABASE_UPGRADE_DEFINITIONS.map((definition: { id: string }) => [definition.id, true]),
+    ) as Record<string, boolean>
+}
+
 function appliedRecord(definitionIndex = 0) {
     const definition = DATABASE_UPGRADE_DEFINITIONS[definitionIndex]
     return {
@@ -79,7 +85,7 @@ test('registered upgrades start from the schema version before the registry was 
 })
 
 test('applied upgrade remains applied when structure is healthy', () => {
-    const status = buildDatabaseUpgradeStatus(allAppliedRecords(), true, 1_000)
+    const status = buildDatabaseUpgradeStatus(allAppliedRecords(), health(), 1_000)
     assert.equal(status.total, DATABASE_UPGRADE_DEFINITIONS.length)
     assert.equal(status.applied, DATABASE_UPGRADE_DEFINITIONS.length)
     assert.equal(status.pending, 0)
@@ -88,13 +94,40 @@ test('applied upgrade remains applied when structure is healthy', () => {
     }
 })
 
-test('applied structural upgrade becomes pending when drift is detected', () => {
-    const status = buildDatabaseUpgradeStatus(allAppliedRecords(), false, 1_000)
-    assert.equal(status.applied, 0)
-    assert.equal(status.pending, DATABASE_UPGRADE_DEFINITIONS.length)
+test('drift only reopens the upgrade item that owns the missing structure', () => {
+    const structureHealth = health()
+    structureHealth['0029_point_ledger_balance_trigger'] = false
+    const status = buildDatabaseUpgradeStatus(allAppliedRecords(), structureHealth, 1_000)
+
+    assert.equal(status.applied, DATABASE_UPGRADE_DEFINITIONS.length - 1)
+    assert.equal(status.pending, 1)
+    assert.equal(status.structureHealthy, false)
     for (const item of status.items) {
-        assert.equal(item.status, 'pending')
-        assert.equal(item.repairRequired, true)
+        if (item.id === '0029_point_ledger_balance_trigger') {
+            assert.equal(item.status, 'pending')
+            assert.equal(item.repairRequired, true)
+        } else {
+            assert.equal(item.status, 'applied')
+            assert.equal(item.repairRequired, false)
+        }
+    }
+})
+
+test('healthy structure overrides missing or failed historical records', () => {
+    const failed = {
+        ...appliedRecord(0),
+        status: 'failed',
+        errorId: 'old-error',
+        errorMessage: 'old failure',
+    }
+    const status = buildDatabaseUpgradeStatus([failed], health(), 1_000)
+
+    assert.equal(status.applied, DATABASE_UPGRADE_DEFINITIONS.length)
+    assert.equal(status.pending, 0)
+    for (const item of status.items) {
+        assert.equal(item.status, 'applied')
+        assert.equal(item.errorId, null)
+        assert.equal(item.errorMessage, null)
     }
 })
 
@@ -106,16 +139,11 @@ test('stale running upgrade becomes retryable failure', () => {
         startedAt: 1_000,
     }
     const checkedAt = 1_000 + DATABASE_UPGRADE_RUNNING_TIMEOUT_MS
-    const status = buildDatabaseUpgradeStatus([record], true, checkedAt)
+    const structureHealth = health()
+    structureHealth[DATABASE_UPGRADE_DEFINITIONS[0].id] = false
+    const status = buildDatabaseUpgradeStatus([record], structureHealth, checkedAt)
     assert.equal(status.running, 0)
     assert.equal(status.failed, 1)
-    // 注意：现有实现的 pending 语义是「尚未成功 = pending 或 failed」，
-    // 因此过期的 failed 项也计入 pending（管理员可重试）。
-    // 这是既有行为，本次不改动，仅在此显式固化以免被误认为 bug。
-    assert.equal(status.pending, status.total)
-    assert.equal(
-        status.pending,
-        DATABASE_UPGRADE_DEFINITIONS.length,
-        'failed items remain retryable and therefore count as pending',
-    )
+    assert.equal(status.pending, 1, 'only the stale item remains retryable')
+    assert.equal(status.applied, DATABASE_UPGRADE_DEFINITIONS.length - 1)
 })

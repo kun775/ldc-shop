@@ -29,7 +29,7 @@ import { collectErrorText } from "./error-utils.ts"
  * `verifyPointLedgerStructure()`（读 sqlite_master + PRAGMA table_info）
  * 在 `queries.ts` 中单独校验。
  */
-export const SCHEMA_DRIFT_PROBES: readonly string[] = [
+export const BASELINE_SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT compare_at_price, purchase_warning, is_shared, visibility_level, point_discount_enabled, point_discount_percent, manual_stock_count, stock_count, locked_count, sold_count, rating, review_count, variant_group_id, variant_label, purchase_questions, product_images, checkout_fields, fulfillment_mode FROM products LIMIT 0",
     "SELECT points_used, current_payment_id, payee, card_ids, checkout_field_values, fulfillment_mode, manual_stock_quantity, delivery_note, fulfillment_claim_id, fulfillment_claimed_at, subtotal_amount_cents, coupon_discount_amount_cents, points_discount_amount_cents, pricing_snapshot FROM orders LIMIT 0",
     "SELECT reserved_order_id, reserved_at, expires_at FROM cards LIMIT 0",
@@ -42,11 +42,23 @@ export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT coupon_id, product_id, created_at FROM coupon_products LIMIT 0",
     "SELECT coupon_id, order_id, user_id, username, status, sequence, reservation_id, reservation_expires_at, coupon_code_snapshot, rule_snapshot, eligible_amount_cents, discount_amount_cents, reserved_at, consumed_at, released_at, reversed_at, reason, created_at FROM coupon_usages LIMIT 0",
     "SELECT coupon_id, user_id, reserved_count, consumed_count, updated_at FROM coupon_user_counters LIMIT 0",
-    "SELECT event_type, delta, balance_after, business_key, source_type, source_id, reason, operator_user_id, operator_username, metadata, status, claim_id, claimed_at, created_at FROM user_point_ledger LIMIT 0",
     "SELECT user_id, points, last_checkin_at, consecutive_days FROM login_users LIMIT 0",
     "SELECT name, description, status, claim_id, started_at, executed_at, duration_ms, error_id, error_message, updated_at FROM database_migrations LIMIT 0",
+]
+
+export const POINT_LEDGER_SCHEMA_DRIFT_PROBES: readonly string[] = [
+    "SELECT event_type, delta, balance_after, business_key, source_type, source_id, reason, operator_user_id, operator_username, metadata, status, claim_id, claimed_at, created_at FROM user_point_ledger LIMIT 0",
+]
+
+export const AUDIT_SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT event_name, category, severity, result, actor_type, actor_user_id, actor_username, target_type, target_id, error_id, error_key, source, ip_hash, user_agent, metadata, created_at FROM audit_events LIMIT 0",
     "SELECT fingerprint, fingerprint_bucket, scope, severity, error_code, message, stack, error_chain, actor_type, actor_user_id, actor_username, request_method, request_path, ip_hash, user_agent, occurrence_count, first_seen_at, last_seen_at, status, handled_at, handled_by, handle_note, created_at, updated_at FROM platform_error_logs LIMIT 0",
+]
+
+export const SCHEMA_DRIFT_PROBES: readonly string[] = [
+    ...BASELINE_SCHEMA_DRIFT_PROBES,
+    ...POINT_LEDGER_SCHEMA_DRIFT_PROBES,
+    ...AUDIT_SCHEMA_DRIFT_PROBES,
 ]
 
 /**
