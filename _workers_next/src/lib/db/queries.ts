@@ -3,6 +3,7 @@ import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, 
 import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/lib/constants";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema } from "@/lib/points/ledger-db";
 import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once";
+import { SCHEMA_DRIFT_PROBES, isSchemaDriftError, shouldReRunIncrementalMigration } from "./schema-drift";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -23,6 +24,8 @@ const columnEnsureState: Record<ColumnEnsureKey, { ready: boolean; pending: Prom
 };
 const reviewRepliesEnsureState = { ready: false, pending: null as Promise<void> | null };
 let persistedSchemaVersion: number | null = null;
+// 探测到「版本号领先于真实结构」时置为 true，用于在本次迁移中放行各 ensure* 的版本门控
+let schemaDriftDetected = false;
 
 function primePersistedSchemaVersion(version: number | null) {
     persistedSchemaVersion = version;
@@ -42,6 +45,52 @@ function markCurrentSchemaReady(version: number = CURRENT_SCHEMA_VERSION) {
         columnEnsureState[key].ready = true;
         columnEnsureState[key].pending = null;
     }
+}
+
+// resetSchemaReadyFlags 复位所有「已就绪」标记
+//
+// 元数据:
+//   - 作者: Codex
+//   - 创建时间: 2026-09-17
+//   - 更新内容: 新增漂移修复路径所需的标记复位，使各 ensure* 真正执行 DDL。
+//
+// 说明: hasCurrentSchemaVersion() 会通过 markCurrentSchemaReady() 把所有标记置为 ready，
+// 而各 ensure* 又以这些标记做快速返回。发现结构漂移后必须先复位，
+// 否则增量迁移会被逐个短路，缺表/缺列依然补不上。
+function resetSchemaReadyFlags() {
+    dbInitialized = false;
+    loginUsersSchemaReady = false;
+    wishlistTablesReady = false;
+    reviewRepliesEnsureState.ready = false;
+    reviewRepliesEnsureState.pending = null;
+
+    for (const key of Object.keys(columnEnsureState) as ColumnEnsureKey[]) {
+        columnEnsureState[key].ready = false;
+        columnEnsureState[key].pending = null;
+    }
+}
+
+// detectSchemaDrift 做一次廉价只读探测，判断真实结构是否落后于版本号
+//
+// 元数据:
+//   - 作者: Codex
+//   - 创建时间: 2026-09-17
+//   - 更新内容: 新增结构漂移探测，修复「版本号达标即永久跳过迁移」的隐患。
+//
+// 安全: 只有明确的缺表/缺列错误才算漂移；瞬时错误（网络/限流/超时）一律按无漂移处理。
+async function detectSchemaDrift(): Promise<boolean> {
+    for (const probe of SCHEMA_DRIFT_PROBES) {
+        try {
+            await db.run(sql.raw(probe));
+        } catch (error: any) {
+            if (isSchemaDriftError(error)) {
+                console.warn(`[DB] schema drift probe failed: ${probe}`);
+                return true;
+            }
+            // 非结构类错误：忽略，避免把偶发故障升级为全量迁移
+        }
+    }
+    return false;
 }
 
 async function getPersistedSchemaVersion(): Promise<number | null> {
@@ -72,7 +121,8 @@ async function hasCurrentSchemaVersion() {
 async function ensureColumnsOnce(key: ColumnEnsureKey, task: () => Promise<void>) {
     const state = columnEnsureState[key];
     if (state.ready) return;
-    if (await hasCurrentSchemaVersion()) return;
+    // 结构漂移时必须放行：版本号达标不代表列已存在
+    if (!schemaDriftDetected && await hasCurrentSchemaVersion()) return;
     if (state.pending) {
         await state.pending;
         return;
@@ -171,7 +221,7 @@ async function ensureIndexes() {
 
 async function ensureReviewRepliesTable() {
     if (reviewRepliesEnsureState.ready) return;
-    if (await hasCurrentSchemaVersion()) return;
+    if (!schemaDriftDetected && await hasCurrentSchemaVersion()) return;
     if (reviewRepliesEnsureState.pending) {
         await reviewRepliesEnsureState.pending;
         return;
@@ -203,14 +253,35 @@ async function ensureReviewRepliesTable() {
     }
 }
 
+// ensureStructuralSchema 确保所有表、列与索引等结构对象存在（全部幂等）
+//
+// 元数据:
+//   - 作者: Codex
+//   - 创建时间: 2026-09-17
+//   - 更新内容: 从 ensureDatabaseInitialized 中抽出，供正常迁移与漂移修复两条路径复用。
+async function ensureStructuralSchema() {
+    await ensureProductsColumns();
+    await ensureOrdersColumns();
+    await ensureOrderDeliveryFilesTable();
+    await ensureCouponTables();
+    await ensureCardsColumns();
+    await ensureCardKeyDuplicatesAllowed();
+    await ensureLoginUsersTable();
+    await ensureLoginUsersColumns();
+    loginUsersSchemaReady = true;
+    await ensureUserNotificationsTable();
+    await ensureAdminMessagesTable();
+    await ensureUserMessagesTable();
+    await ensureBroadcastTables();
+    await ensureWishlistTables();
+}
+
 // Auto-initialize database on first query
 export async function ensureDatabaseInitialized() {
     if (dbInitialized) return;
 
     await ensureOnce(dbInitializationState, async () => {
-        if (await hasCurrentSchemaVersion()) {
-            return;
-        }
+        const versionSatisfied = await hasCurrentSchemaVersion();
 
         let tableExists = false;
         try {
@@ -222,35 +293,50 @@ export async function ensureDatabaseInitialized() {
         }
 
         if (tableExists) {
+            // 版本号可能领先于真实结构（历史手工置位 / 迁移中断），
+            // 因此版本达标时再做一次廉价探测；结构一致才走快速路径。
+            let driftDetected = false;
+            if (versionSatisfied) {
+                driftDetected = await detectSchemaDrift();
+                if (!shouldReRunIncrementalMigration({ versionSatisfied, driftDetected })) {
+                    return;
+                }
+                console.warn("[DB] schema drift detected: schema_version is current but structure is incomplete, re-running structural migration");
+                schemaDriftDetected = true;
+                resetSchemaReadyFlags();
+            }
+
             // IMPORTANT: Existing installations must never fall through to the
             // first-run bootstrap when an incremental migration fails.
             try {
-                await ensureProductsColumns();
-                await ensureOrdersColumns();
-                await ensureOrderDeliveryFilesTable();
-                await ensureCouponTables();
-                await ensureCardsColumns();
-                await ensureCardKeyDuplicatesAllowed();
-                await ensureLoginUsersTable();
-                await ensureLoginUsersColumns();
-                loginUsersSchemaReady = true;
-                await ensureUserNotificationsTable();
-                await ensureAdminMessagesTable();
-                await ensureUserMessagesTable();
-                await ensureBroadcastTables();
-                await ensureWishlistTables();
-                await migrateTimestampColumnsToMs();
-                await migrateMalformedGitHubUserIds();
-                await migrateGitHubUsersDedupAndCanonicalize();
-                await ensureIndexes();
-                await backfillProductAggregates();
+                await ensureStructuralSchema();
 
-                await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
+                if (!driftDetected) {
+                    // 数据迁移与回填只在正常迁移路径执行。
+                    // 漂移路径下版本号已是当前值，说明此前这些迁移已成功完成
+                    // （版本号是迁移的最后一步），重复执行没有收益且有数据风险。
+                    await migrateTimestampColumnsToMs();
+                    await migrateMalformedGitHubUserIds();
+                    await migrateGitHubUsersDedupAndCanonicalize();
+                }
+
+                // 索引建立是纯幂等 DDL，两条路径都必须执行；此处保持与原实现相同的位置
+                await ensureIndexes();
+
+                if (!driftDetected) {
+                    await backfillProductAggregates();
+                }
+
+                if (!versionSatisfied) {
+                    await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
+                }
+                schemaDriftDetected = false;
                 markCurrentSchemaReady();
             } catch (migrationError) {
                 // Keep the existing database usable for read paths and retry the
                 // migration on the next isolate instead of running bootstrap SQL.
                 console.error("Incremental database migration failed:", migrationError);
+                schemaDriftDetected = false;
                 dbInitialized = true;
             }
             return;
@@ -689,7 +775,7 @@ async function ensureLoginUsersColumns() {
 
 export async function ensureLoginUsersSchema() {
     if (loginUsersSchemaReady) return;
-    if (await hasCurrentSchemaVersion()) return;
+    if (!schemaDriftDetected && await hasCurrentSchemaVersion()) return;
     await ensureLoginUsersTable();
     await ensureLoginUsersColumns();
     await safeAddColumn('login_users', 'email', 'TEXT');
