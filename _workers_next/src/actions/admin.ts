@@ -49,8 +49,8 @@ export async function saveProduct(formData: FormData) {
 
 async function saveProductOrThrow(formData: FormData) {
     await checkAdmin()
-    await ensureDatabaseInitialized()
     await ensureProductWriteSchema()
+    await ensureDatabaseInitialized()
 
     const existingId = formData.get('id') as string
     const customSlug = (formData.get('slug') as string)?.trim()

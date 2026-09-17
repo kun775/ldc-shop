@@ -11,6 +11,7 @@ import {
 import { buildLegacyPointLedgerEntries } from "./legacy-reconciliation"
 import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once"
 import { LOGIN_USERS_COLUMN_DEFINITIONS, LOGIN_USERS_CREATE_TABLE_STATEMENT } from "@/lib/db/login-users-schema"
+import { isDuplicateColumnError } from "@/lib/db/error-utils"
 
 type UserIdentity = {
     userId: string
@@ -85,11 +86,8 @@ function normalizeTimestampMs(column: any) {
 async function safeAddColumn(table: string, column: string, definition: string) {
     try {
         await db.run(sql.raw(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`))
-    } catch (error: any) {
-        const errorString = (JSON.stringify(error) + String(error) + (error?.message || '')).toLowerCase()
-        if (!errorString.includes('duplicate column')) {
-            throw error
-        }
+    } catch (error: unknown) {
+        if (!isDuplicateColumnError(error)) throw error
     }
 }
 

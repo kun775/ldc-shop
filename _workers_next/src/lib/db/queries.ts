@@ -11,6 +11,7 @@ import {
 } from "@/lib/coupons/counter-triggers";
 import { MANUAL_STOCK_TRIGGER_NAMES, MANUAL_STOCK_TRIGGER_STATEMENTS } from "@/lib/manual-stock-triggers";
 import { LOGIN_USERS_COLUMN_DEFINITIONS, LOGIN_USERS_CREATE_TABLE_STATEMENT } from "./login-users-schema";
+import { collectErrorText, isDuplicateColumnError } from "./error-utils";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -167,13 +168,10 @@ async function ensureCardKeyDuplicatesAllowed() {
 async function safeAddColumn(table: string, column: string, definition: string) {
     try {
         await db.run(sql.raw(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`));
-    } catch (e: any) {
+    } catch (error: unknown) {
         // Ignore "duplicate column" errors in SQLite / Cloudflare D1
-        const errorString = ((e?.message || '') + ' ' + String(e || '')).toLowerCase();
-        if (errorString.includes('duplicate column') || errorString.includes('already exists') || errorString.includes('duplicate')) {
-            return;
-        }
-        throw e;
+        if (isDuplicateColumnError(error)) return;
+        throw error;
     }
 }
 
@@ -2482,7 +2480,7 @@ export async function hasUserReviewedOrder(orderId: string): Promise<boolean> {
 }
 
 function isMissingTable(error: any) {
-    const errorString = (JSON.stringify(error) + String(error) + (error?.message || '')).toLowerCase();
+    const errorString = collectErrorText(error).toLowerCase();
     return (
         error?.message?.includes('does not exist') ||
         error?.cause?.message?.includes('does not exist') ||
@@ -2493,7 +2491,7 @@ function isMissingTable(error: any) {
 }
 
 function isMissingTableOrColumn(error: any) {
-    const errorString = (JSON.stringify(error) + String(error) + (error?.message || '')).toLowerCase();
+    const errorString = collectErrorText(error).toLowerCase();
     return isMissingTable(error) || errorString.includes('42703') || errorString.includes('no such column') || errorString.includes('column not found') || errorString.includes('d1_column_notfound');
 }
 

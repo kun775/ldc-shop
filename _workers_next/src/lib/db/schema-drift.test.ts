@@ -60,6 +60,13 @@ test("missing table/column errors are recognised as drift", () => {
     }
 })
 
+test("missing columns in nested D1 causes are recognised as drift", () => {
+    const error = new Error('Failed query: SELECT nickname FROM login_users LIMIT 0')
+    error.cause = new Error('D1_ERROR: no such column: nickname')
+
+    assert.equal(isSchemaDriftError(error), true)
+})
+
 test("transient or unrelated errors must NOT be treated as drift", () => {
     const samples = [
         'Network connection lost',

@@ -1,3 +1,5 @@
+import { collectErrorText } from "./error-utils.ts"
+
 /**
  * 数据库结构漂移（schema drift）探测。
  *
@@ -44,11 +46,7 @@ export const SCHEMA_DRIFT_PROBES: readonly string[] = [
  * 其它错误（网络、限流、语法等）一律返回 false。
  */
 export function isSchemaDriftError(error: unknown): boolean {
-    const text = (
-        JSON.stringify(error ?? '') +
-        String(error ?? '') +
-        ((error as { message?: unknown } | null)?.message ? String((error as { message?: unknown }).message) : '')
-    ).toLowerCase()
+    const text = collectErrorText(error).toLowerCase()
 
     if (text.includes('no such table') || text.includes('no such column')) return true
     if (text.includes('column not found') || text.includes('d1_column_notfound')) return true
