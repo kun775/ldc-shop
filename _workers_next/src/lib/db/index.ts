@@ -99,11 +99,6 @@ async function getD1() {
     throw new Error("D1 Database binding not found in Cloudflare context");
 }
 
-export async function execD1(query: string) {
-    const d1 = await getD1();
-    return d1.exec(query);
-}
-
 const getDb = () => {
     // 1. Production / Cloudflare context: Use Proxy
     if (process.env.NODE_ENV === 'production' || process.env.NEXT_RUNTIME === 'edge') {

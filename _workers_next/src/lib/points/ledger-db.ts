@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto"
-import { db, execD1 } from "@/lib/db"
+import { db } from "@/lib/db"
 import { loginUsers, orders, products, settings, userPointLedger } from "@/lib/db/schema"
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import {
@@ -272,7 +272,9 @@ async function repairPointLedgerStructure(): Promise<number> {
         }
     }
     try {
-        await execD1(USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT)
+        // CREATE TRIGGER 必须作为单条 prepared statement 执行。
+        // D1.exec 面向脚本并按分号切分，会截断包含多条触发器体语句的定义。
+        await db.run(sql.raw(USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT))
     } catch (triggerError) {
         // 并发场景下另一个 isolate 可能刚创建了同名触发器 → 幂等冲突可忽略
         if (!isDuplicateSchemaObjectError(triggerError)) {
@@ -280,26 +282,8 @@ async function repairPointLedgerStructure(): Promise<number> {
             throw triggerError
         }
     }
-
-    // 后置校验：`execD1` 曾因触发器体内的嵌套 `CASE ... END` 被 D1 的语句
-    // 切分器误判而**静默地**建不出触发器（返回 incomplete input，或解析成
-    // 一条不完整的语句而不报错）。触发器缺失会让 `verifyPointLedgerStructure()`
-    // 恒为 false，进而让漂移探测恒为 true、三个升级项在每个请求上重跑并失败，
-    // 把首页与后台拖到 30s 以上。
-    //
-    // 因此这里必须确认触发器**真的存在**，缺失时改走 `db.run`（与 manual_stock /
-    // coupon 触发器同一条已被线上验证可用的路径）再试一次。两条路径都失败才抛错，
-    // 保证「结构修复」不会以静默失败收场、演变成每请求重试的死循环。
     if (!(await hasPointLedgerBalanceTrigger())) {
-        console.warn('[PointLedger] balance trigger missing after execD1, retrying via db.run')
-        try {
-            await db.run(sql.raw(USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT))
-        } catch (retryError) {
-            if (!isDuplicateSchemaObjectError(retryError)) throw retryError
-        }
-        if (!(await hasPointLedgerBalanceTrigger())) {
-            throw new Error('POINT_LEDGER_BALANCE_TRIGGER_CREATE_FAILED')
-        }
+        throw new Error('POINT_LEDGER_BALANCE_TRIGGER_CREATE_FAILED')
     }
 
     // 历史 NULL 余额归零。必须在触发器就绪之后执行：否则触发器的
@@ -382,7 +366,10 @@ export async function ensureUserPointLedgerSchema(options?: { force?: boolean })
     }
     if (pointLedgerSchemaReady) return
     await ensureOnce(pointLedgerSchemaState, async () => {
-        await repairPointLedgerStructure()
+        if (!(await verifyPointLedgerStructure())) {
+            throw new Error('POINT_LEDGER_SCHEMA_UNAVAILABLE')
+        }
+        markPointLedgerSchemaReady()
     })
 }
 
@@ -416,7 +403,6 @@ export function resetPointLedgerSchemaReady() {
 export async function ensurePointLedgerUserRecord(identity: UserIdentity) {
     if (!identity.userId) return
 
-    await ensurePointLedgerLoginUsersSchema()
     await db.insert(loginUsers).values({
         userId: identity.userId,
         username: identity.username ?? null,

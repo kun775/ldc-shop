@@ -628,7 +628,7 @@ async function prepareDatabaseForManualUpgrade() {
         await ensureOrderDeliveryFilesTable();
         await ensureCouponTables();
         await ensureManualStockTriggers();
-        await ensureUserPointLedgerSchema();
+        await ensureUserPointLedgerSchema({ force: true });
         await ensureDatabaseMigrationsTable();
         await backfillProductAggregates();
         console.log("Database baseline initialized; registered upgrades are pending administrator execution");

@@ -27,6 +27,7 @@ export const POINT_ADMIN_ERROR_KEY_MAP: Record<string, string> = {
     POINT_LEDGER_CLAIM_FAILED: 'admin.users.adjustFailed',
     POINT_LEDGER_CLAIM_LOST: 'admin.users.adjustFailed',
     POINT_LEDGER_BUSINESS_KEY_CONFLICT: 'admin.users.adjustConflict',
+    POINT_LEDGER_SCHEMA_UNAVAILABLE: 'admin.users.adjustUnavailable',
     // 结构类：确认缺表/缺列时给出「功能暂不可用」而非通用错误
     'no such table': 'admin.users.adjustUnavailable',
     'no such column': 'admin.users.adjustUnavailable',
@@ -39,6 +40,7 @@ export const POINT_CHECKIN_ERROR_KEY_MAP: Record<string, string> = {
     POINT_LEDGER_CLAIM_FAILED: 'checkin.failed',
     POINT_LEDGER_CLAIM_LOST: 'checkin.failed',
     POINT_LEDGER_BUSINESS_KEY_CONFLICT: 'checkin.alreadyCheckedIn',
+    POINT_LEDGER_SCHEMA_UNAVAILABLE: 'checkin.failed',
     POINT_BALANCE_NEGATIVE: 'checkin.balanceNegative',
     insufficient_points: 'checkin.balanceNegative',
 }
@@ -51,4 +53,5 @@ export const POINT_AUTOMATIC_ERROR_KEY_MAP: Record<string, string> = {
     POINT_LEDGER_EVENT_IN_PROGRESS: 'common.error',
     POINT_LEDGER_CLAIM_FAILED: 'common.error',
     POINT_LEDGER_CLAIM_LOST: 'common.error',
+    POINT_LEDGER_SCHEMA_UNAVAILABLE: 'common.error',
 }

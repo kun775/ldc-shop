@@ -112,33 +112,16 @@ test('the current trigger statement carries both required markers', () => {
     )
 })
 
-// 回归守护：线上事故的根因是触发器体内出现嵌套 `CASE ... END`。
-// D1 的 `exec()` 按语句边界切分 SQL，无法识别嵌套块，会把内层 `END` 当作
-// 触发器体结束，于是建出一条不完整的 CREATE TRIGGER（或直接返回
-// `incomplete input: SQLITE_ERROR`），触发器永远建不出来。
-// 后果不是「积分少加一次」，而是：
-//   verifyPointLedgerStructure() 恒 false → detectSchemaDrift() 恒 true
-//   → 三个升级项在每个请求上重跑并失败（约 34s）→ 首页/后台被拖到 30s+。
-// 因此余额不足必须用「带 WHERE 的 RAISE」表达，禁止再退回 CASE 形式。
+// 回归守护：余额不足使用单层 WHERE 守卫，避免恢复为更复杂的嵌套块。
 test('the balance trigger must not use a nested CASE block', () => {
     const sqlUpper = USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT.toUpperCase()
     assert.ok(
         !/\bCASE\b/.test(sqlUpper),
-        'a nested CASE ... END breaks the D1 exec() statement splitter and the trigger is never created',
+        'the balance trigger should keep a single-level guard',
     )
     assert.ok(
         /SELECT\s+RAISE\(ABORT,\s*'POINT_BALANCE_NEGATIVE'\)\s+WHERE\s+CHANGES\(\)\s*=\s*0/.test(sqlUpper),
         'the insufficient-balance guard must be expressed as a WHERE-guarded RAISE',
-    )
-})
-
-// 回归守护：触发器体的 `END` 必须只有一个（即没有嵌套块），
-// 这是「D1 exec() 能正确切分」的必要条件。
-test('the balance trigger body has exactly one END terminator', () => {
-    const matches = USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT.match(/\bEND\b/gi) || []
-    assert.equal(
-        matches.length, 1,
-        `expected exactly one END (no nested blocks), found ${matches.length}`,
     )
 })
 
