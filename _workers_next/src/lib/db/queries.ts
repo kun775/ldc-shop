@@ -3,7 +3,7 @@ import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, 
 import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/lib/constants";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema } from "@/lib/points/ledger-db";
 import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once";
-import { SCHEMA_DRIFT_PROBES, isSchemaDriftError, shouldReRunIncrementalMigration } from "./schema-drift";
+import { SCHEMA_DRIFT_PROBES, isSchemaDriftError } from "./schema-drift";
 import {
     COUPON_COUNTER_RECONCILIATION_STATEMENTS,
     COUPON_USAGE_TRIGGER_NAMES,
@@ -13,6 +13,7 @@ import { MANUAL_STOCK_TRIGGER_NAMES, MANUAL_STOCK_TRIGGER_STATEMENTS } from "@/l
 import { LOGIN_USERS_COLUMN_DEFINITIONS, LOGIN_USERS_CREATE_TABLE_STATEMENT } from "./login-users-schema";
 import { collectErrorText, isDuplicateColumnError } from "./error-utils";
 import { executeDatabaseUpgrades, ensureDatabaseMigrationsTable, readDatabaseUpgradeStatus } from "./database-upgrades";
+import { supportsRegisteredDatabaseUpgrades } from "./database-upgrade-registry";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -137,10 +138,6 @@ async function getPersistedSchemaVersion(): Promise<number | null> {
     return persistedSchemaVersion;
 }
 
-async function hasCurrentSchemaVersion() {
-    const version = await getPersistedSchemaVersion();
-    return version !== null && isSchemaVersionSatisfied(version, CURRENT_SCHEMA_VERSION);
-}
 
 async function ensureColumnsOnce(key: ColumnEnsureKey, task: () => Promise<void>) {
     const state = columnEnsureState[key];
@@ -305,10 +302,12 @@ async function verifyCurrentDatabaseStructure() {
 async function runRegisteredDatabaseUpgrades() {
     return executeDatabaseUpgrades({
         executors: {
-            async '0028_database_upgrade_registry'() {
-                resetSchemaReadyFlags();
-                await ensureStructuralSchema();
-                await ensureIndexes();
+            async '0028_database_upgrade_registry'({ structureHealthy }) {
+                if (!structureHealthy) {
+                    resetSchemaReadyFlags();
+                    await ensureStructuralSchema();
+                    await ensureIndexes();
+                }
             },
         },
         verifyStructure: verifyCurrentDatabaseStructure,
@@ -343,7 +342,10 @@ export async function ensureDatabaseInitialized() {
     if (dbInitialized) return;
 
     await ensureOnce(dbInitializationState, async () => {
-        const versionSatisfied = await hasCurrentSchemaVersion();
+        const persistedVersion = await getPersistedSchemaVersion();
+        const versionSatisfied = persistedVersion !== null
+            && isSchemaVersionSatisfied(persistedVersion, CURRENT_SCHEMA_VERSION);
+        const registeredUpgradeSupported = supportsRegisteredDatabaseUpgrades(persistedVersion);
 
         let tableExists = false;
         try {
@@ -355,45 +357,32 @@ export async function ensureDatabaseInitialized() {
         }
 
         if (tableExists) {
-            // 版本号可能领先于真实结构（历史手工置位 / 迁移中断），
-            // 因此版本达标时再做一次廉价探测；结构一致才走快速路径。
-            let driftDetected = false;
-            if (versionSatisfied) {
-                driftDetected = await detectSchemaDrift();
-                if (!shouldReRunIncrementalMigration({ versionSatisfied, driftDetected })) {
+            if (registeredUpgradeSupported) {
+                try {
                     await runRegisteredDatabaseUpgradesOrThrow();
+                    if (!versionSatisfied) {
+                        await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
+                    }
                     markCurrentSchemaReady();
-                    return;
+                } catch (migrationError) {
+                    console.error("Registered database migration failed:", migrationError);
+                    resetSchemaReadyFlags();
+                    throw migrationError;
                 }
-                console.warn("[DB] schema drift detected: schema_version is current but structure is incomplete, re-running structural migration");
-                resetSchemaReadyFlags();
+                return;
             }
 
             // IMPORTANT: Existing installations must never fall through to the
             // first-run bootstrap when an incremental migration fails.
             try {
                 await ensureStructuralSchema();
-
-                if (!driftDetected) {
-                    // 数据迁移与回填只在正常迁移路径执行。
-                    // 漂移路径下版本号已是当前值，说明此前这些迁移已成功完成
-                    // （版本号是迁移的最后一步），重复执行没有收益且有数据风险。
-                    await migrateTimestampColumnsToMs();
-                    await migrateMalformedGitHubUserIds();
-                    await migrateGitHubUsersDedupAndCanonicalize();
-                }
-
-                // 索引建立是纯幂等 DDL，两条路径都必须执行；此处保持与原实现相同的位置
+                await migrateTimestampColumnsToMs();
+                await migrateMalformedGitHubUserIds();
+                await migrateGitHubUsersDedupAndCanonicalize();
                 await ensureIndexes();
                 await runRegisteredDatabaseUpgradesOrThrow();
-
-                if (!driftDetected) {
-                    await backfillProductAggregates();
-                }
-
-                if (!versionSatisfied) {
-                    await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
-                }
+                await backfillProductAggregates();
+                await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
                 markCurrentSchemaReady();
             } catch (migrationError) {
                 console.error("Incremental database migration failed:", migrationError);
@@ -402,7 +391,6 @@ export async function ensureDatabaseInitialized() {
             }
             return;
         }
-
         console.log("First run detected, initializing database...");
 
         await db.run(sql`

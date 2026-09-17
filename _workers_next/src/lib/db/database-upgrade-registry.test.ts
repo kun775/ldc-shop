@@ -4,8 +4,10 @@ import assert from 'node:assert/strict'
 const registry = await import(new URL('./database-upgrade-registry.ts', import.meta.url).href)
 const {
     buildDatabaseUpgradeStatus,
+    DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION,
     DATABASE_UPGRADE_DEFINITIONS,
     DATABASE_UPGRADE_RUNNING_TIMEOUT_MS,
+    supportsRegisteredDatabaseUpgrades,
 } = registry
 
 function appliedRecord() {
@@ -28,6 +30,14 @@ test('database upgrade ids are unique and ordered', () => {
     const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
     assert.equal(new Set(ids).size, ids.length)
     assert.deepEqual([...ids].sort(), ids)
+})
+
+test('registered upgrades start from the schema version before the registry was introduced', () => {
+    assert.equal(DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION, 27)
+    assert.equal(supportsRegisteredDatabaseUpgrades(null), false)
+    assert.equal(supportsRegisteredDatabaseUpgrades(26), false)
+    assert.equal(supportsRegisteredDatabaseUpgrades(27), true)
+    assert.equal(supportsRegisteredDatabaseUpgrades(28), true)
 })
 
 test('applied upgrade remains applied when structure is healthy', () => {

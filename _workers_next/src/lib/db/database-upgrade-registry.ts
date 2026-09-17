@@ -1,4 +1,5 @@
 export const DATABASE_UPGRADE_RUNNING_TIMEOUT_MS = 5 * 60 * 1000
+export const DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION = 27
 
 export const DATABASE_UPGRADE_DEFINITIONS = [
     {
@@ -48,6 +49,11 @@ export interface DatabaseUpgradeStatus {
     structureHealthy: boolean
     checkedAt: number
     items: DatabaseUpgradeItem[]
+}
+
+export function supportsRegisteredDatabaseUpgrades(schemaVersion: number | null): boolean {
+    return schemaVersion !== null
+        && schemaVersion >= DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION
 }
 
 export function buildDatabaseUpgradeStatus(

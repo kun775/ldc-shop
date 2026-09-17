@@ -12,7 +12,11 @@ import {
     type DatabaseUpgradeStatus,
 } from './database-upgrade-registry'
 
-type DatabaseUpgradeExecutors = Record<DatabaseUpgradeId, () => Promise<void>>
+interface DatabaseUpgradeExecutionContext {
+    structureHealthy: boolean
+}
+
+type DatabaseUpgradeExecutors = Record<DatabaseUpgradeId, (context: DatabaseUpgradeExecutionContext) => Promise<void>>
 const migrationsTableState = createAsyncOnceState()
 
 export interface DatabaseUpgradeRunResult {
@@ -199,7 +203,8 @@ export async function executeDatabaseUpgrades(input: {
 }): Promise<DatabaseUpgradeRunResult> {
     await ensureDatabaseMigrationsTable()
 
-    const initialStatus = await readDatabaseUpgradeStatus(await input.verifyStructure())
+    let structureHealthy = await input.verifyStructure()
+    const initialStatus = await readDatabaseUpgradeStatus(structureHealthy)
     const result: DatabaseUpgradeRunResult = {
         appliedIds: [],
         skippedIds: [],
@@ -220,10 +225,13 @@ export async function executeDatabaseUpgrades(input: {
 
         const startedAt = Date.now()
         try {
-            await input.executors[item.id]()
+            await input.executors[item.id]({ structureHealthy })
             const definition = DATABASE_UPGRADE_DEFINITIONS.find((entry) => entry.id === item.id)
-            if (definition?.verifiesStructure && !(await input.verifyStructure())) {
-                throw new Error('DATABASE_SCHEMA_VERIFY_FAILED')
+            if (definition?.verifiesStructure) {
+                structureHealthy = await input.verifyStructure()
+                if (!structureHealthy) {
+                    throw new Error('DATABASE_SCHEMA_VERIFY_FAILED')
+                }
             }
             await markDatabaseUpgradeApplied(item.id, claimId, startedAt)
             result.appliedIds.push(item.id)
