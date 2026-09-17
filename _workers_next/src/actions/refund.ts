@@ -11,8 +11,8 @@ import {
     getOrderCouponsForReverse,
     releaseCouponUsages,
     reverseCouponUsages,
-    shouldReverseCouponsOnRefund,
 } from "@/lib/coupons/reservation"
+import { selectReversibleCouponUsageIds } from "@/lib/coupons/refund-policy"
 
 export async function markOrderRefunded(orderId: string) {
     await checkAdmin()
@@ -55,11 +55,14 @@ export async function markOrderRefunded(orderId: string) {
         await releaseCouponUsages(orderId, 'refund_release')
         const fulfilled = order.status === 'delivered'
         const consumedCoupons = await getOrderCouponsForReverse(orderId)
-        const shouldReverse = consumedCoupons.some((row: any) =>
-            shouldReverseCouponsOnRefund({ refundPolicy: row?.refundPolicy, fulfilled })
-        )
-        if (shouldReverse) {
-            await reverseCouponUsages(orderId, fulfilled ? 'refund_reverse_fulfilled' : 'refund_reverse')
+        const reversibleUsageIds = selectReversibleCouponUsageIds(consumedCoupons, fulfilled)
+        if (reversibleUsageIds.length > 0) {
+            await reverseCouponUsages(
+                orderId,
+                fulfilled ? 'refund_reverse_fulfilled' : 'refund_reverse',
+                Date.now(),
+                reversibleUsageIds
+            )
         }
     } catch (error) {
         console.error('[Coupon] Refund reversal failed:', error)

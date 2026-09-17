@@ -39,6 +39,30 @@ export function normalizeCouponCodeList(codes: Array<string | null | undefined> 
     return result
 }
 
+/**
+ * 按用户提交的优惠码顺序重建数据库返回结果。
+ *
+ * SQL 在没有 ORDER BY 时不保证返回顺序，而同类型优惠券的应用顺序会影响
+ * 满减门槛，因此必须在进入定价层前恢复规范化后的输入顺序。
+ */
+export function orderCouponEntriesByCode<T>(
+    codes: Array<string | null | undefined>,
+    entries: T[],
+    getCode: (entry: T) => string | null | undefined
+): T[] {
+    const normalizedCodes = normalizeCouponCodeList(codes)
+    const entryByCode = new Map<string, T>()
+    for (const entry of entries) {
+        const code = normalizeCouponCode(getCode(entry))
+        if (code && !entryByCode.has(code)) {
+            entryByCode.set(code, entry)
+        }
+    }
+    return normalizedCodes
+        .map((code) => entryByCode.get(code))
+        .filter((entry): entry is T => entry !== undefined)
+}
+
 // generateCouponCode 生成随机优惠码
 //
 // 元数据:

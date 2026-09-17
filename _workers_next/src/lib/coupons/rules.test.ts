@@ -7,7 +7,12 @@ const rules = await import(new URL("./rules.ts", import.meta.url).href)
 const pricing = await import(new URL("./pricing.ts", import.meta.url).href)
 
 const { parseLdcToCents, centsToLdcString, applyRateBps, multiplyCentsByQuantity } = money
-const { normalizeCouponCode, normalizeCouponCodeList, isValidCouponCodeFormat } = code
+const {
+    normalizeCouponCode,
+    normalizeCouponCodeList,
+    isValidCouponCodeFormat,
+    orderCouponEntriesByCode,
+} = code
 const { evaluateCouponRule, sortCouponsForApplication } = rules
 const { resolveCheckoutPricing } = pricing
 
@@ -66,6 +71,22 @@ test("coupon code normalization is case and whitespace insensitive", () => {
     assert.equal(isValidCouponCodeFormat("ABCD"), true)
     assert.equal(isValidCouponCodeFormat("ab"), false)
     assert.equal(isValidCouponCodeFormat("AB CD"), false)
+})
+
+test("database coupon rows are restored to submitted code order", () => {
+    const unordered = [
+        { coupon: { code: "SECOND" } },
+        { coupon: { code: " first " } },
+    ]
+
+    assert.deepEqual(
+        orderCouponEntriesByCode(
+            ["FIRST", "second"],
+            unordered,
+            (entry) => entry.coupon.code
+        ),
+        [unordered[1], unordered[0]]
+    )
 })
 
 test("percent coupon applies rate cap and maximum discount", () => {

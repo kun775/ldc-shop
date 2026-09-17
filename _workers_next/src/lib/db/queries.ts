@@ -4,6 +4,11 @@ import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/li
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema } from "@/lib/points/ledger-db";
 import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once";
 import { SCHEMA_DRIFT_PROBES, isSchemaDriftError, shouldReRunIncrementalMigration } from "./schema-drift";
+import {
+    COUPON_COUNTER_RECONCILIATION_STATEMENTS,
+    COUPON_USAGE_TRIGGER_NAMES,
+    COUPON_USAGE_TRIGGER_STATEMENTS,
+} from "@/lib/coupons/counter-triggers";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -12,7 +17,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 25;
+const CURRENT_SCHEMA_VERSION = 26;
 const dbInitializationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
@@ -89,6 +94,22 @@ async function detectSchemaDrift(): Promise<boolean> {
             }
             // 非结构类错误：忽略，避免把偶发故障升级为全量迁移
         }
+    }
+
+    try {
+        const result = await db.run(sql`SELECT name FROM sqlite_master WHERE type = 'trigger'`);
+        const queryResult = result as unknown as {
+            results?: Array<{ name?: unknown }>;
+            rows?: Array<{ name?: unknown }>;
+        };
+        const rows = queryResult.results || queryResult.rows || [];
+        const triggerNames = new Set(rows.map((row) => String(row.name || '')));
+        if (COUPON_USAGE_TRIGGER_NAMES.some((name) => !triggerNames.has(name))) {
+            return true;
+        }
+    } catch (error: unknown) {
+        if (isSchemaDriftError(error)) return true;
+        // 与列探测一致，瞬时错误不触发结构迁移
     }
     return false;
 }
@@ -266,6 +287,7 @@ async function ensureStructuralSchema() {
     await ensureCouponTables();
     await ensureCardsColumns();
     await ensureCardKeyDuplicatesAllowed();
+    await ensureReviewRepliesTable();
     await ensureLoginUsersTable();
     await ensureLoginUsersColumns();
     loginUsersSchemaReady = true;
@@ -640,7 +662,7 @@ async function ensureOrdersColumns() {
 // 元数据:
 //   - 作者: Codex
 //   - 创建时间: 2026-03-05
-//   - 更新内容: 新增优惠券主表、适用商品、使用记录与用户计数表，schema v25。
+//   - 更新内容: 补齐优惠券列，新增原子计数触发器并校准历史计数，schema v26。
 export async function ensureCouponTables() {
     await db.run(sql`
         CREATE TABLE IF NOT EXISTS coupons (
@@ -710,6 +732,60 @@ export async function ensureCouponTables() {
         )
     `)
 
+    const couponColumnStatements: Array<[string, string, string]> = [
+        ['coupons', 'code', "TEXT NOT NULL DEFAULT ''"],
+        ['coupons', 'name', "TEXT NOT NULL DEFAULT ''"],
+        ['coupons', 'description', 'TEXT'],
+        ['coupons', 'discount_type', "TEXT NOT NULL DEFAULT 'fixed'"],
+        ['coupons', 'rate_bps', 'INTEGER'],
+        ['coupons', 'discount_amount_cents', 'INTEGER'],
+        ['coupons', 'min_spend_cents', 'INTEGER NOT NULL DEFAULT 0'],
+        ['coupons', 'max_discount_cents', 'INTEGER'],
+        ['coupons', 'scope', "TEXT NOT NULL DEFAULT 'all'"],
+        ['coupons', 'total_use_limit', 'INTEGER'],
+        ['coupons', 'per_user_limit', 'INTEGER'],
+        ['coupons', 'reserved_count', 'INTEGER NOT NULL DEFAULT 0'],
+        ['coupons', 'consumed_count', 'INTEGER NOT NULL DEFAULT 0'],
+        ['coupons', 'stackable_with_coupons', 'INTEGER DEFAULT 0'],
+        ['coupons', 'stackable_with_points', 'INTEGER DEFAULT 1'],
+        ['coupons', 'refund_policy', "TEXT NOT NULL DEFAULT 'unfulfilled_full_refund'"],
+        ['coupons', 'status', "TEXT NOT NULL DEFAULT 'draft'"],
+        ['coupons', 'starts_at', 'INTEGER'],
+        ['coupons', 'ends_at', 'INTEGER'],
+        ['coupons', 'created_by', 'TEXT'],
+        ['coupons', 'created_at', 'INTEGER'],
+        ['coupons', 'updated_at', 'INTEGER'],
+        ['coupon_products', 'coupon_id', "TEXT NOT NULL DEFAULT ''"],
+        ['coupon_products', 'product_id', "TEXT NOT NULL DEFAULT ''"],
+        ['coupon_products', 'created_at', 'INTEGER'],
+        ['coupon_usages', 'coupon_id', "TEXT NOT NULL DEFAULT ''"],
+        ['coupon_usages', 'order_id', "TEXT NOT NULL DEFAULT ''"],
+        ['coupon_usages', 'user_id', 'TEXT'],
+        ['coupon_usages', 'username', 'TEXT'],
+        ['coupon_usages', 'status', "TEXT NOT NULL DEFAULT 'reserved'"],
+        ['coupon_usages', 'sequence', 'INTEGER NOT NULL DEFAULT 0'],
+        ['coupon_usages', 'reservation_id', "TEXT NOT NULL DEFAULT ''"],
+        ['coupon_usages', 'reservation_expires_at', 'INTEGER'],
+        ['coupon_usages', 'coupon_code_snapshot', "TEXT NOT NULL DEFAULT ''"],
+        ['coupon_usages', 'rule_snapshot', "TEXT NOT NULL DEFAULT '{}'"],
+        ['coupon_usages', 'eligible_amount_cents', 'INTEGER NOT NULL DEFAULT 0'],
+        ['coupon_usages', 'discount_amount_cents', 'INTEGER NOT NULL DEFAULT 0'],
+        ['coupon_usages', 'reserved_at', 'INTEGER'],
+        ['coupon_usages', 'consumed_at', 'INTEGER'],
+        ['coupon_usages', 'released_at', 'INTEGER'],
+        ['coupon_usages', 'reversed_at', 'INTEGER'],
+        ['coupon_usages', 'reason', 'TEXT'],
+        ['coupon_usages', 'created_at', 'INTEGER'],
+        ['coupon_user_counters', 'coupon_id', "TEXT NOT NULL DEFAULT ''"],
+        ['coupon_user_counters', 'user_id', "TEXT NOT NULL DEFAULT ''"],
+        ['coupon_user_counters', 'reserved_count', 'INTEGER NOT NULL DEFAULT 0'],
+        ['coupon_user_counters', 'consumed_count', 'INTEGER NOT NULL DEFAULT 0'],
+        ['coupon_user_counters', 'updated_at', 'INTEGER'],
+    ]
+    for (const [table, column, definition] of couponColumnStatements) {
+        await safeAddColumn(table, column, definition)
+    }
+
     const couponIndexStatements = [
         `CREATE UNIQUE INDEX IF NOT EXISTS coupons_code_uq ON coupons(upper(code))`,
         `CREATE INDEX IF NOT EXISTS coupons_status_window_idx ON coupons(status, starts_at, ends_at)`,
@@ -722,6 +798,7 @@ export async function ensureCouponTables() {
         `CREATE INDEX IF NOT EXISTS coupon_usages_user_idx ON coupon_usages(coupon_id, user_id, status)`,
         `CREATE INDEX IF NOT EXISTS coupon_usages_order_idx ON coupon_usages(order_id, sequence)`,
         `CREATE INDEX IF NOT EXISTS coupon_usages_status_created_idx ON coupon_usages(status, created_at)`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS coupon_user_counters_coupon_user_uq ON coupon_user_counters(coupon_id, user_id)`,
     ]
 
     for (const statement of couponIndexStatements) {
@@ -737,6 +814,13 @@ export async function ensureCouponTables() {
             }
             throw e;
         }
+    }
+
+    for (const statement of COUPON_USAGE_TRIGGER_STATEMENTS) {
+        await db.run(sql.raw(statement))
+    }
+    for (const statement of COUPON_COUNTER_RECONCILIATION_STATEMENTS) {
+        await db.run(sql.raw(statement))
     }
 }
 

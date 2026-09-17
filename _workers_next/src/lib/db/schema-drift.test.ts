@@ -10,20 +10,33 @@ test("drift probes are read-only and never read rows", () => {
         const normalized = String(probe).trim().toLowerCase()
         assert.ok(normalized.startsWith('select'), `probe must be a SELECT: ${probe}`)
         assert.ok(normalized.endsWith('limit 0'), `probe must use LIMIT 0: ${probe}`)
-        for (const forbidden of ['insert', 'update ', 'delete', 'alter', 'drop', 'create']) {
-            assert.ok(!normalized.includes(forbidden), `probe must not write: ${probe}`)
+        for (const forbidden of ['insert', 'update', 'delete', 'alter', 'drop', 'create']) {
+            assert.ok(!new RegExp(`\\b${forbidden}\\b`).test(normalized), `probe must not write: ${probe}`)
         }
     }
 })
 
 test("drift probes cover the objects that historically went missing", () => {
     const joined = SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
-    // v25 优惠券相关
-    assert.ok(joined.includes('coupons'))
-    assert.ok(joined.includes('coupon_usages'))
-    assert.ok(joined.includes('subtotal_amount_cents'))
-    // v24 履约 claim（上一次线上事故的缺列）
-    assert.ok(joined.includes('fulfillment_claim_id'))
+    for (const required of [
+        'products',
+        'orders',
+        'cards',
+        'login_users',
+        'review_replies',
+        'wishlist_items',
+        'wishlist_votes',
+        'coupons',
+        'coupon_products',
+        'coupon_usages',
+        'coupon_user_counters',
+        'subtotal_amount_cents',
+        'fulfillment_claim_id',
+        'rule_snapshot',
+        'refund_policy',
+    ]) {
+        assert.ok(joined.includes(required), `missing drift probe coverage: ${required}`)
+    }
 })
 
 test("missing table/column errors are recognised as drift", () => {

@@ -2,7 +2,7 @@ import { db } from '@/lib/db'
 import { coupons, couponProducts, couponUsages, couponUserCounters, orders, products } from '@/lib/db/schema'
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm'
 import { ensureDatabaseInitialized } from '@/lib/db/queries'
-import { normalizeCouponCode } from './code.ts'
+import { normalizeCouponCode, orderCouponEntriesByCode } from './code.ts'
 import type {
     CouponRecord,
     CouponRuntimeState,
@@ -331,7 +331,7 @@ export async function loadCouponRuntimeEntries(codes: string[], userId: string |
         }
     }
 
-    const entries = rows.map((row: any) => {
+    const unorderedEntries = rows.map((row: any) => {
         const coupon = mapCouponRow(row, productMap.get(String(row.id)) || [])
         const counter = counterMap.get(coupon.id)
         return {
@@ -344,6 +344,12 @@ export async function loadCouponRuntimeEntries(codes: string[], userId: string |
             } satisfies CouponRuntimeState,
         }
     })
+
+    const entries = orderCouponEntriesByCode(
+        normalized,
+        unorderedEntries,
+        (entry) => entry.coupon.code
+    )
 
     for (const entry of entries) {
         found.set(entry.coupon.code.toUpperCase(), entry.coupon)
