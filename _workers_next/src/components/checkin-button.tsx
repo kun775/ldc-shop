@@ -60,12 +60,15 @@ export function CheckInButton({
                 setCheckedIn(true)
                 onCheckedInChange?.(true)
             } else {
-                if (res.error === "Already checked in today") {
+                const errorKey = res.error || 'checkin.failed'
+                if (errorKey === 'checkin.alreadyCheckedIn' || errorKey === 'Already checked in today') {
                     setCheckedIn(true)
                     onCheckedInChange?.(true)
                     toast.info(t('checkin.alreadyCheckedIn'))
+                } else if (errorKey === 'checkin.inProgress') {
+                    toast.info(t('checkin.inProgress'))
                 } else {
-                    toast.error(res.error ? t(`checkin.${res.error}`) : t('checkin.failed'))
+                    toast.error(t(errorKey.startsWith('checkin.') ? errorKey : 'checkin.failed'))
                 }
             }
         } catch (e) {

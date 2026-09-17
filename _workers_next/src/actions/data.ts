@@ -6,6 +6,7 @@ import { revalidatePath, updateTag } from "next/cache"
 import { checkAdmin } from "@/actions/admin"
 import { recalcProductAggregatesForMany } from "@/lib/db/queries"
 import { products } from "@/lib/db/schema"
+import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 
 async function executeStatement(statement: string) {
     if (!statement.trim()) return
@@ -62,7 +63,7 @@ export async function repairDataAction() {
         await repairTimestamps()
         return { success: true }
     } catch (e: any) {
-        return { success: false, error: e.message }
+        return { success: false, error: sanitizeClientErrorMessage(e?.message, 'common.error') }
     }
 }
 
@@ -220,6 +221,6 @@ export async function importData(formData: FormData) {
         updateTag('home:visitors')
         return { success: true, count: successCount, errors: errorCount }
     } catch (e: any) {
-        return { success: false, error: e.message }
+        return { success: false, error: sanitizeClientErrorMessage(e?.message, 'common.error') }
     }
 }

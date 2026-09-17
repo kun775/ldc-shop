@@ -6,6 +6,7 @@ import { orders, refundRequests } from "@/lib/db/schema"
 import { and, desc, eq, sql } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 import { checkAdmin } from "@/actions/admin"
+import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 import { products } from "@/lib/db/schema"
 import { notifyAdminRefundRequest } from "@/lib/notifications"
 import { markOrderRefunded, proxyRefund } from "@/actions/refund"
@@ -149,9 +150,9 @@ export async function adminApproveRefund(requestId: number, adminNote?: string) 
     if (result?.processed) {
       return { ok: true, processed: true }
     }
-    return { ok: true, processed: false, error: result?.message || 'refund_failed' }
+    return { ok: true, processed: false, error: sanitizeClientErrorMessage(result?.message, 'refund_failed') }
   } catch (e: any) {
-    return { ok: true, processed: false, error: e?.message || 'refund_failed' }
+    return { ok: true, processed: false, error: sanitizeClientErrorMessage(e?.message, 'refund_failed') }
   }
 }
 

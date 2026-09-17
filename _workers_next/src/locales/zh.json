@@ -1023,7 +1023,11 @@
         "success": "签到成功！+{{points}} 积分",
         "alreadyCheckedIn": "今天已签到",
         "failed": "签到失败",
-        "networkError": "网络错误"
+        "networkError": "网络错误",
+        "loginRequired": "请先登录后再签到",
+        "disabled": "签到功能已关闭",
+        "inProgress": "签到处理中，请稍后刷新重试",
+        "balanceNegative": "积分余额不足"
     },
     "update": {
         "available": "新版本可用",

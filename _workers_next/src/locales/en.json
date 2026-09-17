@@ -1023,7 +1023,11 @@
         "success": "Check-in successful! +{{points}} points",
         "alreadyCheckedIn": "Already checked in today",
         "failed": "Check-in failed",
-        "networkError": "Network error"
+        "networkError": "Network error",
+        "loginRequired": "Please sign in to check in",
+        "disabled": "Check-in is currently disabled",
+        "inProgress": "Check-in is being processed, please refresh shortly",
+        "balanceNegative": "Insufficient points balance"
     },
     "update": {
         "available": "Update Available",

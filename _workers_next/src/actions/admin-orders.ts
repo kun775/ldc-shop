@@ -12,6 +12,7 @@ import { DELIVERY_FILE_LIMITS, deleteDeliveryFiles, listDeliveryFiles, saveDeliv
 import { isManualFulfillment } from "@/lib/fulfillment"
 import { isValidEmail, sendManualDeliveryEmail } from "@/lib/email"
 import { consumeCouponReservations, releaseCouponUsages } from "@/lib/coupons/reservation"
+import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 
 export async function markOrderPaid(orderId: string) {
   await checkAdmin()
@@ -389,6 +390,6 @@ export async function verifyOrderRefundStatus(orderId: string) {
 
   } catch (e: any) {
     console.error('Verify refund error', e)
-    return { success: false, error: e.message }
+    return { success: false, error: sanitizeClientErrorMessage(e?.message, 'common.error') }
   }
 }

@@ -1,6 +1,7 @@
 "use server"
 
 import { APP_VERSION, SOURCE_REPO, SOURCE_REPO_URL } from "@/lib/version"
+import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 
 interface UpdateCheckResult {
     hasUpdate: boolean
@@ -80,7 +81,7 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
             currentVersion: APP_VERSION,
             latestVersion: null,
             releaseUrl: null,
-            error: error.message
+            error: sanitizeClientErrorMessage(error?.message, 'update_check_failed')
         }
     }
 }

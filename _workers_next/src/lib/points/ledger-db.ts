@@ -77,13 +77,19 @@ async function getPointLedgerSchemaVersion() {
     return persistedPointLedgerSchemaVersion
 }
 
-async function hasCurrentPointLedgerSchema() {
+/**
+ * isPointLedgerSchemaCurrent 判断持久化版本号是否达标
+ *
+ * 重要: 这里**故意不产生任何副作用**（不置 ready 标记）。
+ * 旧实现在此处调用 markPointLedgerSchemaReady()，而签到路径的顺序是
+ *   ensurePointLedgerUserRecord() → ensurePointLedgerLoginUsersSchema()
+ *   → hasCurrentPointLedgerSchema() → markPointLedgerSchemaReady()
+ * 于是「版本达标 → 标记 ready → 跳过建列」在真正的账本 DDL 之前就被触发，
+ * 使线上缺列（claim_id / claimed_at）永远无法自愈。
+ */
+async function isPointLedgerSchemaCurrent() {
     const version = await getPointLedgerSchemaVersion()
-    if (version !== null && isSchemaVersionSatisfied(version, POINT_LEDGER_SCHEMA_VERSION)) {
-        markPointLedgerSchemaReady(version)
-        return true
-    }
-    return false
+    return version !== null && isSchemaVersionSatisfied(version, POINT_LEDGER_SCHEMA_VERSION)
 }
 
 function normalizeTimestampMs(column: any) {
@@ -152,7 +158,7 @@ async function getProductVariantLabels(productIds: string[]) {
 
 async function ensurePointLedgerLoginUsersSchema() {
     if (pointLedgerLoginUsersSchemaReady) return
-    if (await hasCurrentPointLedgerSchema()) return
+    if (await isPointLedgerSchemaCurrent()) return
 
     await ensureOnce(pointLedgerLoginUsersState, async () => {
         await db.run(sql`
@@ -192,15 +198,24 @@ async function ensurePointLedgerLoginUsersSchema() {
  * 元数据:
  *   - 作者: VitaHuang
  *   - 创建时间: 2026-04-18
- *   - 更新时间: 2026-04-18
- *   - 更新内容: 初始化积分账本 D1 表结构。
+ *   - 更新时间: 2026-09-17
+ *   - 更新内容: 修复「版本标记领先于真实结构」导致的缺列故障。
+ *
+ * 重要:
+ *   - 历史事故中 `point_ledger_schema_version` 被手工置为 2，但真实表里
+ *     并没有 claim_id / claimed_at 两列，于是旧实现（版本达标即 return）
+ *     永久跳过了建列，签到与积分抵扣全部报 "no such column: claim_id"。
+ *   - 因此这里**不再用版本号短路 DDL**：所有语句都是幂等的
+ *     （CREATE TABLE/INDEX IF NOT EXISTS，ADD COLUMN 吞掉 duplicate column），
+ *     每个 isolate 只执行一次，用这点成本换取结构自愈能力。
+ *   - 版本号只在「未达标」时才写入，避免每 isolate 产生一次无谓写操作。
  */
 export async function ensureUserPointLedgerSchema() {
     if (pointLedgerSchemaReady) return
     await ensureOnce(pointLedgerSchemaState, async () => {
-        if (await hasCurrentPointLedgerSchema()) {
-            return
-        }
+        const persistedVersion = await getPointLedgerSchemaVersion()
+        const versionSatisfied = persistedVersion !== null
+            && isSchemaVersionSatisfied(persistedVersion, POINT_LEDGER_SCHEMA_VERSION)
 
         await ensurePointLedgerLoginUsersSchema()
 
@@ -226,6 +241,8 @@ export async function ensureUserPointLedgerSchema() {
         `)
         await safeAddColumn('user_point_ledger', 'claim_id', 'TEXT')
         await safeAddColumn('user_point_ledger', 'claimed_at', 'INTEGER')
+        await safeAddColumn('user_point_ledger', 'balance_after', 'INTEGER')
+        await safeAddColumn('user_point_ledger', 'status', "TEXT NOT NULL DEFAULT 'completed'")
         await db.run(sql`
             CREATE UNIQUE INDEX IF NOT EXISTS user_point_ledger_business_key_uq
             ON user_point_ledger (business_key)
@@ -254,7 +271,9 @@ export async function ensureUserPointLedgerSchema() {
             throw triggerError
         }
 
-        await setSettingValue("point_ledger_schema_version", String(POINT_LEDGER_SCHEMA_VERSION))
+        if (!versionSatisfied) {
+            await setSettingValue("point_ledger_schema_version", String(POINT_LEDGER_SCHEMA_VERSION))
+        }
         markPointLedgerSchemaReady()
     })
 }

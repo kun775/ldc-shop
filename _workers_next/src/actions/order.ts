@@ -2,6 +2,7 @@
 
 import { auth } from "@/lib/auth"
 import { queryOrderStatus } from "@/lib/epay"
+import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 import { processOrderFulfillment } from "@/lib/order-processing"
 import { revalidatePath } from "next/cache"
 import { db } from "@/lib/db"
@@ -68,7 +69,7 @@ export async function checkOrderStatus(orderId: string) {
 
     } catch (e: any) {
         console.error("Check order status failed", e)
-        return { success: false, error: e.message }
+        return { success: false, error: sanitizeClientErrorMessage(e?.message, 'common.error') }
     }
 }
 
