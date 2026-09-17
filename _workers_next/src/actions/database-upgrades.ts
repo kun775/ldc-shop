@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { checkAdmin } from '@/actions/admin'
-import { ensureDatabaseInitialized, getDatabaseUpgradeStatus, runPendingDatabaseUpgrades } from '@/lib/db/queries'
+import { getDatabaseUpgradeStatus, runPendingDatabaseUpgrades } from '@/lib/db/queries'
 import { logServerError } from '@/lib/errors/safe-error'
 
 export async function refreshDatabaseUpgradeStatusAction() {
@@ -21,11 +21,6 @@ export async function refreshDatabaseUpgradeStatusAction() {
 export async function runDatabaseUpgradesAction() {
     try {
         await checkAdmin()
-        try {
-            await ensureDatabaseInitialized()
-        } catch (error: unknown) {
-            logServerError('admin.database.autoUpgrade', error)
-        }
         const { result, status } = await runPendingDatabaseUpgrades()
         revalidatePath('/admin/database')
 

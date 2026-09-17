@@ -3,7 +3,7 @@ import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, 
 import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/lib/constants";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema, repairPointLedgerStructureIfNeeded, resetPointLedgerSchemaReady, verifyPointLedgerStructure } from "@/lib/points/ledger-db";
 import { ensureAuditTables, repairAuditStructureIfNeeded, resetAuditSchemaReady, verifyAuditStructure } from "@/lib/audit/service";
-import { createAsyncOnceState, ensureOnce, isSchemaVersionSatisfied, parseSchemaVersion } from "@/lib/runtime/async-once";
+import { createAsyncOnceState, ensureOnce, parseSchemaVersion } from "@/lib/runtime/async-once";
 import { SCHEMA_DRIFT_PROBES, isSchemaDriftError } from "./schema-drift";
 import {
     COUPON_COUNTER_RECONCILIATION_STATEMENTS,
@@ -15,6 +15,7 @@ import { LOGIN_USERS_COLUMN_DEFINITIONS, LOGIN_USERS_CREATE_TABLE_STATEMENT } fr
 import { collectErrorText, isDuplicateColumnError } from "./error-utils";
 import { executeDatabaseUpgrades, ensureDatabaseMigrationsTable, readDatabaseUpgradeStatus } from "./database-upgrades";
 import { supportsRegisteredDatabaseUpgrades } from "./database-upgrade-registry";
+import { isMissingRelationError } from "./schema-errors";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -25,6 +26,7 @@ let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
 const CURRENT_SCHEMA_VERSION = 30;
 const dbInitializationState = createAsyncOnceState();
+const databaseUpgradePreparationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
 type ColumnEnsureKey = 'products' | 'orders' | 'cards' | 'loginUsers';
 const columnEnsureState: Record<ColumnEnsureKey, { ready: boolean; pending: Promise<void> | null }> = {
@@ -281,12 +283,13 @@ async function ensureReviewRepliesTable() {
     }
 }
 
-// ensureStructuralSchema 确保所有表、列与索引等结构对象存在（全部幂等）
+// ensureStructuralSchema 确保所有表、列与索引等结构对象存在（全部幂等）。
+// 只能从管理员手动升级路径调用，普通页面访问不得触发此函数。
 //
 // 元数据:
 //   - 作者: Codex
 //   - 创建时间: 2026-09-17
-//   - 更新内容: 从 ensureDatabaseInitialized 中抽出，供正常迁移与漂移修复两条路径复用。
+//   - 更新内容: 从普通请求初始化中隔离，仅供管理员手动升级与漂移修复使用。
 async function ensureStructuralSchema() {
     await ensureDatabaseMigrationsTable();
     await ensureProductsColumns();
@@ -345,20 +348,12 @@ async function runRegisteredDatabaseUpgrades() {
     });
 }
 
-async function runRegisteredDatabaseUpgradesOrThrow() {
-    const result = await runRegisteredDatabaseUpgrades();
-    if (result.failed) {
-        throw new Error(`DATABASE_UPGRADE_FAILED:${result.failed.id}:${result.failed.errorId}`);
-    }
-    return result;
-}
-
 export async function getDatabaseUpgradeStatus() {
-    await ensureDatabaseMigrationsTable();
     return readDatabaseUpgradeStatus(await verifyCurrentDatabaseStructure());
 }
 
 export async function runPendingDatabaseUpgrades() {
+    await prepareDatabaseForManualUpgrade();
     const result = await runRegisteredDatabaseUpgrades();
     const status = await getDatabaseUpgradeStatus();
     if (!result.failed && status.structureHealthy) {
@@ -368,14 +363,11 @@ export async function runPendingDatabaseUpgrades() {
     return { result, status };
 }
 
-// Auto-initialize database on first query
-export async function ensureDatabaseInitialized() {
-    if (dbInitialized) return;
-
-    await ensureOnce(dbInitializationState, async () => {
+// 仅由管理员点击“执行待升级项”时调用。这里保留历史数据库的基线补齐和
+// 全新数据库初始化能力，但绝不能从首页或普通业务请求调用。
+async function prepareDatabaseForManualUpgrade() {
+    await ensureOnce(databaseUpgradePreparationState, async () => {
         const persistedVersion = await getPersistedSchemaVersion();
-        const versionSatisfied = persistedVersion !== null
-            && isSchemaVersionSatisfied(persistedVersion, CURRENT_SCHEMA_VERSION);
         const registeredUpgradeSupported = supportsRegisteredDatabaseUpgrades(persistedVersion);
 
         let tableExists = false;
@@ -383,23 +375,15 @@ export async function ensureDatabaseInitialized() {
             // Quick check if products table exists
             await db.run(sql`SELECT 1 FROM products LIMIT 1`);
             tableExists = true;
-        } catch {
+        } catch (error: unknown) {
+            if (!isMissingRelationError(error)) throw error;
             tableExists = false;
         }
 
         if (tableExists) {
             if (registeredUpgradeSupported) {
-                try {
-                    await runRegisteredDatabaseUpgradesOrThrow();
-                    if (!versionSatisfied) {
-                        await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
-                    }
-                    markCurrentSchemaReady();
-                } catch (migrationError) {
-                    console.error("Registered database migration failed:", migrationError);
-                    resetSchemaReadyFlags();
-                    throw migrationError;
-                }
+                // schema 27+ 的数据库已经具备注册升级基线，具体升级由
+                // runPendingDatabaseUpgrades() 在管理员操作后统一执行。
                 return;
             }
 
@@ -411,12 +395,9 @@ export async function ensureDatabaseInitialized() {
                 await migrateMalformedGitHubUserIds();
                 await migrateGitHubUsersDedupAndCanonicalize();
                 await ensureIndexes();
-                await runRegisteredDatabaseUpgradesOrThrow();
                 await backfillProductAggregates();
-                await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
-                markCurrentSchemaReady();
             } catch (migrationError) {
-                console.error("Incremental database migration failed:", migrationError);
+                console.error("Manual database baseline migration failed:", migrationError);
                 resetSchemaReadyFlags();
                 throw migrationError;
             }
@@ -668,19 +649,23 @@ export async function ensureDatabaseInitialized() {
         await ensureUserPointLedgerSchema();
         await ensureDatabaseMigrationsTable();
         await backfillProductAggregates();
-        await runRegisteredDatabaseUpgradesOrThrow();
+        console.log("Database baseline initialized; registered upgrades are pending administrator execution");
+    });
+}
 
-        // Set initial schema version
+// 普通请求只确认基础业务表可读，不执行任何注册升级、DDL 或 schema 版本写入。
+// 数据库尚未初始化时，管理员必须先在 /admin/database 手动执行升级。
+export async function ensureDatabaseInitialized() {
+    if (dbInitialized) return;
+
+    await ensureOnce(dbInitializationState, async () => {
         try {
-            await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
-        } catch {
-            // If setSetting failed (e.g. settings table issue), try to ensure it exists and retry
-            await ensureSettingsTable();
-            await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
+            await db.run(sql`SELECT 1 FROM products LIMIT 1`);
+        } catch (error: unknown) {
+            if (!isMissingRelationError(error)) throw error;
+            throw new Error('DATABASE_NOT_INITIALIZED: run upgrades from /admin/database', { cause: error });
         }
-
-        markCurrentSchemaReady();
-        console.log("Database initialized successfully");
+        dbInitialized = true;
     });
 }
 

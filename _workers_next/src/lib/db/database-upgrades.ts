@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm'
 import { db } from './index'
 import { isDuplicateColumnError } from './error-utils'
+import { isMissingSchemaError } from './schema-errors'
 import { createAsyncOnceState, ensureOnce } from '@/lib/runtime/async-once'
 import { logServerError } from '@/lib/errors/safe-error'
 import {
@@ -88,24 +89,28 @@ export async function ensureDatabaseMigrationsTable() {
 }
 
 export async function readDatabaseUpgradeRecords(): Promise<DatabaseUpgradeRecord[]> {
-    await ensureDatabaseMigrationsTable()
-    const result = await db.run(sql`
-        SELECT
-            id,
-            name,
-            description,
-            status,
-            claim_id AS claimId,
-            started_at AS startedAt,
-            executed_at AS executedAt,
-            duration_ms AS durationMs,
-            error_id AS errorId,
-            error_message AS errorMessage,
-            updated_at AS updatedAt
-        FROM database_migrations
-        ORDER BY id ASC
-    `)
-    return rowsFromResult<DatabaseUpgradeRecord>(result)
+    try {
+        const result = await db.run(sql`
+            SELECT
+                id,
+                name,
+                description,
+                status,
+                claim_id AS claimId,
+                started_at AS startedAt,
+                executed_at AS executedAt,
+                duration_ms AS durationMs,
+                error_id AS errorId,
+                error_message AS errorMessage,
+                updated_at AS updatedAt
+            FROM database_migrations
+            ORDER BY id ASC
+        `)
+        return rowsFromResult<DatabaseUpgradeRecord>(result)
+    } catch (error: unknown) {
+        if (isMissingSchemaError(error)) return []
+        throw error
+    }
 }
 
 export async function readDatabaseUpgradeStatus(structureHealthy: boolean): Promise<DatabaseUpgradeStatus> {

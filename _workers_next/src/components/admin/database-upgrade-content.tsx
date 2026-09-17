@@ -112,7 +112,7 @@ export function DatabaseUpgradeContent({
                         <h1 className="text-xl font-bold text-foreground">数据库升级管理</h1>
                     </div>
                     <p className="max-w-3xl text-sm text-muted-foreground">
-                        部署后自动执行待升级项；此页面用于检查数据库真实结构，并手动重试失败或中断的升级。
+                        数据库升级仅在管理员点击执行后运行；首页和普通业务请求不会自动迁移。请先检查状态，再手动执行待升级或修复项。
                     </p>
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-2">

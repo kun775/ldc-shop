@@ -5,7 +5,7 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
     {
         id: '0028_database_upgrade_registry',
         name: '数据库升级管理与结构自检',
-        description: '补齐当前版本所需的表、字段、索引和触发器，并启用可追踪的自动升级记录。',
+        description: '补齐当前版本所需的表、字段、索引和触发器，并启用可追踪的管理员手动升级记录。',
         verifiesStructure: true,
     },
     {
