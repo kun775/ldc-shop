@@ -65,7 +65,14 @@
         "themeToggle": "Toggle theme",
         "themeLight": "Light",
         "themeDark": "Dark",
-        "themeSystem": "System"
+        "themeSystem": "System",
+        "retry": "Retry",
+        "close": "Close",
+        "loadingSlow": "This is taking longer than expected. Check your connection and retry.",
+        "errorTitle": "This page couldn't load",
+        "errorDescription": "Something went wrong. You can retry or go back.",
+        "errorIdLabel": "Error ID",
+        "goHome": "Go home"
     },
     "home": {
         "title": "Welcome to LDC Shop",

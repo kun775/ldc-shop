@@ -65,7 +65,14 @@
         "themeToggle": "切换主题",
         "themeLight": "浅色",
         "themeDark": "深色",
-        "themeSystem": "跟随系统"
+        "themeSystem": "跟随系统",
+        "retry": "重试",
+        "close": "关闭",
+        "loadingSlow": "加载时间过长，请检查网络后重试",
+        "errorTitle": "页面加载失败",
+        "errorDescription": "页面出现异常，可以重试或返回上一页。",
+        "errorIdLabel": "错误编号",
+        "goHome": "返回首页"
     },
     "home": {
         "title": "欢迎来到 LDC 商店",

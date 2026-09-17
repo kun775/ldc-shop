@@ -17,6 +17,8 @@
 /.next/
 .next.backup*
 _workers_next/.next.backup*
+# 本地验证构建的隔离产物目录（NEXT_DIST_DIR=.next-verify-xxx）
+_workers_next/.next-verify-*/
 /out/
 
 # production

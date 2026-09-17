@@ -171,7 +171,15 @@ function RootLayoutFallback() {
       <body className={cn("min-h-screen bg-background font-sans antialiased has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:min-h-0 has-[[data-admin-root]]:overflow-hidden")}>
         <div className="relative flex min-h-screen flex-col has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:min-h-0 has-[[data-admin-root]]:overflow-hidden">
           <div className="h-16 border-b border-border/40 bg-background/70" />
-          <div className="flex-1" />
+          <div className="flex flex-1 items-center justify-center">
+            {/* 冷启动兜底指示：根布局尚未解析完成时，客户端遮罩还没有机会挂载，
+                这里用纯 CSS 旋转器保证「不出现纯空白页」。不参与水合，无闪烁风险。 */}
+            <div
+              role="status"
+              aria-label="Loading"
+              className="h-6 w-6 animate-spin rounded-full border-2 border-muted border-t-primary motion-reduce:animate-none"
+            />
+          </div>
           <div className="h-16 border-t border-border/40 bg-background/70" />
         </div>
       </body>
