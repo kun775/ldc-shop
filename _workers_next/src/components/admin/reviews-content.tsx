@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useI18n } from "@/lib/i18n/context"
+import Link from "next/link"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,7 +11,7 @@ import { ClientDate } from "@/components/client-date"
 import { deleteReview, deleteReviewReply } from "@/actions/admin"
 import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 import { toast } from "sonner"
-import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { getAdminUserProfileUrl, getDisplayUsername } from "@/lib/user-profile-link"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
 import { ChevronLeft, ChevronRight } from "lucide-react"
@@ -207,14 +208,12 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
                   <div className="text-xs text-muted-foreground font-mono">{r.productId}</div>
                 </TableCell>
                 <TableCell className="max-w-[240px]">
-                  <a
-                    href={getExternalProfileUrl(r.username, r.userId) || "#"}
-                    target="_blank"
-                    rel="noreferrer"
+                  <Link
+                    href={getAdminUserProfileUrl(r.userId)!}
                     className="font-medium text-sm hover:underline text-primary"
                   >
                     {getDisplayUsername(r.username, r.userId)}
-                  </a>
+                  </Link>
                   <div className="text-xs text-muted-foreground font-mono">{r.userId}</div>
                 </TableCell>
                 <TableCell>
@@ -231,14 +230,12 @@ export function AdminReviewsContent({ reviews }: { reviews: ReviewRow[] }) {
                             <span className="rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground/80">
                               {t('admin.reviews.replyLabel')}
                             </span>
-                            <a
-                              href={getExternalProfileUrl(reply.username, reply.userId) || "#"}
-                              target="_blank"
-                              rel="noreferrer"
+                            <Link
+                              href={getAdminUserProfileUrl(reply.userId)!}
                               className="font-medium text-primary hover:underline"
                             >
                               {getDisplayUsername(reply.username, reply.userId)}
-                            </a>
+                            </Link>
                             <ClientDate value={reply.createdAt} format="dateTime" />
                           </div>
                           <div className="flex items-start justify-between gap-3">

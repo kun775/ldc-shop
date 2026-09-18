@@ -16,7 +16,7 @@ import { deleteOrders } from "@/actions/admin-orders"
 import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
 import { pageLoadingStore } from "@/lib/ui/page-loading-store"
 import { toast } from "sonner"
-import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { getAdminUserProfileUrl, getDisplayUsername } from "@/lib/user-profile-link"
 import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
 import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
 import { isManualFulfillment } from "@/lib/fulfillment"
@@ -642,15 +642,19 @@ export function AdminOrdersContent({
                                                             <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
                                                                 {order.username[0]?.toUpperCase()}
                                                             </div>
-                                                            <a
-                                                                href={getExternalProfileUrl(order.username, order.userId) || "#"}
-                                                                target="_blank"
-                                                                rel="noreferrer"
-                                                                className="truncate font-medium text-xs text-foreground hover:text-primary transition-colors hover:underline"
-                                                                title={order.username}
-                                                            >
-                                                                {getDisplayUsername(order.username, order.userId)}
-                                                            </a>
+                                                            {getAdminUserProfileUrl(order.userId) ? (
+                                                                <Link
+                                                                    href={getAdminUserProfileUrl(order.userId)!}
+                                                                    className="truncate font-medium text-xs text-foreground hover:text-primary transition-colors hover:underline"
+                                                                    title={order.username}
+                                                                >
+                                                                    {getDisplayUsername(order.username, order.userId)}
+                                                                </Link>
+                                                            ) : (
+                                                                <span className="truncate font-medium text-xs text-foreground" title={order.username}>
+                                                                    {getDisplayUsername(order.username, order.userId)}
+                                                                </span>
+                                                            )}
                                                         </div>
                                                         {order.email && (
                                                             <div className="flex items-center gap-1 text-[11px] text-muted-foreground">

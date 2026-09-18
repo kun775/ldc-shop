@@ -15,7 +15,7 @@ import { RefundButton } from "@/components/admin/refund-button"
 import { AdminPageShell } from "@/components/admin/admin-page-shell"
 import { toast } from "sonner"
 import { markOrderDelivered, markOrderPaid, cancelOrder, updateOrderEmail, deleteOrder, type OrderActionResult } from "@/actions/admin-orders"
-import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { getAdminUserProfileUrl, getDisplayUsername } from "@/lib/user-profile-link"
 import { getOrderPaymentBreakdown } from "@/lib/order-payment-breakdown"
 import { parseCheckoutFieldValues } from "@/lib/checkout-fields"
 import { isManualFulfillment } from "@/lib/fulfillment"
@@ -395,15 +395,15 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
 
             <div className="space-y-1">
               <div className="text-sm text-muted-foreground">{t('admin.orders.user')}</div>
-              {order.username ? (
-                <a
-                  href={getExternalProfileUrl(order.username, order.userId) || "#"}
-                  target="_blank"
-                  rel="noreferrer"
+              {order.username && getAdminUserProfileUrl(order.userId) ? (
+                <Link
+                  href={getAdminUserProfileUrl(order.userId)!}
                   className="font-medium text-sm hover:underline text-primary"
                 >
                   {getDisplayUsername(order.username, order.userId)}
-                </a>
+                </Link>
+              ) : order.username ? (
+                <div className="font-medium text-sm">{getDisplayUsername(order.username, order.userId)}</div>
               ) : (
                 <div className="font-medium text-sm text-muted-foreground">Guest</div>
               )}

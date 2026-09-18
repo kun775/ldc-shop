@@ -22,6 +22,11 @@ export function getDisplayUsername(username?: string | null, userId?: string | n
     return trimmed
 }
 
+export function getAdminUserProfileUrl(userId?: string | null) {
+    const trimmed = userId?.trim()
+    return trimmed ? `/admin/users/${encodeURIComponent(trimmed)}` : null
+}
+
 export function getExternalProfileUrl(username?: string | null, userId?: string | null) {
     if (!username) return null
     const trimmed = username.trim()

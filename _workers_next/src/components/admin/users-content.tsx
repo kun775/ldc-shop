@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "sonner"
 import { toggleBlock } from "@/actions/admin-users"
 import { Loader2, Search, ArrowLeft, ArrowRight, Edit, Ban, CheckCircle } from "lucide-react"
-import { getDisplayUsername } from "@/lib/user-profile-link"
+import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { UserPointAdjustmentDialog } from "./user-point-adjustment-dialog"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
@@ -179,9 +179,24 @@ export function UsersContent({ data }: UsersContentProps) {
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            data.items.map((user) => (
+                            data.items.map((user) => {
+                                const externalProfileUrl = getExternalProfileUrl(user.username, user.userId)
+
+                                return (
                                 <TableRow key={user.userId}>
-                                    <TableCell className="font-mono text-xs">{user.userId}</TableCell>
+                                    <TableCell className="font-mono text-xs">
+                                        {externalProfileUrl ? (
+                                            <a
+                                                href={externalProfileUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-primary hover:underline"
+                                                title="查看授权平台用户主页"
+                                            >
+                                                {user.userId}
+                                            </a>
+                                        ) : user.userId}
+                                    </TableCell>
                                     <TableCell>
                                         <Link href={`/admin/users/${user.userId}`} className="font-medium text-sm hover:underline text-primary">
                                             {user.nickname?.trim() || '-'}
@@ -220,7 +235,8 @@ export function UsersContent({ data }: UsersContentProps) {
                                         </Button>
                                     </TableCell>
                                 </TableRow>
-                            ))
+                                )
+                            })
                         )}
                     </TableBody>
                 </Table>

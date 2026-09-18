@@ -9,7 +9,7 @@ import { ClientDate } from '@/components/client-date'
 import { AdminListPage, AdminListScroll } from '@/components/admin/admin-page-shell'
 import { getCouponById, getCouponUsageSummary, listCouponUsages, getProductNamesByIds } from '@/lib/coupons/repository'
 import { centsToLdcNumber } from '@/lib/coupons/money'
-import { getDisplayUsername, getExternalProfileUrl } from '@/lib/user-profile-link'
+import { getAdminUserProfileUrl, getDisplayUsername } from '@/lib/user-profile-link'
 
 const USAGE_PAGE_SIZE = 20
 
@@ -252,15 +252,17 @@ export default async function AdminCouponDetailPage(props: {
                                         </Badge>
                                     </TableCell>
                                     <TableCell className="px-3">
-                                        {usage.username ? (
-                                            <a
-                                                href={getExternalProfileUrl(usage.username, usage.userId) || '#'}
-                                                target="_blank"
-                                                rel="noreferrer"
+                                        {usage.username && getAdminUserProfileUrl(usage.userId) ? (
+                                            <Link
+                                                href={getAdminUserProfileUrl(usage.userId)!}
                                                 className="text-xs font-medium text-primary hover:underline"
                                             >
                                                 {getDisplayUsername(usage.username, usage.userId)}
-                                            </a>
+                                            </Link>
+                                        ) : usage.username ? (
+                                            <span className="text-xs font-medium">
+                                                {getDisplayUsername(usage.username, usage.userId)}
+                                            </span>
                                         ) : (
                                             <span className="text-xs text-muted-foreground">未登录用户</span>
                                         )}

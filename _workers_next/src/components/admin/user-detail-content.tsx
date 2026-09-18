@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useI18n } from "@/lib/i18n/context"
-import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { getAdminUserProfileUrl, getDisplayUsername } from "@/lib/user-profile-link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { UserPointAdjustmentDialog } from "./user-point-adjustment-dialog"
@@ -158,14 +158,12 @@ export function AdminUserDetailContent(props: {
                     <div className="space-y-1">
                         <div className="text-sm text-muted-foreground">{t("admin.users.username")}</div>
                         {props.user.username ? (
-                            <a
-                                href={getExternalProfileUrl(props.user.username, props.user.userId) || "#"}
-                                target="_blank"
-                                rel="noreferrer"
+                            <Link
+                                href={getAdminUserProfileUrl(props.user.userId)!}
                                 className="font-medium text-primary hover:underline"
                             >
                                 {getDisplayUsername(props.user.username, props.user.userId)}
-                            </a>
+                            </Link>
                         ) : (
                             <div className="font-medium">-</div>
                         )}

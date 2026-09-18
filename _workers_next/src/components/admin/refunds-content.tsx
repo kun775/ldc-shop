@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useI18n } from "@/lib/i18n/context"
+import Link from "next/link"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -10,11 +11,25 @@ import { ClientDate } from "@/components/client-date"
 import { adminApproveRefund, adminRejectRefund } from "@/actions/refund-requests"
 import { RefundButton } from "@/components/admin/refund-button"
 import { toast } from "sonner"
-import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { getAdminUserProfileUrl, getDisplayUsername } from "@/lib/user-profile-link"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
+import { RefundOrderDetailDialog, type RefundOrderDetail } from "@/components/admin/refund-order-detail-dialog"
+
+interface RefundRequestRow extends RefundOrderDetail {
+  id: number
+  userId: string | null
+  username: string | null
+  reason: string | null
+  status: string | null
+  adminUsername: string | null
+  adminNote: string | null
+  createdAt: Date | null
+  updatedAt: Date | null
+  processedAt: Date | null
+}
 
 function statusVariant(status: string | null) {
   switch (status) {
@@ -25,7 +40,7 @@ function statusVariant(status: string | null) {
   }
 }
 
-export function AdminRefundsContent({ requests }: { requests: any[] }) {
+export function AdminRefundsContent({ requests }: { requests: RefundRequestRow[] }) {
   const { t } = useI18n()
   const { prompt } = useConfirm()
   const [query, setQuery] = useState("")
@@ -33,6 +48,7 @@ export function AdminRefundsContent({ requests }: { requests: any[] }) {
   const pageSize = 20
   const [processingId, setProcessingId] = useState<number | null>(null)
   const processingRef = useRef<number | null>(null)
+  const [selectedOrder, setSelectedOrder] = useState<RefundRequestRow | null>(null)
 
   useEffect(() => {
     setPage(1)
@@ -175,12 +191,23 @@ export function AdminRefundsContent({ requests }: { requests: any[] }) {
             ) : (
               pagedItems.map((r) => (
               <TableRow key={r.id}>
-                <TableCell className="font-mono text-xs">{r.orderId}</TableCell>
+                <TableCell className="font-mono text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOrder(r)}
+                    className="text-left text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    aria-label={`${t('admin.refunds.viewOrderDetail')}: ${r.orderId}`}
+                  >
+                    {r.orderId}
+                  </button>
+                </TableCell>
                 <TableCell>
-                  {r.username ? (
-                    <a href={getExternalProfileUrl(r.username, r.userId) || "#"} target="_blank" rel="noreferrer" className="font-medium text-sm hover:underline text-primary">
+                  {r.username && getAdminUserProfileUrl(r.userId) ? (
+                    <Link href={getAdminUserProfileUrl(r.userId)!} className="font-medium text-sm hover:underline text-primary">
                       {getDisplayUsername(r.username, r.userId)}
-                    </a>
+                    </Link>
+                  ) : r.username ? (
+                    <span className="font-medium text-sm">{getDisplayUsername(r.username, r.userId)}</span>
                   ) : (
                     <span className="text-muted-foreground">-</span>
                   )}
@@ -224,6 +251,13 @@ export function AdminRefundsContent({ requests }: { requests: any[] }) {
           </TableBody>
         </Table>
       </AdminListScroll>
+      <RefundOrderDetailDialog
+        order={selectedOrder}
+        open={!!selectedOrder}
+        onOpenChange={(open) => {
+          if (!open) setSelectedOrder(null)
+        }}
+      />
     </AdminListPage>
   )
 }
