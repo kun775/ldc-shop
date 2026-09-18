@@ -5,8 +5,8 @@
 | 日期 | 2026-09-18 |
 | 范围 | `_workers_next/`（Cloudflare Workers 正式版本） |
 | 方案依据 | `outputs/dex-sso-integration-plan-2026-09-18.md` |
-| 状态 | **代码已完成并通过全部本地验证；待配置线上凭据后上线** |
-| Git | 改动已落盘，**尚未提交** |
+| 状态 | **已上线**（版本 2.1.0，提交 `2f1c7ce`） |
+| Git | 已推送 main，Cloudflare 约 110s 完成构建，线上核验通过 |
 
 ---
 
@@ -108,23 +108,36 @@
 
 **第 2 项是本方案最大的技术风险点的直接消除**：它证明 `oauth4webapi`（Auth.js 的 OIDC 底层）能真实拉取 dex 的 discovery 文档并正确构造带 PKCE S256 的授权请求 —— 即方案中的「路径 1」可行，无需回退到手工 OAuth provider。
 
-### 3.2 尚未验证的部分
+### 3.2 线上核验（提交后实测）
 
-| 项 | 原因 | 何时可验证 |
+推送 main 后约 110 秒完成构建，随后对线上做全链路只读诊断，结果如下。
+
+| # | 核验项 | 结果 |
 | --- | --- | --- |
-| 真实凭据的完整登录闭环 | 需 dex 侧登记 redirect_uri 与真实 client 凭据 | 陛下完成第 4 节配置后 |
-| Cloudflare Workers 运行时执行 | 本地为 Node 运行时；沙箱内 `wrangler` 被安全策略拦截 | 推送到线上后首次登录 |
-| 回调成功后 `login_users` 落库形态 | 依赖上一项 | 同上 |
+| 1 | 新代码是否上线 | `GET /login`（`Accept-Language: en`）出现 `Sign in with Linux DO` —— 改动前该页面为硬编码中文，任何语言都显示中文，该文案是新代码的独有特征 |
+| 2 | provider 注册 | `GET /api/auth/providers` 返回三个：`linuxdo`(oauth) / `github`(oauth) / **`dex`(oidc)** |
+| 3 | 授权 URL | `POST /api/auth/signin/dex` → 302 到 `https://auth.zkun.de/dex/auth?response_type=code&client_id=ldc-shop&redirect_uri=https%3A%2F%2Fshop.ikun.day%2Fapi%2Fauth%2Fcallback%2Fdex&scope=openid+profile+email&code_challenge=...&code_challenge_method=S256` |
+| 4 | **dex 侧是否接受该回调地址** | 直接请求上述 authorize URL → **HTTP 200**，重定向至 `https://auth.zkun.de/dex/auth/local/login?back=&state=...`（dex 本地密码登录页，含 `<form>`，`lang="zh-CN"`）。**dex 未报 redirect_uri 错误，证明回调地址已在 dex 侧正确登记** |
 
-Workers 运行时风险已显著降低：Auth.js 的 OIDC 底层是 `oauth4webapi@3.8.8`（基于 `fetch` + WebCrypto，无 Node 原生依赖），且项目已开启 `nodejs_compat`。
+**结论：线上链路已可用。** `client_id=ldc-shop`、`redirect_uri` 与站点域名精确匹配、PKCE S256 已启用、scope 不含 `offline_access`。dex 的 connector 确认为本地密码（与"本地账号、自用"的描述一致）。
+
+### 3.3 仍未覆盖的部分
+
+| 项 | 说明 |
+| --- | --- |
+| 输入密码后的完整闭环 | 需人工在浏览器完成一次真实登录；诊断脚本只走到 dex 登录页为止 |
+| `login_users` 落库形态 | 依赖上一项；预期为 `user_id=dex:<sub>`、`username=dex_<句柄>` |
+| 管理员权限生效 | 依赖 `ADMIN_USER_IDS` 配置（见第 4 节步骤 3） |
 
 ---
 
-## 四、待陛下操作（3 步）
+## 四、配置状态
 
-### 步骤 1：dex 侧注册 static client
+### 步骤 1：dex 侧注册 static client — [已完成]
 
-在 dex 服务的 `config.yaml` 中新增：
+**实测确认**：线上 authorize URL 的 `client_id` 为 `ldc-shop`，`redirect_uri` 为 `https://shop.ikun.day/api/auth/callback/dex`，dex 直接返回 200 并跳转本地登录页，未报回调地址错误 —— 说明回调地址已在 dex 侧正确登记。
+
+以下为配置内容，供后续变更参考。在 dex 服务的 `config.yaml` 中：
 
 ```yaml
 staticClients:
@@ -139,7 +152,9 @@ staticClients:
 - 若还要通过 `*.workers.dev` 访问，需一并登记该域名的回调地址。
 - 建议同时确认 `skipApprovalScreen: true`，否则每次登录都会显示一次授权同意页。
 
-### 步骤 2：配置 Cloudflare Worker 环境变量
+### 步骤 2：配置 Cloudflare Worker 环境变量 — [已完成]
+
+**实测确认**：线上 `/api/auth/providers` 已返回 `dex`（type=oidc），且能生成带 PKCE S256 的授权 URL，说明凭据已生效。
 
 | 变量 | 类型 | 值 |
 | --- | --- | --- |
@@ -150,7 +165,9 @@ staticClients:
 
 > `DEX_CLIENT_SECRET` **必须**用 Secret 类型，且不可写入 `wrangler.json`（该文件入库，且已开启 `keep_vars: true`）。
 
-### 步骤 3：授予管理员权限
+### 步骤 3：授予管理员权限 — [待执行]
+
+> **这是当前唯一未完成的一步。** 在写入 `ADMIN_USER_IDS` 之前，DEX 登录成功后只是一个普通账号，无法进入 `/admin`。
 
 1. 部署后访问 `/login`，点击「使用 DEX 登录」完成一次登录。
 2. 进入 **后台 → 用户管理**，找到形如 `dex_用户名` 的记录，复制其用户 ID（形如 `dex:xxxxxxxx`）。
