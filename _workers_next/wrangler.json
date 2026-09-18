@@ -1,29 +1,35 @@
 {
-    "name": "ldc-shop",
-    "main": "worker-entry.mjs",
-    "keep_names": true,
-    "keep_vars": true,
-    "compatibility_date": "2025-11-12",
-    "compatibility_flags": [
-        "nodejs_compat"
-    ],
-    "assets": {
-        "directory": ".open-next/assets",
-        "binding": "ASSETS"
-    },
-    "d1_databases": [
-        {
-            "binding": "DB",
-            "database_name": "ldc-shop-next",
-            "database_id": "e3e8f6a3-132d-4a3a-85dd-29be0cec3e81"
-        }
-    ],
-    "triggers": {
-        "crons": [
-            "*/5 * * * *"
-        ]
-    },
-    "observability": {
-        "enabled": true
-    }
+	"name": "ldc-shop",
+	"main": "worker-entry.mjs",
+	"keep_names": true,
+	"keep_vars": true,
+	"compatibility_date": "2025-11-12",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"assets": {
+		"directory": ".open-next/assets",
+		"binding": "ASSETS"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "ldc-shop-next",
+			"database_id": "e3e8f6a3-132d-4a3a-85dd-29be0cec3e81"
+		}
+	],
+	"triggers": {
+		"crons": [
+			"*/5 * * * *"
+		]
+	},
+	"observability": {
+		"enabled": true
+	},
+	"r2_buckets": [
+		{
+			"bucket_name": "ldc-shop-files",
+			"binding": "FILES"
+		}
+	]
 }
