@@ -1,4 +1,21 @@
 {
+    "login": {
+        "title": "登录",
+        "withDex": "使用 DEX 登录",
+        "dexHint": "DEX 登录仅供后台管理员使用。共用设备上请勿保持 DEX 登录状态。",
+        "withGitHub": "使用 GitHub 登录",
+        "withLinuxDo": "使用 Linux DO 登录",
+        "error": {
+            "configuration": "认证服务配置异常，请联系管理员检查单点登录配置。",
+            "accessDenied": "该账号没有访问权限，请联系管理员。",
+            "providerUnavailable": "无法连接登录服务，请稍后重试。",
+            "callbackFailed": "登录回调处理失败，请重试；若持续出现请联系管理员。",
+            "accountNotLinked": "该邮箱已绑定其他登录方式，请改用原有方式登录。",
+            "verification": "登录校验失败，请重新尝试。",
+            "sessionRequired": "请先登录后再访问该页面。",
+            "generic": "登录失败，请重试；若持续出现请联系管理员。"
+        }
+    },
     "common": {
         "appName": "LDC 商店",
         "shopNamePattern": "{{name}}的 {{appName}}",

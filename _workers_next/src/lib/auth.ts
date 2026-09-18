@@ -8,6 +8,20 @@ import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
 const githubClientId = process.env.GITHUB_ID || process.env.AUTH_GITHUB_ID
 const githubClientSecret = process.env.GITHUB_SECRET || process.env.AUTH_GITHUB_SECRET
 
+/**
+ * DEX 单点登录配置。
+ *
+ * DEX 仅用于后台管理员登录（路线 0），普通用户继续使用 Linux DO / GitHub。
+ * DEX 是标准 OIDC：仅授权码模式 + PKCE S256 + RS256 签名，且 token 端点
+ * 只接受 client_secret_basic / client_secret_post，因此必须配置 client secret。
+ *
+ * 未配置时该 provider 不注册，登录页也不会显示入口。
+ */
+const dexIssuer = process.env.DEX_ISSUER || "https://auth.zkun.de/dex"
+const dexClientId = process.env.DEX_CLIENT_ID
+const dexClientSecret = process.env.DEX_CLIENT_SECRET
+const dexEnabled = process.env.DEX_ENABLED !== "false"
+
 const providers: any[] = [
     {
         id: "linuxdo",
@@ -125,6 +139,57 @@ function normalizeGitHubUsername(rawUsername: unknown, rawLogin: unknown, fallba
 
     const normalizedLogin = normalizeGitHubLogin(rawLogin, fallbackId)
     return normalizedLogin ? `gh_${normalizedLogin}` : null
+}
+
+function sanitizeDexHandle(rawHandle: unknown): string | null {
+    const normalized = normalizeAuthScalar(rawHandle)
+    if (!normalized) return null
+    const sanitized = normalized
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+    return sanitized || null
+}
+
+/**
+ * DEX 用户 id 一律规范为 `dex:<sub>` 形式。
+ *
+ * 加前缀是必须的：Linux DO 的 user_id 是裸数字，而 DEX 的 sub 在部分 connector 下
+ * 同样可能是纯数字串，一旦碰撞会把两个不同的人合并到同一账号（订单与积分串号）。
+ */
+function normalizeDexUserId(rawSub: unknown): string | null {
+    const base = normalizeAuthScalar(rawSub)
+    if (!base) return null
+    let normalized = base
+    while (normalized.toLowerCase().startsWith("dex:")) {
+        normalized = normalized.slice("dex:".length)
+    }
+    const sanitized = normalizeAuthScalar(normalized)
+    return sanitized ? `dex:${sanitized}` : null
+}
+
+/**
+ * DEX 用户名规范为 `dex_<handle>`，与 GitHub 的 `gh_` 前缀风格保持一致。
+ *
+ * 依次尝试 preferred_username → name → email 本地部分，全部不可用时回退到 sub
+ * 前 12 位（保证 username 不为空，后台列表不会出现空白的用户名列）。
+ */
+function normalizeDexUsername(rawUsername: unknown, rawName: unknown, rawEmail: unknown, rawSub?: unknown): string | null {
+    for (const candidate of [rawUsername, rawName]) {
+        const handle = sanitizeDexHandle(candidate)
+        if (handle) return `dex_${handle}`
+    }
+
+    const email = normalizeAuthScalar(rawEmail)
+    if (email && email.includes("@")) {
+        const handle = sanitizeDexHandle(email.split("@")[0])
+        if (handle) return `dex_${handle}`
+    }
+
+    const sub = normalizeDexUserId(rawSub)
+    if (sub) return `dex_${sub.slice("dex:".length).slice(0, 12).toLowerCase()}`
+
+    return null
 }
 
 function asTimestampMs(value: Date | number | string | null | undefined): number | null {
@@ -354,6 +419,50 @@ if (githubClientId && githubClientSecret) {
     console.warn("[auth] GitHub login disabled: missing GITHUB_ID/GITHUB_SECRET")
 }
 
+if (dexEnabled && dexClientId && dexClientSecret) {
+    providers.push({
+        id: "dex",
+        name: "DEX",
+        type: "oidc",
+        issuer: dexIssuer,
+        clientId: dexClientId,
+        clientSecret: dexClientSecret,
+        authorization: {
+            params: {
+                // 不申请 offline_access：本站不调用 DEX 的任何下游 API，
+                // 申请 refresh_token 只会平白扩大令牌泄漏面。
+                scope: "openid profile email",
+            },
+        },
+        profile(profile: any) {
+            const resolvedId = normalizeDexUserId(profile?.sub)
+            if (!resolvedId) {
+                console.error("[auth] dex profile.sub missing in provider profile", {
+                    sub: profile?.sub ?? null,
+                    preferredUsername: profile?.preferred_username ?? null,
+                })
+                throw new Error("DEX_SUB_MISSING")
+            }
+
+            return {
+                id: resolvedId,
+                name: profile?.name || profile?.preferred_username || resolvedId,
+                email: profile?.email,
+                image: profile?.picture,
+                username: normalizeDexUsername(
+                    profile?.preferred_username,
+                    profile?.name,
+                    profile?.email,
+                    profile?.sub,
+                ),
+                avatar_url: profile?.picture,
+            }
+        },
+    })
+} else if (!dexClientId || !dexClientSecret) {
+    console.warn("[auth] DEX login disabled: missing DEX_CLIENT_ID/DEX_CLIENT_SECRET")
+}
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
     providers,
     events: {
@@ -431,6 +540,30 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                             resolvedId = existingUserId
                         }
                     }
+                } else if (account?.provider === "dex") {
+                    // 规范化在 provider profile 阶段已完成，此处再兜底一次，
+                    // 防止 profile 字段缺失时 id 退化为裸 sub（会与 Linux DO 数字 id 撞车）。
+                    const canonicalDexId =
+                        normalizeDexUserId((profile as any)?.sub) ||
+                        normalizeDexUserId(account.providerAccountId) ||
+                        normalizeDexUserId(resolvedId)
+                    if (!canonicalDexId) {
+                        console.error("[auth] dex profile.sub missing in jwt callback", {
+                            profileSub: (profile as any)?.sub ?? null,
+                            providerAccountId: account.providerAccountId ?? null,
+                            userId: user.id ?? null,
+                        })
+                        throw new Error("DEX_SUB_MISSING")
+                    }
+                    resolvedId = canonicalDexId
+
+                    const dexUsername = normalizeDexUsername(
+                        (profile as any)?.preferred_username,
+                        (profile as any)?.name,
+                        (profile as any)?.email,
+                        (profile as any)?.sub,
+                    )
+                    if (dexUsername) resolvedUsername = dexUsername
                 }
 
                 token.id = resolvedId
@@ -473,7 +606,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         }
     },
     pages: {
-        signIn: "/login"
+        signIn: "/login",
+        // 统一错误落点：DEX 引入的失败模式更多（discovery 不可达、client secret 错误、
+        // redirect_uri 未登记），Auth.js 默认错误页不会给出可操作的提示。
+        error: "/login",
     },
     // Temporary diagnostics: keep this until OAuth callback issue is resolved.
     logger: {

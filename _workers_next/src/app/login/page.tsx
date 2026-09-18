@@ -1,41 +1,42 @@
-"use client"
+import { Suspense } from "react"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { LoginForm } from "./login-form"
 
-import { signIn } from "next-auth/react"
-import { useSearchParams } from "next/navigation"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Github, LogIn } from "lucide-react"
+// provider 可用性来自 Cloudflare Worker Secret，必须在运行时读取；
+// 一旦被静态预渲染固化，构建期不可见的 secret 会让入口永久消失。
+export const dynamic = "force-dynamic"
+
+function isGithubEnabled() {
+    const clientId = process.env.GITHUB_ID || process.env.AUTH_GITHUB_ID
+    const clientSecret = process.env.GITHUB_SECRET || process.env.AUTH_GITHUB_SECRET
+    return Boolean(clientId && clientSecret)
+}
+
+function isDexEnabled() {
+    if (process.env.DEX_ENABLED === "false") return false
+    return Boolean(process.env.DEX_CLIENT_ID && process.env.DEX_CLIENT_SECRET)
+}
+
+function LoginFallback() {
+    return (
+        <main className="container py-16 max-w-md">
+            <Card className="tech-card overflow-hidden">
+                <CardHeader className="space-y-2">
+                    <div className="h-8 w-24 rounded-md bg-muted/60 animate-pulse" />
+                </CardHeader>
+                <CardContent className="space-y-3">
+                    <div className="h-10 w-full rounded-md bg-muted/40 animate-pulse" />
+                    <div className="h-10 w-full rounded-md bg-muted/40 animate-pulse" />
+                </CardContent>
+            </Card>
+        </main>
+    )
+}
 
 export default function LoginPage() {
-  const searchParams = useSearchParams()
-  const callbackUrl = searchParams.get("callbackUrl") || "/"
-
-  return (
-    <main className="container py-16 max-w-md">
-      <Card className="tech-card overflow-hidden">
-        <CardHeader className="space-y-2">
-          <CardTitle className="text-2xl">登录</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Button
-            size="lg"
-            variant="outline"
-            className="w-full"
-            onClick={() => signIn("github", { callbackUrl })}
-          >
-            <Github className="mr-2 h-4 w-4" />
-            使用 GitHub 登录
-          </Button>
-          <Button
-            size="lg"
-            className="w-full bg-foreground text-background hover:bg-foreground/90"
-            onClick={() => signIn("linuxdo", { callbackUrl })}
-          >
-            <LogIn className="mr-2 h-4 w-4" />
-            使用 Linux DO 登录
-          </Button>
-        </CardContent>
-      </Card>
-    </main>
-  )
+    return (
+        <Suspense fallback={<LoginFallback />}>
+            <LoginForm githubEnabled={isGithubEnabled()} dexEnabled={isDexEnabled()} />
+        </Suspense>
+    )
 }

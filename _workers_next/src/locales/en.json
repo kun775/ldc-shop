@@ -1,4 +1,21 @@
 {
+    "login": {
+        "title": "Sign in",
+        "withDex": "Sign in with DEX",
+        "dexHint": "DEX sign-in is reserved for administrators. Avoid staying signed in on shared devices.",
+        "withGitHub": "Sign in with GitHub",
+        "withLinuxDo": "Sign in with Linux DO",
+        "error": {
+            "configuration": "Authentication is misconfigured. Please ask an administrator to check the SSO settings.",
+            "accessDenied": "This account is not permitted to sign in. Please contact an administrator.",
+            "providerUnavailable": "Could not reach the sign-in service. Please try again later.",
+            "callbackFailed": "The sign-in callback failed. Please retry, and contact an administrator if it persists.",
+            "accountNotLinked": "This email is already linked to another sign-in method. Please use that method.",
+            "verification": "Sign-in verification failed. Please try again.",
+            "sessionRequired": "Please sign in to access this page.",
+            "generic": "Sign-in failed. Please retry, and contact an administrator if it persists."
+        }
+    },
     "common": {
         "appName": "LDC Shop",
         "shopNamePattern": "{{name}}'s {{appName}}",

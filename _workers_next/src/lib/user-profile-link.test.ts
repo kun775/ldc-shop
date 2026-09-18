@@ -21,3 +21,19 @@ test('admin customer links stay on the current shop origin', () => {
     assert.equal(getAdminUserProfileUrl(' 123 '), '/admin/users/123')
     assert.equal(getAdminUserProfileUrl('  '), null)
 })
+
+test('DEX users never link out to LinuxDo', () => {
+    assert.equal(getExternalProfileUrl('dex_alice', 'dex:ChABC123'), null)
+    assert.equal(getDisplayUsername('dex_alice', 'dex:ChABC123'), 'dex_alice')
+})
+
+test('DEX identity is recognised from the user id alone and normalised on display', () => {
+    assert.equal(getExternalProfileUrl('alice', 'dex:ChABC123'), null)
+    assert.equal(getDisplayUsername('DEX_Alice', 'dex:ChABC123'), 'dex_alice')
+    assert.equal(getDisplayUsername('Alice', 'dex:ChABC123'), 'dex_alice')
+})
+
+test('DEX user ids that are purely numeric are not mistaken for LinuxDo users', () => {
+    assert.equal(getExternalProfileUrl('12345', 'dex:12345'), null)
+    assert.equal(getExternalProfileUrl('12345', '12345'), 'https://linux.do/u/12345')
+})

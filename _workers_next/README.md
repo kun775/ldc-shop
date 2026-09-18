@@ -180,14 +180,20 @@ npx wrangler r2 bucket create ldc-shop-files
 | `OAUTH_CLIENT_SECRET` | Secret | Linux DO Connect Client Secret |
 | `GITHUB_ID` | Secret | GitHub OAuth App Client ID（可选，配置后启用 GitHub 登录） |
 | `GITHUB_SECRET` | Secret | GitHub OAuth App Client Secret（可选，配置后启用 GitHub 登录） |
+| `DEX_ISSUER` | Text | DEX 单点登录 Issuer，默认 `https://auth.zkun.de/dex`（可选） |
+| `DEX_CLIENT_ID` | Text | DEX `staticClients` 的 id（可选，与 `DEX_CLIENT_SECRET` 同时配置后启用 DEX 登录） |
+| `DEX_CLIENT_SECRET` | Secret | DEX `staticClients` 的 secret（**必须 Secret**） |
+| `DEX_ENABLED` | Text | 设为 `false` 可隐藏 DEX 登录入口（凭据已配置时仍可临时关闭） |
 | `MERCHANT_ID` | Secret | EPay 商户 ID |
 | `MERCHANT_KEY` | Secret | EPay 商户 Key |
 | `AUTH_SECRET` | Secret | 随机字符串 (可用 `openssl rand -base64 32` 生成) |
-| `ADMIN_USERS` | Secret | 管理员用户名列表（支持 Linux DO 用户名和 GitHub 用户名 `gh_GitHub用户名`），逗号分隔。例如: `zhangsan,gh_octocat` |
+| `ADMIN_USERS` | Secret | 管理员用户名列表（支持 Linux DO 用户名、GitHub 用户名 `gh_GitHub用户名`、DEX 用户名 `dex_用户名`），逗号分隔。例如: `zhangsan,gh_octocat` |
+| `ADMIN_USER_IDS` | Secret | 管理员用户 ID 列表（优先级高于 `ADMIN_USERS`），逗号分隔。DEX 管理员填写形如 `dex:xxxxxxxx` 的 ID |
 | `NEXT_PUBLIC_APP_URL` | **Text** | 你的 Workers 域名 (如 `https://ldc-shop.xxx.workers.dev`) |
 
 > ⚠️ **重要**: `NEXT_PUBLIC_APP_URL` **必须**设置为 Text 类型，不能用 Secret，否则支付签名会失败！
 > ⚠️ **重要**: 若 GitHub 用户需要管理员权限，`ADMIN_USERS` 中**必须**填写 `gh_GitHub用户名`（例如 `gh_octocat`），不能只写原始 GitHub 用户名。
+> ⚠️ **重要**: DEX 登录仅用于后台管理员（见下方「DEX 单点登录」）。
 
 **回调地址配置：**
 
@@ -197,6 +203,7 @@ npx wrangler r2 bucket create ldc-shop-files
 |------|--------|------|
 | Linux DO Connect | 回调地址 (Callback URL) | `https://ldc-shop.xxx.workers.dev/api/auth/callback/linuxdo` |
 | GitHub OAuth App | 回调地址 (Authorization callback URL) | `https://ldc-shop.xxx.workers.dev/api/auth/callback/github` |
+| DEX | 回调地址 (`staticClients[].redirectURIs`) | `https://ldc-shop.xxx.workers.dev/api/auth/callback/dex` |
 | EPay / Linux DO Credit | 通知 URL (Notify URL) | `https://ldc-shop.xxx.workers.dev/api/notify` |
 | EPay / Linux DO Credit | 回调 URL (Return URL) | `https://ldc-shop.xxx.workers.dev/callback` |
 
@@ -217,6 +224,27 @@ npx wrangler r2 bucket create ldc-shop-files
 6. 将二者分别填入 Workers 环境变量：
    - `GITHUB_ID` = Client ID
    - `GITHUB_SECRET` = Client Secret（建议使用 Secret）
+
+**DEX 单点登录（仅后台管理员）：**
+
+DEX 入口用于后台管理员统一登录，普通用户仍使用 Linux DO / GitHub。在 DEX 服务的 `config.yaml` 中注册一个 confidential client：
+
+```yaml
+staticClients:
+  - id: ldc-shop
+    name: 'LDC Shop'
+    secret: '<生成的密钥或 bcrypt hash>'
+    redirectURIs:
+      - 'https://<你的站点域名>/api/auth/callback/dex'
+```
+
+配置要点：
+
+1. `redirectURIs` 必须与站点实际访问地址**精确匹配**（协议、域名、路径、大小写均需一致），DEX 不支持通配符。
+2. 在 Workers 环境变量中填入 `DEX_CLIENT_ID`（对应上方的 `id`）与 `DEX_CLIENT_SECRET`。两者缺一则该登录入口不会出现。
+3. 首次登录后，后台「用户管理」会出现形如 `dex_用户名` 的用户，其用户 ID 为 `dex:<sub>`。把该 ID 写入 `ADMIN_USER_IDS` 即可授予后台权限（建议用 ID 而非用户名，用户名可在 DEX 侧被修改）。
+4. **DEX 不提供单点登出端点**（其 discovery 文档中无 `end_session_endpoint`）。在本站登出只会清除本站会话，DEX 侧的登录状态仍然保留，再次点击登录会直接进入。共用设备上请勿保持 DEX 登录状态。
+5. 系统不会申请 `offline_access`，本站不调用 DEX 的下游 API，无需 refresh token。
 
 #### 6. 首次访问与数据库升级
 
@@ -265,13 +293,19 @@ npx wrangler r2 bucket create ldc-shop-files
 | `OAUTH_CLIENT_SECRET` | Linux DO Connect Client Secret（Secret） |
 | `GITHUB_ID` | GitHub OAuth App Client ID（可选，配置后启用 GitHub 登录） |
 | `GITHUB_SECRET` | GitHub OAuth App Client Secret（可选，配置后启用 GitHub 登录） |
+| `DEX_ISSUER` | DEX 单点登录 Issuer，默认 `https://auth.zkun.de/dex`（可选） |
+| `DEX_CLIENT_ID` | DEX `staticClients` 的 id（可选，与 `DEX_CLIENT_SECRET` 同时配置后启用 DEX 登录） |
+| `DEX_CLIENT_SECRET` | DEX `staticClients` 的 secret（**必须 Secret**） |
+| `DEX_ENABLED` | 设为 `false` 可隐藏 DEX 登录入口 |
 | `MERCHANT_ID` | EPay 商户 ID（建议 Secret） |
 | `MERCHANT_KEY` | EPay 商户 Key（Secret） |
 | `AUTH_SECRET` | NextAuth 加密密钥（Secret） |
-| `ADMIN_USERS` | 管理员用户名列表，支持 Linux DO 用户名和 GitHub `gh_GitHub用户名` 用户名，逗号分隔。例如: `zhangsan,gh_octocat` |
+| `ADMIN_USERS` | 管理员用户名列表，支持 Linux DO 用户名、GitHub `gh_GitHub用户名`、DEX `dex_用户名`，逗号分隔。例如: `zhangsan,gh_octocat` |
+| `ADMIN_USER_IDS` | 管理员用户 ID 列表（优先级高于 `ADMIN_USERS`），逗号分隔。DEX 管理员填写形如 `dex:xxxxxxxx` 的 ID |
 | `NEXT_PUBLIC_APP_URL` | 部署后的完整 URL (用于回调，必须 Text) |
 
 > ⚠️ 使用 GitHub 登录时，系统用户名会自动加前缀 `gh_`；如需管理员权限，`ADMIN_USERS` 中**必须**填写这个带前缀的用户名（例如 `gh_octocat`），不能只写 `octocat`。
+> ⚠️ 使用 DEX 登录时，系统用户名会自动加前缀 `dex_`，用户 ID 为 `dex:<sub>`。DEX 仅用于后台管理员登录。
 
 ## 🔌 卡密自动补货 API 对接
 

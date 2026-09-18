@@ -9,10 +9,29 @@ export function isGitHubUser(username?: string | null, userId?: string | null) {
     return userId.trim().toLowerCase().startsWith("github:")
 }
 
+export const DEX_USER_ID_PREFIX = "dex:"
+export const DEX_USERNAME_PREFIX = "dex_"
+
+export function isDexUsername(username?: string | null) {
+    if (!username) return false
+    return username.trim().toLowerCase().startsWith(DEX_USERNAME_PREFIX)
+}
+
+export function isDexUser(username?: string | null, userId?: string | null) {
+    if (isDexUsername(username)) return true
+    if (!userId) return false
+    return userId.trim().toLowerCase().startsWith(DEX_USER_ID_PREFIX)
+}
+
 export function getDisplayUsername(username?: string | null, userId?: string | null) {
     if (!username) return null
     const trimmed = username.trim()
     if (!trimmed) return null
+
+    if (isDexUser(trimmed, userId)) {
+        const normalized = trimmed.toLowerCase()
+        return normalized.startsWith(DEX_USERNAME_PREFIX) ? normalized : `${DEX_USERNAME_PREFIX}${normalized}`
+    }
 
     if (isGitHubUser(trimmed, userId)) {
         const normalized = trimmed.toLowerCase()
@@ -38,6 +57,12 @@ export function getExternalProfileUrl(username?: string | null, userId?: string 
         if (githubLogin) {
             return `https://github.com/${encodeURIComponent(githubLogin)}`
         }
+        return null
+    }
+
+    if (isDexUser(trimmed, userId)) {
+        // DEX 账号没有可公开访问的个人主页，返回 null 让调用方降级为纯文本展示；
+        // 否则会被下方默认分支错误地链接到 linux.do 的用户页。
         return null
     }
 
