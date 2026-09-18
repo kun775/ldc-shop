@@ -427,6 +427,20 @@ if (dexEnabled && dexClientId && dexClientSecret) {
         issuer: dexIssuer,
         clientId: dexClientId,
         clientSecret: dexClientSecret,
+        // 手写 provider 必须显式声明 checks。
+        //
+        // @auth/core 的 parseProviders 对 oauth/oidc 一律取 `c.checks ?? ["pkce"]`，
+        // 并没有针对 OIDC 的额外默认值；不写这一行时 state 与 nonce 都不会启用：
+        //   - authorization-url.js 里 `checks.state.create()` 直接 return，
+        //     所以授权 URL 不带 state；回调侧 callback.js 也据此走 `o.skipStateCheck`
+        //   - 同理 `checks.nonce.create()` 直接 return，id_token 不校验 nonce
+        // 内置的 OIDC provider（okta / roblox / salesforce / vipps / bankid-no 等）
+        // 都显式写了 checks，就是为了绕开这个默认值。
+        //
+        // 注：PKCE S256 已能挡住「把他人授权码塞进受害者浏览器」这类登录 CSRF，
+        // 因此缺 state 不构成立即可利用的漏洞；但 state 是零成本的双保险，
+        // 且非 code 流程下 PKCE 不生效。nonce 则用于把 id_token 绑定到本次浏览器会话。
+        checks: ["pkce", "state", "nonce"],
         authorization: {
             params: {
                 // 不申请 offline_access：本站不调用 DEX 的任何下游 API，
