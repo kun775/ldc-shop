@@ -326,7 +326,12 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                                     <span className="text-xs font-normal text-muted-foreground ml-1.5">{t('common.credits')}</span>
                                 </p>
                                 <p className="text-xs text-muted-foreground">
-                                    {t('admin.orders.ldcPaid')} {paymentBreakdown.ldcAmount} · {t('admin.orders.pointsDeduction')} {paymentBreakdown.pointsAmount} · {t('order.quantity')} {Number(order.quantity || 1)}
+                                    {paymentBreakdown.pointsDiscountAmount > 0 && (
+                                        <>
+                                            {t('admin.orders.pointsDeduction')} -{paymentBreakdown.pointsDiscountAmount.toFixed(2)} ·{' '}
+                                        </>
+                                    )}
+                                    {t('order.quantity')} {Number(order.quantity || 1)}
                                 </p>
                             </div>
                             <div className="h-12 w-12 bg-gradient-to-br from-primary/20 to-primary/5 rounded-xl flex items-center justify-center border border-primary/20">

@@ -678,16 +678,10 @@ export function AdminOrdersContent({
                                                         <span className="text-[10px] text-muted-foreground font-sans">{t('admin.orders.ldcPaid')}</span>
                                                         <span>¥{paymentBreakdown.ldcAmount}</span>
                                                     </div>
-                                                    {Number(paymentBreakdown.pointsAmount) > 0 && (
+                                                    {paymentBreakdown.pointsDiscountAmount > 0 && (
                                                         <div className="text-[10px] text-amber-600 dark:text-amber-400 font-medium tabular-nums flex items-baseline gap-1">
                                                             <span className="text-[10px] text-muted-foreground font-sans">{t('admin.orders.pointsDeduction')}</span>
-                                                            <span>-{paymentBreakdown.pointsAmount}</span>
-                                                        </div>
-                                                    )}
-                                                    {paymentBreakdown.totalAmount !== paymentBreakdown.ldcAmount && (
-                                                        <div className="text-[10px] text-muted-foreground/80 tabular-nums flex items-baseline gap-1">
-                                                            <span className="text-[10px] text-muted-foreground/60 font-sans">{t('admin.orders.orderTotal')}</span>
-                                                            <span>¥{paymentBreakdown.totalAmount}</span>
+                                                            <span>-{paymentBreakdown.pointsDiscountAmount.toFixed(2)}</span>
                                                         </div>
                                                     )}
                                                 </div>

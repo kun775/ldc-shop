@@ -33,6 +33,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
         subtotalAmountCents: order.subtotalAmountCents,
         couponDiscountAmountCents: order.couponDiscountAmountCents,
         pointsDiscountAmountCents: order.pointsDiscountAmountCents,
+        pricingSnapshot: order.pricingSnapshot,
         quantity: Number(order.quantity || 1),
         status: order.status,
         tradeNo: order.tradeNo,

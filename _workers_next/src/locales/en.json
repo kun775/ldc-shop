@@ -749,6 +749,8 @@
             "deliveryTooManyFiles": "Too many files.",
             "paymentBreakdown": "Payment Breakdown",
             "ldcPaid": "LDC Paid",
+            "subtotal": "Subtotal",
+            "couponDiscount": "Coupon discount",
             "pointsDeduction": "Points Deduction",
             "orderTotal": "Order Total",
             "email": "Email",

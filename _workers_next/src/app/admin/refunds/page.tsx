@@ -44,6 +44,7 @@ export default async function AdminRefundsPage() {
         subtotalAmountCents: orders.subtotalAmountCents,
         couponDiscountAmountCents: orders.couponDiscountAmountCents,
         pointsDiscountAmountCents: orders.pointsDiscountAmountCents,
+        pricingSnapshot: orders.pricingSnapshot,
         productName: orders.productName,
         cardKey: orders.cardKey,
         checkoutFieldValues: orders.checkoutFieldValues,

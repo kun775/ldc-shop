@@ -749,6 +749,8 @@
             "deliveryTooManyFiles": "附件数量超过限制。",
             "paymentBreakdown": "支付明细",
             "ldcPaid": "LDC 实付",
+            "subtotal": "商品小计",
+            "couponDiscount": "优惠券优惠",
             "pointsDeduction": "积分抵扣",
             "orderTotal": "订单合计",
             "email": "邮箱",

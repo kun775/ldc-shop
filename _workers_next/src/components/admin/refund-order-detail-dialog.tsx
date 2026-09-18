@@ -36,6 +36,8 @@ export interface RefundOrderDetail {
   subtotalAmountCents: number | null
   couponDiscountAmountCents: number | null
   pointsDiscountAmountCents: number | null
+  /** orders.pricing_snapshot，用于展示逐张优惠券抵扣明细 */
+  pricingSnapshot: string | null
   checkoutFieldValues: string | null
   fulfillmentMode: string | null
   deliveryNote: string | null
@@ -80,6 +82,7 @@ export function RefundOrderDetailDialog({
         subtotalAmountCents: order.subtotalAmountCents,
         couponDiscountAmountCents: order.couponDiscountAmountCents,
         pointsDiscountAmountCents: order.pointsDiscountAmountCents,
+        pricingSnapshot: order.pricingSnapshot,
       })
     : null
   const checkoutFieldValues = order ? parseCheckoutFieldValues(order.checkoutFieldValues) : []
@@ -151,30 +154,46 @@ export function RefundOrderDetailDialog({
 
             <section className="space-y-3 border-t border-border/60 pt-4">
               <h3 className="text-sm font-semibold">{t('admin.orders.paymentBreakdown')}</h3>
-              <div className="grid gap-2 rounded-md border bg-muted/20 p-3 text-sm sm:grid-cols-2">
-                {paymentBreakdown.hasCouponBreakdown && paymentBreakdown.subtotalAmount !== null && (
+              {/* 口径：商品小计 − 优惠券 − 积分抵扣 = 订单合计（网关实付），与订单详情页保持一致 */}
+              <div className="space-y-2 rounded-md border bg-muted/20 p-3 text-sm">
+                {paymentBreakdown.subtotalAmount !== null && (
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-muted-foreground">{t('admin.refunds.subtotal')}</span>
+                    <span className="text-muted-foreground">{t('admin.orders.subtotal')}</span>
                     <span className="font-medium tabular-nums">{paymentBreakdown.subtotalAmount.toFixed(2)}</span>
                   </div>
                 )}
                 {paymentBreakdown.couponDiscountAmount > 0 && (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-muted-foreground">{t('admin.orders.couponDiscount')}</span>
+                      <span className="font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
+                        -{paymentBreakdown.couponDiscountAmount.toFixed(2)}
+                      </span>
+                    </div>
+                    {paymentBreakdown.couponLines.map((line, index) => (
+                      <div
+                        key={`${line.couponId || line.code}-${index}`}
+                        className="flex items-center justify-between gap-4 pl-3 text-xs"
+                      >
+                        <span className="truncate font-mono text-muted-foreground/80">
+                          {line.code || line.couponId}
+                        </span>
+                        <span className="tabular-nums text-emerald-600/90 dark:text-emerald-400/90">
+                          -{line.discountAmount.toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {paymentBreakdown.pointsDiscountAmount > 0 && (
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-muted-foreground">{t('admin.refunds.couponDiscount')}</span>
-                    <span className="font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
-                      -{paymentBreakdown.couponDiscountAmount.toFixed(2)}
+                    <span className="text-muted-foreground">{t('admin.orders.pointsDeduction')}</span>
+                    <span className="font-medium tabular-nums text-amber-600 dark:text-amber-400">
+                      -{paymentBreakdown.pointsDiscountAmount.toFixed(2)}
                     </span>
                   </div>
                 )}
-                <div className="flex items-center justify-between gap-4">
-                  <span className="text-muted-foreground">{t('admin.orders.ldcPaid')}</span>
-                  <span className="font-medium tabular-nums">{paymentBreakdown.ldcAmount}</span>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <span className="text-muted-foreground">{t('admin.orders.pointsDeduction')}</span>
-                  <span className="font-medium tabular-nums">{paymentBreakdown.pointsAmount}</span>
-                </div>
-                <div className="flex items-center justify-between gap-4 sm:col-span-2 sm:border-t sm:border-border/50 sm:pt-2">
+                <div className="flex items-center justify-between gap-4 border-t border-border/50 pt-2">
                   <span className="font-medium">{t('admin.orders.orderTotal')}</span>
                   <span className="font-semibold tabular-nums">{paymentBreakdown.totalAmount}</span>
                 </div>
