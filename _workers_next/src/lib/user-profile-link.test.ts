@@ -4,6 +4,7 @@ import {
     getAdminUserProfileUrl,
     getDisplayUsername,
     getExternalProfileUrl,
+    normalizeAdminUserProfileId,
 } from './user-profile-link.ts'
 
 test('LinuxDo users link to their LinuxDo profile', () => {
@@ -17,10 +18,19 @@ test('GitHub users link to GitHub and hide the internal username prefix', () => 
 })
 
 test('admin customer links stay on the current shop origin', () => {
-    assert.equal(getAdminUserProfileUrl('github:583231'), '/admin/users/github%3A583231')
-    assert.equal(getAdminUserProfileUrl('dex:ChABC123'), '/admin/users/dex%3AChABC123')
-    assert.equal(getAdminUserProfileUrl(' 123 '), '/admin/users/123')
+    assert.equal(getAdminUserProfileUrl('github:583231'), '/admin/users/detail?userId=github%3A583231')
+    assert.equal(getAdminUserProfileUrl('dex:ChABC123'), '/admin/users/detail?userId=dex%3AChABC123')
+    assert.equal(getAdminUserProfileUrl(' 123 '), '/admin/users/detail?userId=123')
     assert.equal(getAdminUserProfileUrl('  '), null)
+})
+
+test('admin customer detail ids accept decoded and legacy encoded provider ids', () => {
+    assert.equal(normalizeAdminUserProfileId('dex:ChABC123'), 'dex:ChABC123')
+    assert.equal(normalizeAdminUserProfileId('dex%3AChABC123'), 'dex:ChABC123')
+    assert.equal(normalizeAdminUserProfileId('dex%253AChABC123'), 'dex:ChABC123')
+    assert.equal(normalizeAdminUserProfileId('github%3A583231'), 'github:583231')
+    assert.equal(normalizeAdminUserProfileId('123'), '123')
+    assert.equal(normalizeAdminUserProfileId('  '), null)
 })
 
 test('DEX users never link out to LinuxDo', () => {

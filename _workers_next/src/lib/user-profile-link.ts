@@ -43,7 +43,28 @@ export function getDisplayUsername(username?: string | null, userId?: string | n
 
 export function getAdminUserProfileUrl(userId?: string | null) {
     const trimmed = userId?.trim()
-    return trimmed ? `/admin/users/${encodeURIComponent(trimmed)}` : null
+    return trimmed ? `/admin/users/detail?userId=${encodeURIComponent(trimmed)}` : null
+}
+
+export function normalizeAdminUserProfileId(value?: string | null) {
+    const trimmed = value?.trim()
+    if (!trimmed) return null
+
+    let candidate = trimmed
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (/^(dex|github):/i.test(candidate)) return candidate
+        if (!candidate.includes('%')) break
+
+        try {
+            const decoded = decodeURIComponent(candidate)
+            if (decoded === candidate) break
+            candidate = decoded
+        } catch {
+            break
+        }
+    }
+
+    return /^(dex|github):/i.test(candidate) ? candidate : trimmed
 }
 
 export function getExternalProfileUrl(username?: string | null, userId?: string | null) {
