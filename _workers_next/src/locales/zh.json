@@ -772,6 +772,8 @@
             "deliveryInvalidFile": "附件类型不受支持。",
             "deliveryFileTooLarge": "附件过大。",
             "deliveryTooManyFiles": "附件数量超过限制。",
+            "attachmentDownloadedAt": "顾客首次下载",
+            "attachmentNotDownloaded": "顾客尚未下载",
             "paymentBreakdown": "支付明细",
             "ldcPaid": "LDC 实付",
             "subtotal": "商品小计",

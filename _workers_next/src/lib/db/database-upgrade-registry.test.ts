@@ -85,6 +85,15 @@ test('the audit error id lookup is registered after the base audit infrastructur
     )
 })
 
+test('delivery file download tracking is registered as an independent upgrade', () => {
+    const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
+    assert.ok(ids.includes('0032_delivery_file_download_tracking'))
+    assert.ok(
+        ids.indexOf('0032_delivery_file_download_tracking') > ids.indexOf('0031_audit_error_id_lookup'),
+        'delivery tracking must not be folded into an older immutable upgrade',
+    )
+})
+
 test('registered upgrades start from the schema version before the registry was introduced', () => {
     assert.equal(DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION, 27)
     assert.equal(supportsRegisteredDatabaseUpgrades(null), false)

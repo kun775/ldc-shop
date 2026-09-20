@@ -5,7 +5,8 @@ import { eq } from "drizzle-orm"
 import { cookies } from "next/headers"
 import { NextResponse } from "next/server"
 import { isAdminIdentity } from "@/lib/admin-auth"
-import { getDeliveryFile } from "@/lib/delivery-files"
+import { getDeliveryFile, markDeliveryFileDownloaded } from "@/lib/delivery-files"
+import { shouldRecordDeliveryFileDownload } from "@/lib/delivery-file-download"
 import { ensureDatabaseInitialized } from "@/lib/db/queries"
 import { hasOrderAccessToken, ORDER_ACCESS_COOKIE } from "@/lib/order-access"
 
@@ -27,6 +28,7 @@ export async function GET(
             userId: true,
             username: true,
             status: true,
+            fulfillmentMode: true,
         }
     })
     if (!order || order.status !== "delivered") {
@@ -49,6 +51,19 @@ export async function GET(
     const file = await getDeliveryFile(id, numericFileId)
     if (!file) {
         return NextResponse.json({ error: "Not found" }, { status: 404 })
+    }
+
+    if (shouldRecordDeliveryFileDownload({
+        fulfillmentMode: order.fulfillmentMode,
+        isOwner,
+        hasGuestAccess,
+    })) {
+        try {
+            await markDeliveryFileDownloaded(id, numericFileId)
+        } catch (error) {
+            // 下载优先于统计写入；数据库尚未执行 0032 升级或瞬时写入失败时不阻断取件。
+            console.error("[DeliveryFiles] Failed to record customer download:", error)
+        }
     }
 
     return new NextResponse(file.body, {

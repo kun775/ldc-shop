@@ -10,7 +10,11 @@ import {
     verifyAuditStructure,
 } from "@/lib/audit/service";
 import { createAsyncOnceState, ensureOnce, parseSchemaVersion } from "@/lib/runtime/async-once";
-import { BASELINE_SCHEMA_DRIFT_PROBES, isSchemaDriftError } from "./schema-drift";
+import {
+    BASELINE_SCHEMA_DRIFT_PROBES,
+    DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES,
+    isSchemaDriftError,
+} from "./schema-drift";
 import {
     COUPON_COUNTER_RECONCILIATION_STATEMENTS,
     COUPON_USAGE_TRIGGER_NAMES,
@@ -31,7 +35,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 31;
+const CURRENT_SCHEMA_VERSION = 32;
 const dbInitializationState = createAsyncOnceState();
 const databaseUpgradePreparationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
@@ -119,18 +123,31 @@ async function verifyBaselineDatabaseStructure(): Promise<boolean> {
     }
 }
 
+async function verifyDeliveryFileDownloadStructure(): Promise<boolean> {
+    for (const probe of DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES) {
+        try {
+            await db.run(sql.raw(probe));
+        } catch (error: unknown) {
+            if (isSchemaDriftError(error)) return false;
+        }
+    }
+    return true;
+}
+
 async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth> {
-    const [baseline, pointLedger, auditBase, auditCurrent] = await Promise.all([
+    const [baseline, pointLedger, auditBase, auditCurrent, deliveryFileDownload] = await Promise.all([
         verifyBaselineDatabaseStructure(),
         verifyPointLedgerStructure(),
         verifyAuditBaseStructure(),
         verifyAuditStructure(),
+        verifyDeliveryFileDownloadStructure(),
     ]);
     return {
         '0028_database_upgrade_registry': baseline,
         '0029_point_ledger_balance_trigger': pointLedger,
         '0030_audit_infrastructure': auditBase,
         '0031_audit_error_id_lookup': auditCurrent,
+        '0032_delivery_file_download_tracking': deliveryFileDownload,
     };
 }
 
@@ -337,6 +354,9 @@ async function runRegisteredDatabaseUpgrades() {
             async '0031_audit_error_id_lookup'() {
                 await repairAuditErrorIdStructureIfNeeded();
             },
+            async '0032_delivery_file_download_tracking'() {
+                await safeAddColumn('order_delivery_files', 'downloaded_at', 'INTEGER');
+            },
         },
         verifyStructures: verifyDatabaseUpgradeStructures,
     });
@@ -481,6 +501,7 @@ async function prepareDatabaseForManualUpgrade() {
             storage TEXT NOT NULL,
             object_key TEXT,
             content BLOB,
+            downloaded_at INTEGER,
             created_at INTEGER DEFAULT (unixepoch() * 1000)
         );
         CREATE INDEX IF NOT EXISTS order_delivery_files_order_id_idx ON order_delivery_files(order_id);
@@ -900,6 +921,7 @@ async function ensureOrderDeliveryFilesTable() {
             storage TEXT NOT NULL,
             object_key TEXT,
             content BLOB,
+            downloaded_at INTEGER,
             created_at INTEGER DEFAULT (unixepoch() * 1000)
         )
     `);

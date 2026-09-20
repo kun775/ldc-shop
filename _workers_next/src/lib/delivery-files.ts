@@ -1,5 +1,5 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, eq, inArray, isNull } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { orderDeliveryFiles } from "@/lib/db/schema"
 
@@ -27,6 +27,7 @@ export type DeliveryFileMeta = {
     fileName: string
     contentType: string
     size: number
+    downloadedAt: Date | null
 }
 
 function sanitizeFileName(name: string) {
@@ -130,12 +131,26 @@ export async function listDeliveryFiles(orderId: string): Promise<DeliveryFileMe
             fileName: orderDeliveryFiles.fileName,
             contentType: orderDeliveryFiles.contentType,
             size: orderDeliveryFiles.size,
+            downloadedAt: orderDeliveryFiles.downloadedAt,
         })
             .from(orderDeliveryFiles)
             .where(eq(orderDeliveryFiles.orderId, orderId))
         return rows
     } catch {
-        return []
+        // 部署新代码到执行 0032 升级之间仍要允许顾客查看和下载历史附件。
+        try {
+            const rows = await db.select({
+                id: orderDeliveryFiles.id,
+                fileName: orderDeliveryFiles.fileName,
+                contentType: orderDeliveryFiles.contentType,
+                size: orderDeliveryFiles.size,
+            })
+                .from(orderDeliveryFiles)
+                .where(eq(orderDeliveryFiles.orderId, orderId))
+            return rows.map((row) => ({ ...row, downloadedAt: null }))
+        } catch {
+            return []
+        }
     }
 }
 
@@ -197,7 +212,7 @@ export async function saveDeliveryFiles(orderId: string, files: File[]) {
                 if (!inserted[0]) {
                     throw new Error("DELIVERY_FILE_METADATA_INSERT_FAILED")
                 }
-                saved.push(inserted[0])
+                saved.push({ ...inserted[0], downloadedAt: null })
             } catch (error) {
                 if (bucket && objectKey) {
                     try {
@@ -236,9 +251,18 @@ export async function saveDeliveryFiles(orderId: string, files: File[]) {
 }
 
 export async function getDeliveryFile(orderId: string, fileId: number) {
-    const row = await db.query.orderDeliveryFiles.findFirst({
-        where: and(eq(orderDeliveryFiles.orderId, orderId), eq(orderDeliveryFiles.id, fileId)),
+    const rows = await db.select({
+        fileName: orderDeliveryFiles.fileName,
+        contentType: orderDeliveryFiles.contentType,
+        size: orderDeliveryFiles.size,
+        storage: orderDeliveryFiles.storage,
+        objectKey: orderDeliveryFiles.objectKey,
+        content: orderDeliveryFiles.content,
     })
+        .from(orderDeliveryFiles)
+        .where(and(eq(orderDeliveryFiles.orderId, orderId), eq(orderDeliveryFiles.id, fileId)))
+        .limit(1)
+    const row = rows[0]
     if (!row) return null
 
     if (row.storage === "r2" && row.objectKey) {
@@ -267,4 +291,20 @@ export async function getDeliveryFile(orderId: string, fileId: number) {
         size: row.size,
         body,
     }
+}
+
+export async function markDeliveryFileDownloaded(
+    orderId: string,
+    fileId: number,
+    downloadedAt: Date = new Date()
+) {
+    const updated = await db.update(orderDeliveryFiles)
+        .set({ downloadedAt })
+        .where(and(
+            eq(orderDeliveryFiles.orderId, orderId),
+            eq(orderDeliveryFiles.id, fileId),
+            isNull(orderDeliveryFiles.downloadedAt)
+        ))
+        .returning({ id: orderDeliveryFiles.id })
+    return updated.length > 0
 }

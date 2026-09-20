@@ -772,6 +772,8 @@
             "deliveryInvalidFile": "This file type is not supported.",
             "deliveryFileTooLarge": "This file is too large.",
             "deliveryTooManyFiles": "Too many files.",
+            "attachmentDownloadedAt": "Customer first downloaded",
+            "attachmentNotDownloaded": "Not downloaded by customer",
             "paymentBreakdown": "Payment Breakdown",
             "ldcPaid": "LDC Paid",
             "subtotal": "Subtotal",

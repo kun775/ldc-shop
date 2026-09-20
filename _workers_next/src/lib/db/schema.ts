@@ -158,6 +158,7 @@ export const orderDeliveryFiles = sqliteTable('order_delivery_files', {
     storage: text('storage').notNull(),
     objectKey: text('object_key'),
     content: blob('content'),
+    downloadedAt: integer('downloaded_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
 });
 

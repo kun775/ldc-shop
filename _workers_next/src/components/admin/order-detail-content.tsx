@@ -603,6 +603,18 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                             <div className="min-w-0">
                               <p className="text-sm font-medium text-foreground truncate">{file.fileName}</p>
                               {file.size && <p className="text-xs text-muted-foreground font-mono">{formatFileSize(file.size)}</p>}
+                              {file.downloadedAt ? (
+                                <div className="mt-1 flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+                                  <CheckCircle2 className="h-3 w-3 shrink-0" />
+                                  <span>{t('admin.orders.attachmentDownloadedAt')}：</span>
+                                  <ClientDate value={file.downloadedAt} format="dateTime" placeholder="-" />
+                                </div>
+                              ) : (
+                                <div className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+                                  <Clock className="h-3 w-3 shrink-0" />
+                                  <span>{t('admin.orders.attachmentNotDownloaded')}</span>
+                                </div>
+                              )}
                             </div>
                           </div>
                           <Button asChild size="sm" variant="outline" className="rounded-xl gap-1.5 text-xs shrink-0 font-medium">
