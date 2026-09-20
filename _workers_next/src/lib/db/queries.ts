@@ -22,6 +22,7 @@ import { collectErrorText, isDuplicateColumnError } from "./error-utils";
 import { executeDatabaseUpgrades, ensureDatabaseMigrationsTable, readDatabaseUpgradeStatus } from "./database-upgrades";
 import { supportsRegisteredDatabaseUpgrades, type DatabaseUpgradeHealth } from "./database-upgrade-registry";
 import { isMissingRelationError } from "./schema-errors";
+import { getCustomerActivityThresholds } from "@/lib/customer-activity";
 import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
@@ -3526,6 +3527,7 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
 export async function getUsers(page = 1, pageSize = 20, q = '') {
     const offset = (page - 1) * pageSize
     const search = q.trim()
+    const activityThresholds = getCustomerActivityThresholds()
 
     try {
         await backfillLoginUsersFromOrdersAndReviews();
@@ -3563,17 +3565,35 @@ export async function getUsers(page = 1, pageSize = 20, q = '') {
             .from(loginUsers)
             .where(whereClause)
 
-        const [items, totalRes] = await Promise.all([itemsPromise, countQuery])
+        const activityQuery = db.select({
+            today: sql<number>`COUNT(CASE WHEN ${loginUsers.lastLoginAt} >= ${activityThresholds.todayStartMs} THEN 1 END)`,
+            last7Days: sql<number>`COUNT(CASE WHEN ${loginUsers.lastLoginAt} >= ${activityThresholds.last7DaysStartMs} THEN 1 END)`,
+            last30Days: sql<number>`COUNT(CASE WHEN ${loginUsers.lastLoginAt} >= ${activityThresholds.last30DaysStartMs} THEN 1 END)`,
+        }).from(loginUsers)
+
+        const [items, totalRes, activityRes] = await Promise.all([itemsPromise, countQuery, activityQuery])
+        const activity = activityRes[0]
 
         return {
             items,
             total: totalRes[0]?.count || 0,
             page,
-            pageSize
+            pageSize,
+            activity: {
+                today: Number(activity?.today || 0),
+                last7Days: Number(activity?.last7Days || 0),
+                last30Days: Number(activity?.last30Days || 0),
+            },
         }
     } catch (error: any) {
         if (isMissingTable(error)) {
-            return { items: [], total: 0, page, pageSize }
+            return {
+                items: [],
+                total: 0,
+                page,
+                pageSize,
+                activity: { today: 0, last7Days: 0, last30Days: 0 },
+            }
         }
         throw error
     }

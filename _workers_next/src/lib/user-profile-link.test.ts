@@ -18,6 +18,7 @@ test('GitHub users link to GitHub and hide the internal username prefix', () => 
 
 test('admin customer links stay on the current shop origin', () => {
     assert.equal(getAdminUserProfileUrl('github:583231'), '/admin/users/github%3A583231')
+    assert.equal(getAdminUserProfileUrl('dex:ChABC123'), '/admin/users/dex%3AChABC123')
     assert.equal(getAdminUserProfileUrl(' 123 '), '/admin/users/123')
     assert.equal(getAdminUserProfileUrl('  '), null)
 })

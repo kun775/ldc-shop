@@ -632,6 +632,10 @@
         },
         "users": {
             "title": "Customer Management",
+            "activityStats": "Customer activity",
+            "activeToday": "Active today",
+            "activeLast7Days": "Active in last 7 days",
+            "activeLast30Days": "Active in last 30 days",
             "nickname": "Nickname",
             "username": "Username",
             "userId": "User ID",

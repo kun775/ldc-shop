@@ -9,8 +9,8 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { toast } from "sonner"
 import { toggleBlock } from "@/actions/admin-users"
-import { Loader2, Search, ArrowLeft, ArrowRight, Edit, Ban, CheckCircle } from "lucide-react"
-import { getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
+import { Loader2, Search, ArrowLeft, ArrowRight, Edit, Ban, CheckCircle, UserRoundCheck, CalendarDays, CalendarRange } from "lucide-react"
+import { getAdminUserProfileUrl, getDisplayUsername, getExternalProfileUrl } from "@/lib/user-profile-link"
 import { UserPointAdjustmentDialog } from "./user-point-adjustment-dialog"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
@@ -32,6 +32,11 @@ interface UsersContentProps {
         total: number
         page: number
         pageSize: number
+        activity: {
+            today: number
+            last7Days: number
+            last30Days: number
+        }
     }
 }
 
@@ -107,27 +112,70 @@ export function UsersContent({ data }: UsersContentProps) {
     }
 
     const totalPages = Math.ceil(data.total / data.pageSize)
+    const activityMetrics = [
+        {
+            label: t('admin.users.activeToday'),
+            value: data.activity.today,
+            icon: <UserRoundCheck className="h-4 w-4" />,
+            tone: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+        },
+        {
+            label: t('admin.users.activeLast7Days'),
+            value: data.activity.last7Days,
+            icon: <CalendarDays className="h-4 w-4" />,
+            tone: 'border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400',
+        },
+        {
+            label: t('admin.users.activeLast30Days'),
+            value: data.activity.last30Days,
+            icon: <CalendarRange className="h-4 w-4" />,
+            tone: 'border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+        },
+    ]
 
     return (
         <AdminListPage
             header={<h1 className="text-2xl font-bold tracking-tight">{t('admin.users.title')}</h1>}
             toolbar={
-                <form onSubmit={handleSearch} className="flex max-w-xl gap-2">
-                    <div className="relative flex-1">
-                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            type="search"
-                            aria-label={t('admin.users.search')}
-                            placeholder={t('admin.users.search')}
-                            className="pl-9"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
+                <div className="space-y-3">
+                    <div
+                        className="grid grid-cols-3 divide-x divide-border/60 rounded-md border border-border/60 bg-card"
+                        role="group"
+                        aria-label={t('admin.users.activityStats')}
+                    >
+                        {activityMetrics.map((metric) => (
+                            <div key={metric.label} className="min-w-0 px-3 py-3 sm:px-4">
+                                <div className="flex items-center gap-2">
+                                    <span className={`hidden h-8 w-8 shrink-0 items-center justify-center rounded-md border sm:flex ${metric.tone}`}>
+                                        {metric.icon}
+                                    </span>
+                                    <span className="font-mono text-lg font-semibold tabular-nums text-foreground sm:text-xl">
+                                        {metric.value}
+                                    </span>
+                                </div>
+                                <div className="mt-1 text-[11px] leading-4 text-muted-foreground sm:text-xs">
+                                    {metric.label}
+                                </div>
+                            </div>
+                        ))}
                     </div>
-                    <Button type="submit" disabled={isSearching}>
-                        {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : t('admin.users.search')}
-                    </Button>
-                </form>
+                    <form onSubmit={handleSearch} className="flex max-w-xl gap-2">
+                        <div className="relative flex-1">
+                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                            <Input
+                                type="search"
+                                aria-label={t('admin.users.search')}
+                                placeholder={t('admin.users.search')}
+                                className="pl-9"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                        <Button type="submit" disabled={isSearching}>
+                            {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : t('admin.users.search')}
+                        </Button>
+                    </form>
+                </div>
             }
             footer={
                 data.total > 0 ? (
@@ -181,6 +229,7 @@ export function UsersContent({ data }: UsersContentProps) {
                         ) : (
                             data.items.map((user) => {
                                 const externalProfileUrl = getExternalProfileUrl(user.username, user.userId)
+                                const adminProfileUrl = getAdminUserProfileUrl(user.userId)
 
                                 return (
                                 <TableRow key={user.userId}>
@@ -198,14 +247,18 @@ export function UsersContent({ data }: UsersContentProps) {
                                         ) : user.userId}
                                     </TableCell>
                                     <TableCell>
-                                        <Link href={`/admin/users/${user.userId}`} className="font-medium text-sm hover:underline text-primary">
-                                            {user.nickname?.trim() || '-'}
-                                        </Link>
+                                        {adminProfileUrl ? (
+                                            <Link href={adminProfileUrl} className="font-medium text-sm hover:underline text-primary">
+                                                {user.nickname?.trim() || '-'}
+                                            </Link>
+                                        ) : user.nickname?.trim() || '-'}
                                     </TableCell>
                                     <TableCell>
-                                        <Link href={`/admin/users/${user.userId}`} className="font-medium text-sm hover:underline text-primary">
-                                            {user.username ? getDisplayUsername(user.username, user.userId) : user.userId}
-                                        </Link>
+                                        {adminProfileUrl ? (
+                                            <Link href={adminProfileUrl} className="font-medium text-sm hover:underline text-primary">
+                                                {user.username ? getDisplayUsername(user.username, user.userId) : user.userId}
+                                            </Link>
+                                        ) : user.username ? getDisplayUsername(user.username, user.userId) : user.userId}
                                     </TableCell>
                                     <TableCell className="font-bold">{user.points}</TableCell>
                                     <TableCell>{user.orderCount}</TableCell>

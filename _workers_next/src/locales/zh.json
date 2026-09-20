@@ -632,6 +632,10 @@
         },
         "users": {
             "title": "顾客管理",
+            "activityStats": "顾客活跃统计",
+            "activeToday": "今日活跃",
+            "activeLast7Days": "近 7 天活跃",
+            "activeLast30Days": "近 30 天活跃",
             "nickname": "昵称",
             "username": "用户名",
             "userId": "用户ID",
