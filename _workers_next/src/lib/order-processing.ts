@@ -12,6 +12,7 @@ import {
     recalcProductAggregates,
 } from "@/lib/db/queries"
 import { pullOneCardFromApi } from "@/lib/card-api"
+import { getProductCardDeliveryNote } from "@/lib/card-delivery-note"
 import { consumeCouponReservations } from "@/lib/coupons/reservation"
 import { updateTag } from "next/cache"
 import { after } from "next/server"
@@ -154,11 +155,17 @@ function scheduleDeliveryEmail(
 
         if (!recipientEmail || !isValidEmail(recipientEmail)) return
 
+        const deliveryNote = await getProductCardDeliveryNote(order.productId).catch((error) => {
+            console.error("[Email] Failed to load card delivery note:", error)
+            return ""
+        })
+
         await sendOrderEmail({
             to: recipientEmail,
             orderId: order.orderId,
             productName,
             cardKeys,
+            deliveryNote,
         }).catch((error) => console.error("[Email] Send failed:", error))
     })
 }

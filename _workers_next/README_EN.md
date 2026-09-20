@@ -44,7 +44,7 @@ This architecture aims to combine the development efficiency of Next.js with the
     - 📐 **Product Variants**: Multiple variants per product (e.g. monthly/yearly) with separate price and stock; homepage shows price range and variant count with **aggregated stock/sold/review stats across all variants**; detail page variant selector with per-variant sold count; admin and user order records show variant label; card keys are managed per variant (per product).
 - **Orders & Delivery**:
     - ✅ **Payment Callback Verification**: Signature and amount checks.
-    - 🎁 **Auto Delivery**: Card key delivery on payment; paid status retained if out of stock.
+    - 🎁 **Auto Delivery**: Card key delivery on payment; paid status retained if out of stock. Supports per-product delivery notes shown after the card keys in email.
     - 📦 **Multi-Card Delivery**: Display multiple card keys for multi-quantity orders.
     - 📧 **Default Email**: Users can set a default email in profile for delivery notifications.
     - 🔒 **Stock Reservation**: 5-minute hold after entering checkout to prevent oversell.
@@ -59,7 +59,7 @@ This architecture aims to combine the development efficiency of Next.js with the
     - ⚠️ **Low Stock Alerts**: Configurable threshold and warnings.
     - 🧩 **Product Management**: Create/edit, enable/disable, reorder, purchase limits; **visibility** (everyone or trust level 0–3); **Variant Group ID** and **Variant Label** for multi-variant products; **pre-purchase questions** (multiple Q&A); product and order lists show variant info.
     - 🏷️ **Category Management**: CRUD categories with icons and ordering.
-    - 🗂️ **Card Inventory**: Bulk import and bulk delete unused card keys; each variant is a separate product—manage card keys per product.
+    - 🗂️ **Card Inventory**: Bulk import and bulk delete unused card keys, plus per-product delivery notes for auto-delivery items; each variant is a separate product—manage card keys per product.
     - 💳 **Order Management**: Pagination/search/filters, order detail, mark paid/delivered/cancel.
     - 🧹 **Order Cleanup**: Bulk select and bulk delete.
     - ⭐ **Review Management**: Search and delete reviews.

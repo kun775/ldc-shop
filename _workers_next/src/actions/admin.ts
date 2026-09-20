@@ -15,6 +15,7 @@ import { normalizeCurrencyUnit } from "@/lib/currency-unit"
 import { serializeCheckoutFieldConfigs } from "@/lib/checkout-fields"
 import { parseFulfillmentMode } from "@/lib/fulfillment"
 import { normalizeProductPointDiscountConfig } from "@/lib/points/product-point-discount"
+import { deleteProductCardDeliveryNote, saveProductCardDeliveryNote } from "@/lib/card-delivery-note"
 import {
     PRODUCT_GALLERY_MAX_ITEMS,
     PRODUCT_GALLERY_MAX_JSON_LENGTH,
@@ -238,6 +239,11 @@ export async function getProductForAdminAction(id: string) {
 export async function deleteProduct(id: string) {
     await checkAdmin()
     await db.delete(products).where(eq(products.id, id))
+    try {
+        await deleteProductCardDeliveryNote(id)
+    } catch {
+        // Product deletion must not fail because optional card delivery settings could not be cleaned up.
+    }
     revalidatePath('/admin/products')
     revalidatePath('/admin/settings')
     revalidatePath('/')
@@ -470,6 +476,21 @@ export async function saveCardsApiConfig(productId: string, apiUrl: string, apiT
         autoPulled,
         autoPullError,
     }
+}
+
+export async function saveCardDeliveryNote(productId: string, deliveryNote: string) {
+    await checkAdmin()
+
+    const id = String(productId || "").trim()
+    if (!id) throw new Error("Invalid product id")
+
+    const product = await getProductForAdmin(id)
+    if (!product) throw new Error("admin.products.productMissing")
+
+    const note = await saveProductCardDeliveryNote(id, deliveryNote)
+    revalidatePath(`/admin/cards/${id}`)
+
+    return { success: true, deliveryNote: note }
 }
 
 export async function setCardsApiEnabled(

@@ -614,6 +614,9 @@
             "price": "Price",
             "hot": "Hot",
             "category": "Category",
+            "fulfillment": "Fulfillment",
+            "fulfillmentAuto": "Automatic",
+            "fulfillmentManual": "Manual",
             "stock": "Stock",
             "lowStock": "Low",
             "order": "Order",
@@ -624,7 +627,8 @@
             "show": "Show",
             "actions": "Actions",
             "manageCards": "Cards",
-            "confirmDelete": "Are you sure you want to delete this product?"
+            "confirmDelete": "Are you sure you want to delete this product?",
+            "productMissing": "This product does not exist or has been deleted."
         },
         "users": {
             "title": "Customer Management",
@@ -794,6 +798,12 @@
         },
         "cards": {
             "title": "Manage Stock",
+            "backToProducts": "Back to Products",
+            "deliveryNoteTitle": "Delivery Note",
+            "deliveryNoteHint": "Automatic delivery emails show the card keys first, followed by this note. Use it for redemption steps, URLs, or important instructions.",
+            "deliveryNotePlaceholder": "For example: Open the redemption page, sign in, and enter the card key above.",
+            "saveDeliveryNote": "Save Delivery Note",
+            "deliveryNoteTooLong": "The delivery note is too long.",
             "addCards": "Add Cards",
             "placeholder": "Enter card keys, separated by newlines or commas...",
             "expiryLabel": "Card expiry (optional)",

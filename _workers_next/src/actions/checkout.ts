@@ -13,6 +13,7 @@ import { notifyAdminPaymentSuccess } from "@/lib/notifications"
 import { sendOrderEmail } from "@/lib/email"
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
 import { pullOneCardFromApi } from "@/lib/card-api"
+import { getProductCardDeliveryNote } from "@/lib/card-delivery-note"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
 import { POINT_AUTOMATIC_ERROR_KEY_MAP } from "@/lib/points/point-errors"
 import { resolveClientErrorKey } from "@/lib/errors/safe-error"
@@ -629,11 +630,16 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     // Send email with card keys (only for automatic fulfillment)
                     const orderEmail = resolvedDeliveryEmail;
                     if (orderEmail && !manualFulfillment) {
+                        const deliveryNote = await getProductCardDeliveryNote(product.id).catch((error) => {
+                            console.error('[Email] Failed to load card delivery note:', error)
+                            return ''
+                        })
                         await sendOrderEmail({
                             to: orderEmail,
                             orderId,
                             productName: product.name,
-                            cardKeys: joinedKeys
+                            cardKeys: joinedKeys,
+                            deliveryNote,
                         }).catch(err => console.error('[Email] Points payment email failed:', err));
                     }
                 })

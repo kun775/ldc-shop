@@ -5,12 +5,16 @@ import { getProductForAdmin } from "@/lib/db/queries"
 import { notFound } from "next/navigation"
 import { CardsContent } from "@/components/admin/cards-content"
 import { getProductCardApiConfig } from "@/lib/card-api"
+import { CARD_DELIVERY_NOTE_MAX_LENGTH, getProductCardDeliveryNote } from "@/lib/card-delivery-note"
 
 export default async function CardsPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params
     const product = await getProductForAdmin(id)
     if (!product) return notFound()
-    const apiConfig = await getProductCardApiConfig(id)
+    const [apiConfig, deliveryNote] = await Promise.all([
+        getProductCardApiConfig(id),
+        getProductCardDeliveryNote(id),
+    ])
 
     // Get Unused Cards
     let unusedCards: any[] = []
@@ -57,6 +61,8 @@ export default async function CardsPage({ params }: { params: Promise<{ id: stri
             productName={product.name}
             unusedCards={unusedCards.map((c: any) => ({ id: c.id, cardKey: c.cardKey }))}
             apiConfig={apiConfig}
+            deliveryNote={deliveryNote}
+            deliveryNoteMaxLength={CARD_DELIVERY_NOTE_MAX_LENGTH}
         />
     )
 }

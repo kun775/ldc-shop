@@ -1,17 +1,18 @@
 'use client'
 
 import { useI18n } from "@/lib/i18n/context"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { addCards, deleteCard, deleteCards, pullCardFromApi, saveCardsApiConfig, setCardsApiEnabled } from "@/actions/admin"
+import { addCards, deleteCard, deleteCards, pullCardFromApi, saveCardDeliveryNote, saveCardsApiConfig, setCardsApiEnabled } from "@/actions/admin"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
 import { CopyButton } from "@/components/copy-button"
-import { Trash2, PlusCircle } from "lucide-react"
+import { ArrowLeft, Trash2, PlusCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { AdminPageShell } from "@/components/admin/admin-page-shell"
@@ -32,9 +33,11 @@ interface CardsContentProps {
         url: string
         token: string
     }
+    deliveryNote: string
+    deliveryNoteMaxLength: number
 }
 
-export function CardsContent({ productId, productName, unusedCards, apiConfig }: CardsContentProps) {
+export function CardsContent({ productId, productName, unusedCards, apiConfig, deliveryNote, deliveryNoteMaxLength }: CardsContentProps) {
     const { t } = useI18n()
     const { confirm } = useConfirm()
     const router = useRouter()
@@ -51,6 +54,8 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
     const [savingApi, setSavingApi] = useState(false)
     const [togglingApiEnabled, setTogglingApiEnabled] = useState(false)
     const [pullingApi, setPullingApi] = useState(false)
+    const [deliveryNoteValue, setDeliveryNoteValue] = useState(deliveryNote)
+    const [savingDeliveryNote, setSavingDeliveryNote] = useState(false)
     const submitLock = useRef(false)
     const batchDeleteLock = useRef(false)
     const deleteLock = useRef<number | null>(null)
@@ -212,11 +217,34 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
         }
     }
 
+    const handleSaveDeliveryNote = async () => {
+        if (savingDeliveryNote) return
+        setSavingDeliveryNote(true)
+        try {
+            const result = await saveCardDeliveryNote(productId, deliveryNoteValue)
+            setDeliveryNoteValue(result.deliveryNote)
+            toast.success(t('common.success'))
+            router.refresh()
+        } catch (e: any) {
+            toast.error(t(resolveClientActionErrorKey(e)))
+        } finally {
+            setSavingDeliveryNote(false)
+        }
+    }
+
     return (
         <AdminPageShell className="mx-auto max-w-4xl space-y-8 p-0.5">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">{t('admin.cards.title')}: {productName}</h1>
+            <div className="flex flex-wrap items-start justify-between gap-4 sm:items-center">
+                <div className="flex min-w-0 flex-col items-start gap-3 sm:flex-row sm:items-center">
+                    <Button asChild variant="outline" size="sm" className="shrink-0 gap-1.5 whitespace-nowrap">
+                        <Link href="/admin/products">
+                            <ArrowLeft className="h-4 w-4" />
+                            {t('admin.cards.backToProducts')}
+                        </Link>
+                    </Button>
+                    <div className="min-w-0">
+                        <h1 className="break-words text-2xl font-bold tracking-tight sm:text-3xl">{t('admin.cards.title')}: {productName}</h1>
+                    </div>
                 </div>
                 <div className="text-right">
                     <div className="text-2xl font-bold">{unusedCards.length}</div>
@@ -226,6 +254,31 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig }:
 
             <div className="grid md:grid-cols-2 gap-8">
                 <div className="space-y-8">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>{t('admin.cards.deliveryNoteTitle')}</CardTitle>
+                            <CardDescription>{t('admin.cards.deliveryNoteHint')}</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                            <Textarea
+                                value={deliveryNoteValue}
+                                onChange={(event) => setDeliveryNoteValue(event.target.value)}
+                                placeholder={t('admin.cards.deliveryNotePlaceholder')}
+                                rows={6}
+                                maxLength={deliveryNoteMaxLength}
+                                disabled={savingDeliveryNote}
+                            />
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="text-xs text-muted-foreground">
+                                    {deliveryNoteValue.length} / {deliveryNoteMaxLength}
+                                </span>
+                                <Button onClick={handleSaveDeliveryNote} disabled={savingDeliveryNote}>
+                                    {savingDeliveryNote ? t('common.processing') : t('admin.cards.saveDeliveryNote')}
+                                </Button>
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     <Card>
                         <CardHeader>
                             <CardTitle>{t('admin.cards.addCards')}</CardTitle>

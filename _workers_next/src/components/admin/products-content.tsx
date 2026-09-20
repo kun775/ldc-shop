@@ -5,11 +5,10 @@ import { useI18n } from "@/lib/i18n/context"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Eye, EyeOff, ArrowUp, ArrowDown, Search, ChevronLeft, ChevronRight } from "lucide-react"
+import { Plus, ArrowUp, ArrowDown, Search, ChevronLeft, ChevronRight } from "lucide-react"
 import { deleteProduct, toggleProductStatus, reorderProduct } from "@/actions/admin"
 import { INFINITE_STOCK } from "@/lib/constants"
 import { toast } from "sonner"
@@ -29,6 +28,7 @@ interface Product {
     sortOrder: number
     pointDiscountEnabled?: boolean | null
     pointDiscountPercent?: number | null
+    fulfillmentMode: 'auto' | 'manual'
     variantGroupId?: string | null
     variantLabel?: string | null
 }
@@ -220,6 +220,7 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                             <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.name')}</TableHead>
                             <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.price')}</TableHead>
                             <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.category')}</TableHead>
+                            <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.fulfillment')}</TableHead>
                             <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.hot')}</TableHead>
                             <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.stock')}</TableHead>
                             <TableHead className="sticky top-0 z-10 bg-muted/95 backdrop-blur">{t('admin.products.status')}</TableHead>
@@ -229,7 +230,7 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                     <TableBody>
                         {filteredProducts.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                                <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
                                     未找到符合条件的商品
                                 </TableCell>
                             </TableRow>
@@ -291,6 +292,15 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                                 </TableCell>
                                 <TableCell className="capitalize">{product.category || 'general'}</TableCell>
                                 <TableCell>
+                                    <Badge variant="outline" className={product.fulfillmentMode === 'manual'
+                                        ? 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300'
+                                        : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'}>
+                                        {product.fulfillmentMode === 'manual'
+                                            ? t('admin.products.fulfillmentManual')
+                                            : t('admin.products.fulfillmentAuto')}
+                                    </Badge>
+                                </TableCell>
+                                <TableCell>
                                     {product.isHot ? (
                                         <Badge variant="secondary">{t('common.yes')}</Badge>
                                     ) : (
@@ -318,13 +328,15 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                                         title={product.isActive ? t('admin.products.hide') : t('admin.products.show')}
                                         disabled={busy}
                                     >
-                                        {product.isActive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        {product.isActive ? t('admin.products.hide') : t('admin.products.show')}
                                     </Button>
-                                    <Button asChild variant="outline" size="sm">
-                                        <Link href={`/admin/cards/${product.id}`}>
-                                            {t('admin.products.manageCards')}
-                                        </Link>
-                                    </Button>
+                                    {product.fulfillmentMode !== 'manual' && (
+                                        <Button asChild variant="outline" size="sm">
+                                            <Link href={`/admin/cards/${product.id}`}>
+                                                {t('admin.products.manageCards')}
+                                            </Link>
+                                        </Button>
+                                    )}
                                     <Button asChild variant="outline" size="sm">
                                         <Link href={`/admin/product/edit/${product.id}`} prefetch={false}>
                                             {t('common.edit')}

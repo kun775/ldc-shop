@@ -43,6 +43,7 @@ export default async function AdminPage() {
                     sortOrder: p.sortOrder ?? 0,
                     pointDiscountEnabled: Boolean(p.pointDiscountEnabled),
                     pointDiscountPercent: Number(p.pointDiscountPercent || 0),
+                    fulfillmentMode: p.fulfillmentMode === 'manual' ? 'manual' : 'auto',
                     variantGroupId: p.variantGroupId ?? null,
                     variantLabel: p.variantLabel ?? null
                 }

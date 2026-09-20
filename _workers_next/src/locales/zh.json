@@ -614,6 +614,9 @@
             "price": "价格",
             "hot": "热门",
             "category": "分类",
+            "fulfillment": "发货方式",
+            "fulfillmentAuto": "自动发货",
+            "fulfillmentManual": "手动发货",
             "stock": "库存",
             "lowStock": "预警",
             "order": "排序",
@@ -624,7 +627,8 @@
             "show": "上架",
             "actions": "操作",
             "manageCards": "卡密",
-            "confirmDelete": "确定要删除此商品吗？"
+            "confirmDelete": "确定要删除此商品吗？",
+            "productMissing": "商品不存在或已被删除。"
         },
         "users": {
             "title": "顾客管理",
@@ -794,6 +798,12 @@
         },
         "cards": {
             "title": "库存管理",
+            "backToProducts": "返回商品列表",
+            "deliveryNoteTitle": "发货备注",
+            "deliveryNoteHint": "自动发货邮件会先显示卡密，再显示此备注。可用于填写卡密使用方法、兑换地址或注意事项。",
+            "deliveryNotePlaceholder": "例如：请访问兑换页面，登录后输入上方卡密完成兑换。",
+            "saveDeliveryNote": "保存发货备注",
+            "deliveryNoteTooLong": "发货备注过长。",
             "addCards": "添加卡密",
             "placeholder": "输入卡密，支持换行或逗号分隔...",
             "expiryLabel": "卡密有效期（可选）",
