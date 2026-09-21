@@ -449,6 +449,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
     const createOrderRecord = async (reservedCards: any[], joinedKeys: string, isZeroPrice: boolean, pointsToUse: number, user: any, canonicalUsername: any, contactInfo: any, product: any, orderId: string, qty: number, checkoutFieldValuesJson: string | null) => {
         let orderInserted = false
+        let automaticDeliveryNote = ""
         const normalizedUsername = canonicalUsername || user?.username || user?.name || null
         const uniqueCardIds = Array.from(new Set(reservedCards.map(c => c.id).filter((id: any) => id !== null && id !== undefined)));
         const cardIdsValue = uniqueCardIds.length > 0 ? uniqueCardIds.join(',') : null;
@@ -493,45 +494,50 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     });
                     orderInserted = true
                 } else {
-                const cardIds = reservedCards.map(c => c.id)
-                if (cardIds.length > 0) {
-                    if (product.isShared) {
-                        // For shared products, DO NOT mark as used.
-                        // Just update order status (below)
-                    } else {
-                        for (const cid of cardIds) {
-                            await db.update(cards).set({
-                                isUsed: true,
-                                usedAt: new Date(),
-                                reservedOrderId: null,
-                                reservedAt: null
-                            }).where(eq(cards.id, cid));
+                    automaticDeliveryNote = await getProductCardDeliveryNote(product.id).catch((error) => {
+                        console.error('[Order] Failed to load card delivery note:', error)
+                        return ''
+                    })
+                    const cardIds = reservedCards.map(c => c.id)
+                    if (cardIds.length > 0) {
+                        if (product.isShared) {
+                            // For shared products, DO NOT mark as used.
+                            // Just update order status (below)
+                        } else {
+                            for (const cid of cardIds) {
+                                await db.update(cards).set({
+                                    isUsed: true,
+                                    usedAt: new Date(),
+                                    reservedOrderId: null,
+                                    reservedAt: null
+                                }).where(eq(cards.id, cid));
+                            }
                         }
                     }
-                }
 
-                await db.insert(orders).values({
-                    orderId,
-                    productId: product.id,
-                    productName: product.name,
-                    ...orderSnapshotFields,
-                    email: resolvedContactInfo,
-                    userId: user?.id || null,
-                    username: normalizedUsername,
-                    status: 'delivered',
-                    cardKey: joinedKeys,
-                    cardIds: cardIdsValue,
-                    paidAt: new Date(),
-                    deliveredAt: new Date(),
-                    tradeNo: 'POINTS_REDEMPTION',
-                    pointsUsed: pointsToUse,
-                    quantity: qty,
-                    manualStockQuantity: 0,
-                    checkoutFieldValues: checkoutFieldValuesJson,
-                    fulfillmentMode,
-                    createdAt: new Date()
-                });
-                orderInserted = true
+                    await db.insert(orders).values({
+                        orderId,
+                        productId: product.id,
+                        productName: product.name,
+                        ...orderSnapshotFields,
+                        email: resolvedContactInfo,
+                        userId: user?.id || null,
+                        username: normalizedUsername,
+                        status: 'delivered',
+                        cardKey: joinedKeys,
+                        cardIds: cardIdsValue,
+                        deliveryNote: automaticDeliveryNote || null,
+                        paidAt: new Date(),
+                        deliveredAt: new Date(),
+                        tradeNo: 'POINTS_REDEMPTION',
+                        pointsUsed: pointsToUse,
+                        quantity: qty,
+                        manualStockQuantity: 0,
+                        checkoutFieldValues: checkoutFieldValuesJson,
+                        fulfillmentMode,
+                        createdAt: new Date()
+                    });
+                    orderInserted = true
                 }
             }
 
@@ -630,16 +636,12 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     // Send email with card keys (only for automatic fulfillment)
                     const orderEmail = resolvedDeliveryEmail;
                     if (orderEmail && !manualFulfillment) {
-                        const deliveryNote = await getProductCardDeliveryNote(product.id).catch((error) => {
-                            console.error('[Email] Failed to load card delivery note:', error)
-                            return ''
-                        })
                         await sendOrderEmail({
                             to: orderEmail,
                             orderId,
                             productName: product.name,
                             cardKeys: joinedKeys,
-                            deliveryNote,
+                            deliveryNote: automaticDeliveryNote,
                         }).catch(err => console.error('[Email] Points payment email failed:', err));
                     }
                 })

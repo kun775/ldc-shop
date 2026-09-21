@@ -233,6 +233,7 @@
         "deliveryFiles": "发货附件",
         "downloadFile": "下载 {{name}}",
         "yourContent": "您的内容",
+        "deliveryNote": "发货备注",
         "clickToCopy": "点击复制：",
         "saveKeySecurely": "请妥善保管此密钥",
         "loginToView": "请使用购买时使用的账号登录以查看内容",

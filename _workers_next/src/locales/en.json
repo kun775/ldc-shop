@@ -233,6 +233,7 @@
         "deliveryFiles": "Files",
         "downloadFile": "Download {{name}}",
         "yourContent": "Your Content",
+        "deliveryNote": "Delivery Note",
         "clickToCopy": "Click to copy:",
         "saveKeySecurely": "Please save this key securely.",
         "loginToView": "Please login with the account used to purchase to view the content.",

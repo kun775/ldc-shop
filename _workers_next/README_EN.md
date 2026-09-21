@@ -44,7 +44,7 @@ This architecture aims to combine the development efficiency of Next.js with the
     - 📐 **Product Variants**: Multiple variants per product (e.g. monthly/yearly) with separate price and stock; homepage shows price range and variant count with **aggregated stock/sold/review stats across all variants**; detail page variant selector with per-variant sold count; admin and user order records show variant label; card keys are managed per variant (per product).
 - **Orders & Delivery**:
     - ✅ **Payment Callback Verification**: Signature and amount checks.
-    - 🎁 **Auto Delivery**: Card key delivery on payment; paid status retained if out of stock. Supports per-product delivery notes shown after the card keys in email.
+    - 🎁 **Auto Delivery**: Card key delivery on payment; paid status retained if out of stock. Supports per-product delivery notes shown after the card keys in email and order details.
     - 📦 **Multi-Card Delivery**: Display multiple card keys for multi-quantity orders.
     - 📧 **Default Email**: Users can set a default email in profile for delivery notifications.
     - 🔒 **Stock Reservation**: 5-minute hold after entering checkout to prevent oversell.

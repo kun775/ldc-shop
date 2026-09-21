@@ -527,6 +527,17 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                                                 </div>
                                             )}
                                         </div>
+                                        {order.deliveryNote && (
+                                            <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-2">
+                                                <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 dark:text-blue-400">
+                                                    <PackageOpen className="h-3.5 w-3.5" />
+                                                    <span>{t('order.deliveryNote')}</span>
+                                                </div>
+                                                <p className="whitespace-pre-wrap text-sm text-foreground/90 leading-relaxed pl-1">
+                                                    {order.deliveryNote}
+                                                </p>
+                                            </div>
+                                        )}
                                         <p className="text-xs text-muted-foreground flex items-center gap-1.5 pt-1">
                                             <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
                                             <span>{t('order.saveKeySecurely')}</span>

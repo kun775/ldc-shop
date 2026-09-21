@@ -132,6 +132,7 @@ function scheduleDeliveryEmail(
     order: typeof orders.$inferSelect,
     productName: string,
     cardKeys: string,
+    deliveryNote: string,
 ) {
     after(async () => {
         let recipientEmail = (order.email || "").trim()
@@ -154,11 +155,6 @@ function scheduleDeliveryEmail(
         }
 
         if (!recipientEmail || !isValidEmail(recipientEmail)) return
-
-        const deliveryNote = await getProductCardDeliveryNote(order.productId).catch((error) => {
-            console.error("[Email] Failed to load card delivery note:", error)
-            return ""
-        })
 
         await sendOrderEmail({
             to: recipientEmail,
@@ -217,6 +213,7 @@ async function finalizeSharedDelivery(
     claimId: string,
     tradeNo: string,
     cardKey: string,
+    deliveryNote: string,
 ) {
     const quantity = Math.max(1, Number(order.quantity || 1))
     const joinedKeys = Array(quantity).fill(cardKey).join("\n")
@@ -230,6 +227,7 @@ async function finalizeSharedDelivery(
             deliveredAt: new Date(),
             tradeNo,
             cardKey: joinedKeys,
+            deliveryNote: deliveryNote || null,
             currentPaymentId: null,
             fulfillmentClaimId: null,
             fulfillmentClaimedAt: null,
@@ -303,6 +301,7 @@ async function finalizeCardDelivery(
     claimId: string,
     tradeNo: string,
     selectedCards: Array<{ id: number; cardKey: string }>,
+    deliveryNote: string,
 ) {
     const joinedKeys = selectedCards.map((card) => card.cardKey).join("\n")
     const selectedIds = selectedCards.map((card) => card.id)
@@ -336,6 +335,7 @@ async function finalizeCardDelivery(
             tradeNo,
             cardKey: joinedKeys,
             cardIds: cardIdsValue,
+            deliveryNote: deliveryNote || null,
             currentPaymentId: null,
             fulfillmentClaimId: null,
             fulfillmentClaimedAt: null,
@@ -474,10 +474,14 @@ export async function processOrderFulfillment(
                 return { success: true, status: "processed", orderStatus: "paid" }
             }
 
-            const joinedKeys = await finalizeSharedDelivery(existing, claimId, tradeNo, availableCard[0].cardKey)
+            const deliveryNote = await getProductCardDeliveryNote(existing.productId).catch((error) => {
+                console.error("[Order] Failed to load card delivery note:", error)
+                return ""
+            })
+            const joinedKeys = await finalizeSharedDelivery(existing, claimId, tradeNo, availableCard[0].cardKey, deliveryNote)
             await notifyUserDelivered(existing, productName)
             scheduleAdminNotification(existing, tradeNo, productName)
-            scheduleDeliveryEmail(existing, productName, joinedKeys)
+            scheduleDeliveryEmail(existing, productName, joinedKeys, deliveryNote)
             await refreshProductAggregates(existing.productId)
             return { success: true, status: "processed", orderStatus: "delivered" }
         }
@@ -497,10 +501,14 @@ export async function processOrderFulfillment(
             return { success: true, status: "processed", orderStatus: "paid" }
         }
 
-        const joinedKeys = await finalizeCardDelivery(existing, claimId, tradeNo, selectedCards)
+        const deliveryNote = await getProductCardDeliveryNote(existing.productId).catch((error) => {
+            console.error("[Order] Failed to load card delivery note:", error)
+            return ""
+        })
+        const joinedKeys = await finalizeCardDelivery(existing, claimId, tradeNo, selectedCards, deliveryNote)
         await notifyUserDelivered(existing, productName)
         scheduleAdminNotification(existing, tradeNo, productName)
-        scheduleDeliveryEmail(existing, productName, joinedKeys)
+        scheduleDeliveryEmail(existing, productName, joinedKeys, deliveryNote)
         await refreshProductAggregates(existing.productId)
         await autoReplenishByApi(existing.productId, `order:${orderId}`)
         console.log(`[Fulfill] Order ${orderId} delivered successfully`)

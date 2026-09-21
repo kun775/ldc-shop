@@ -9,6 +9,8 @@ import { ensureDatabaseInitialized, getProductVariantLabels } from "@/lib/db/que
 import { listDeliveryFiles } from "@/lib/delivery-files"
 import { isAdminIdentity } from "@/lib/admin-auth"
 import { hasOrderAccessToken, ORDER_ACCESS_COOKIE } from "@/lib/order-access"
+import { getProductCardDeliveryNote } from "@/lib/card-delivery-note"
+import { isManualFulfillment } from "@/lib/fulfillment"
 
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params
@@ -51,6 +53,10 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
     const labels = order.productId ? await getProductVariantLabels([order.productId]) : {}
     const productVariantLabel = order.productId ? labels[order.productId] ?? null : null
     const deliveryFiles = canViewKey ? await listDeliveryFiles(order.orderId) : []
+    let deliveryNote = order.deliveryNote
+    if (!deliveryNote && order.status === 'delivered' && order.productId && !isManualFulfillment(order.fulfillmentMode)) {
+        deliveryNote = await getProductCardDeliveryNote(order.productId).catch(() => null)
+    }
 
     return (
         <OrderContent
@@ -70,7 +76,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                 deliveredAt: order.deliveredAt,
                 checkoutFieldValues: order.checkoutFieldValues,
                 fulfillmentMode: order.fulfillmentMode,
-                deliveryNote: order.deliveryNote,
+                deliveryNote,
                 deliveryFiles,
             }}
             canViewKey={canViewKey}
