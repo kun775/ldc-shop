@@ -210,6 +210,71 @@ test("selected-scope coupon only applies to listed products", () => {
     assert.equal(denied.error, "coupon.errors.productNotEligible")
 })
 
+test("product can disable all coupons without affecting points-only pricing", () => {
+    const disabled = resolveCheckoutPricing({
+        subtotalCents: 5000,
+        productId: "p1",
+        userId: "u1",
+        now: NOW,
+        usePoints: false,
+        availablePoints: 0,
+        pointDiscountEnabled: false,
+        pointDiscountPercent: 0,
+        productCouponUsageRestriction: "none",
+        entries: [{ coupon: makeCoupon(), runtime: emptyRuntime() }],
+    })
+    assert.equal(disabled.ok, false)
+    assert.equal(disabled.error, "coupon.errors.productDisabled")
+
+    const pointsOnly = resolveCheckoutPricing({
+        subtotalCents: 5000,
+        productId: "p1",
+        userId: "u1",
+        now: NOW,
+        usePoints: true,
+        availablePoints: 100,
+        pointDiscountEnabled: true,
+        pointDiscountPercent: 20,
+        productCouponUsageRestriction: "none",
+        entries: [],
+    })
+    assert.equal(pointsOnly.ok, true)
+    assert.equal(pointsOnly.result.pointsToUse, 10)
+})
+
+test("selected-only products reject all-product coupons and allow assigned product coupons", () => {
+    const allProductsCoupon = makeCoupon({ scope: "all", productIds: [] })
+    const rejected = resolveCheckoutPricing({
+        subtotalCents: 5000,
+        productId: "p1",
+        userId: "u1",
+        now: NOW,
+        usePoints: false,
+        availablePoints: 0,
+        pointDiscountEnabled: false,
+        pointDiscountPercent: 0,
+        productCouponUsageRestriction: "selected",
+        entries: [{ coupon: allProductsCoupon, runtime: emptyRuntime() }],
+    })
+    assert.equal(rejected.ok, false)
+    assert.equal(rejected.error, "coupon.errors.productRestricted")
+
+    const assignedCoupon = makeCoupon({ scope: "selected", productIds: ["p1"] })
+    const allowed = resolveCheckoutPricing({
+        subtotalCents: 5000,
+        productId: "p1",
+        userId: "u1",
+        now: NOW,
+        usePoints: false,
+        availablePoints: 0,
+        pointDiscountEnabled: false,
+        pointDiscountPercent: 0,
+        productCouponUsageRestriction: "selected",
+        entries: [{ coupon: assignedCoupon, runtime: emptyRuntime() }],
+    })
+    assert.equal(allowed.ok, true)
+})
+
 test("pricing follows subtotal then coupon then points order", () => {
     const coupon = makeCoupon({ discountType: "threshold_fixed", discountAmountCents: 2000, minSpendCents: 10000 })
 

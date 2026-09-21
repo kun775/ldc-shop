@@ -14,6 +14,11 @@ import {
     type CouponRuntimeState,
     type OrderPricingSnapshot,
 } from './types.ts'
+import {
+    isCouponAllowedForProduct,
+    normalizeProductCouponUsageRestriction,
+    type ProductCouponUsageRestriction,
+} from './product-policy.ts'
 
 const PRICING_SNAPSHOT_VERSION = 1
 
@@ -31,6 +36,7 @@ export interface CouponPricingInput {
     availablePoints: number
     pointDiscountEnabled: boolean
     pointDiscountPercent: number
+    productCouponUsageRestriction?: ProductCouponUsageRestriction | string | null
     entries: CouponRuntimeEntry[]
 }
 
@@ -78,6 +84,18 @@ export function resolveCheckoutPricing(input: CouponPricingInput): CouponPricing
 
     if (entries.length > MAX_COUPONS_PER_ORDER) {
         return failure('COUPON_TOO_MANY')
+    }
+
+    const productRestriction = normalizeProductCouponUsageRestriction(input.productCouponUsageRestriction)
+    if (entries.length > 0 && productRestriction === 'none') {
+        return failure('COUPON_PRODUCT_DISABLED')
+    }
+    if (entries.some((entry) => !isCouponAllowedForProduct({
+        restriction: productRestriction,
+        coupon: entry.coupon,
+        productId: input.productId,
+    }))) {
+        return failure('COUPON_PRODUCT_RESTRICTED')
     }
 
     if (getCouponStackingConflict(entries, (entry) => Boolean(entry.coupon.stackableWithCoupons))) {

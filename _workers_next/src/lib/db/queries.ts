@@ -13,6 +13,7 @@ import { createAsyncOnceState, ensureOnce, parseSchemaVersion } from "@/lib/runt
 import {
     BASELINE_SCHEMA_DRIFT_PROBES,
     DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES,
+    PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES,
     isSchemaDriftError,
 } from "./schema-drift";
 import {
@@ -35,7 +36,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 32;
+const CURRENT_SCHEMA_VERSION = 33;
 const dbInitializationState = createAsyncOnceState();
 const databaseUpgradePreparationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
@@ -134,13 +135,25 @@ async function verifyDeliveryFileDownloadStructure(): Promise<boolean> {
     return true;
 }
 
+async function verifyProductCouponRestrictionStructure(): Promise<boolean> {
+    for (const probe of PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES) {
+        try {
+            await db.run(sql.raw(probe));
+        } catch (error: unknown) {
+            if (isSchemaDriftError(error)) return false;
+        }
+    }
+    return true;
+}
+
 async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth> {
-    const [baseline, pointLedger, auditBase, auditCurrent, deliveryFileDownload] = await Promise.all([
+    const [baseline, pointLedger, auditBase, auditCurrent, deliveryFileDownload, productCouponRestriction] = await Promise.all([
         verifyBaselineDatabaseStructure(),
         verifyPointLedgerStructure(),
         verifyAuditBaseStructure(),
         verifyAuditStructure(),
         verifyDeliveryFileDownloadStructure(),
+        verifyProductCouponRestrictionStructure(),
     ]);
     return {
         '0028_database_upgrade_registry': baseline,
@@ -148,6 +161,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         '0030_audit_infrastructure': auditBase,
         '0031_audit_error_id_lookup': auditCurrent,
         '0032_delivery_file_download_tracking': deliveryFileDownload,
+        '0033_product_coupon_restriction': productCouponRestriction,
     };
 }
 
@@ -357,6 +371,9 @@ async function runRegisteredDatabaseUpgrades() {
             async '0032_delivery_file_download_tracking'() {
                 await safeAddColumn('order_delivery_files', 'downloaded_at', 'INTEGER');
             },
+            async '0033_product_coupon_restriction'() {
+                await safeAddColumn('products', 'coupon_usage_restriction', "TEXT NOT NULL DEFAULT 'all'");
+            },
         },
         verifyStructures: verifyDatabaseUpgradeStructures,
     });
@@ -448,7 +465,8 @@ async function prepareDatabaseForManualUpgrade() {
             variant_label TEXT,
             purchase_questions TEXT,
             checkout_fields TEXT,
-            fulfillment_mode TEXT DEFAULT 'auto'
+            fulfillment_mode TEXT DEFAULT 'auto',
+            coupon_usage_restriction TEXT NOT NULL DEFAULT 'all'
         );
         
         -- Cards (stock) table
@@ -705,6 +723,7 @@ async function ensureProductsColumns() {
         await safeAddColumn('products', 'product_images', 'TEXT');
         await safeAddColumn('products', 'checkout_fields', 'TEXT');
         await safeAddColumn('products', 'fulfillment_mode', "TEXT DEFAULT 'auto'");
+        await safeAddColumn('products', 'coupon_usage_restriction', "TEXT NOT NULL DEFAULT 'all'");
     });
 }
 
@@ -1578,7 +1597,8 @@ export async function getProduct(id: string, options?: { isLoggedIn?: boolean; t
             variantLabel: products.variantLabel,
             purchaseQuestions: products.purchaseQuestions,
             checkoutFields: products.checkoutFields,
-            fulfillmentMode: products.fulfillmentMode
+            fulfillmentMode: products.fulfillmentMode,
+            couponUsageRestriction: products.couponUsageRestriction,
         })
             .from(products)
             .where(and(eq(products.id, id), visibilityCondition(options?.isLoggedIn, options?.trustLevel)))
@@ -1628,6 +1648,7 @@ export type ProductVariantRow = {
     fulfillmentMode: string | null;
     pointDiscountEnabled: boolean | null;
     pointDiscountPercent: number;
+    couponUsageRestriction: string;
 };
 
 export async function getProductVariants(
@@ -1656,6 +1677,7 @@ export async function getProductVariants(
             fulfillmentMode: products.fulfillmentMode,
             pointDiscountEnabled: products.pointDiscountEnabled,
             pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
+            couponUsageRestriction: products.couponUsageRestriction,
         })
             .from(products)
             .where(and(
@@ -1705,6 +1727,7 @@ export async function getProductForAdmin(id: string) {
             purchaseQuestions: products.purchaseQuestions,
             checkoutFields: products.checkoutFields,
             fulfillmentMode: products.fulfillmentMode,
+            couponUsageRestriction: products.couponUsageRestriction,
             manualStockCount: sql<number>`COALESCE(${products.manualStockCount}, 0)`,
         })
             .from(products)

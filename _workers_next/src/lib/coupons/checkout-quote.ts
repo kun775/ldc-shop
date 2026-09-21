@@ -11,6 +11,7 @@ export interface CouponQuoteProduct {
     price: string | number | null | undefined
     pointDiscountEnabled?: boolean | null
     pointDiscountPercent?: number | string | null
+    couponUsageRestriction?: string | null
 }
 
 export interface CouponQuoteInput {
@@ -58,6 +59,7 @@ export async function resolveCouponQuote(input: CouponQuoteInput): Promise<Coupo
             availablePoints: input.availablePoints,
             pointDiscountEnabled: Boolean(input.product.pointDiscountEnabled),
             pointDiscountPercent: Number(input.product.pointDiscountPercent || 0),
+            productCouponUsageRestriction: input.product.couponUsageRestriction,
             entries: [],
         })
         if (!pricing.ok) return { ok: false, error: pricing.error }
@@ -79,6 +81,7 @@ export async function resolveCouponQuote(input: CouponQuoteInput): Promise<Coupo
         availablePoints: input.availablePoints,
         pointDiscountEnabled: Boolean(input.product.pointDiscountEnabled),
         pointDiscountPercent: Number(input.product.pointDiscountPercent || 0),
+        productCouponUsageRestriction: input.product.couponUsageRestriction,
         entries,
     })
 

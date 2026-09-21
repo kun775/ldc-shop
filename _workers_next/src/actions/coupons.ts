@@ -130,6 +130,7 @@ export async function previewCoupons(input: {
             price: true,
             pointDiscountEnabled: true,
             pointDiscountPercent: true,
+            couponUsageRestriction: true,
         },
     })
     if (!product) return { success: false, error: 'buy.productNotFound' }

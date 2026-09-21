@@ -9,6 +9,8 @@ export type CouponErrorCode =
     | 'COUPON_LOGIN_REQUIRED'
     | 'COUPON_USER_LIMIT_REACHED'
     | 'COUPON_PRODUCT_NOT_ELIGIBLE'
+    | 'COUPON_PRODUCT_DISABLED'
+    | 'COUPON_PRODUCT_RESTRICTED'
     | 'COUPON_MIN_SPEND_NOT_MET'
     | 'COUPON_NOT_STACKABLE'
     | 'COUPON_POINTS_CONFLICT'
@@ -27,6 +29,8 @@ const COUPON_ERROR_I18N_KEYS: Record<CouponErrorCode, string> = {
     COUPON_LOGIN_REQUIRED: 'coupon.errors.loginRequired',
     COUPON_USER_LIMIT_REACHED: 'coupon.errors.userLimitReached',
     COUPON_PRODUCT_NOT_ELIGIBLE: 'coupon.errors.productNotEligible',
+    COUPON_PRODUCT_DISABLED: 'coupon.errors.productDisabled',
+    COUPON_PRODUCT_RESTRICTED: 'coupon.errors.productRestricted',
     COUPON_MIN_SPEND_NOT_MET: 'coupon.errors.minSpendNotMet',
     COUPON_NOT_STACKABLE: 'coupon.errors.notStackable',
     COUPON_POINTS_CONFLICT: 'coupon.errors.pointsConflict',

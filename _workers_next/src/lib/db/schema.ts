@@ -31,6 +31,7 @@ export const products = sqliteTable('products', {
     purchaseQuestions: text('purchase_questions'),
     checkoutFields: text('checkout_fields'),
     fulfillmentMode: text('fulfillment_mode').default('auto'),
+    couponUsageRestriction: text('coupon_usage_restriction').notNull().default('all'),
 });
 
 // Cards (Stock)

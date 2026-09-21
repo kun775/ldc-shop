@@ -94,6 +94,15 @@ test('delivery file download tracking is registered as an independent upgrade', 
     )
 })
 
+test('product coupon restriction is registered after delivery tracking', () => {
+    const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
+    assert.ok(ids.includes('0033_product_coupon_restriction'))
+    assert.ok(
+        ids.indexOf('0033_product_coupon_restriction') > ids.indexOf('0032_delivery_file_download_tracking'),
+        'product coupon restriction must be owned by a new immutable upgrade item',
+    )
+})
+
 test('registered upgrades start from the schema version before the registry was introduced', () => {
     assert.equal(DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION, 27)
     assert.equal(supportsRegisteredDatabaseUpgrades(null), false)

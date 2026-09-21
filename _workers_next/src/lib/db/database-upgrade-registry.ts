@@ -32,6 +32,12 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
         description: '为手动发货附件新增首次下载时间，记录顾客实际取件状态并补齐订单履约闭环。',
         verifiesStructure: true,
     },
+    {
+        id: '0033_product_coupon_restriction',
+        name: '商品优惠券使用限制',
+        description: '为商品新增优惠券使用限制，支持禁用优惠券、仅允许指定商品券或允许全部优惠券。',
+        verifiesStructure: true,
+    },
 ] as const
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']

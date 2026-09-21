@@ -21,10 +21,23 @@ import {
     parseStoredProductImages,
 } from "@/lib/product-images"
 import { parseCheckoutFieldConfigs, type CheckoutFieldConfig } from "@/lib/checkout-fields"
+import {
+    normalizeProductCouponUsageRestriction,
+    type ProductCouponUsageRestriction,
+    type SupportedProductCoupon,
+} from "@/lib/coupons/product-policy"
 
 const PRODUCT_IMAGE_UPLOAD_MAX_BYTES = 500 * 1024
 
-export default function ProductForm({ product, categories = [] }: { product?: any; categories?: Array<{ name: string }> }) {
+export default function ProductForm({
+    product,
+    categories = [],
+    supportedCoupons = [],
+}: {
+    product?: any
+    categories?: Array<{ name: string }>
+    supportedCoupons?: SupportedProductCoupon[]
+}) {
     const router = useRouter()
     const [loading, setLoading] = useState(false)
     const submitLock = useRef(false)
@@ -35,6 +48,9 @@ export default function ProductForm({ product, categories = [] }: { product?: an
     // Only show warning section if purchaseWarning has actual content
     const [showWarning, setShowWarning] = useState(Boolean(product?.purchaseWarning && String(product.purchaseWarning).trim()))
     const [pointDiscountEnabled, setPointDiscountEnabled] = useState(Boolean(product?.pointDiscountEnabled))
+    const [couponUsageRestriction, setCouponUsageRestriction] = useState<ProductCouponUsageRestriction>(
+        normalizeProductCouponUsageRestriction(product?.couponUsageRestriction)
+    )
     const [visibilityLevel, setVisibilityLevel] = useState(String(product?.visibilityLevel ?? -1))
     const [productImageValue, setProductImageValue] = useState(product?.image || '')
     const [productGalleryValues, setProductGalleryValues] = useState<string[]>(() => parseStoredProductImages(product?.productImages))
@@ -80,6 +96,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
         setCurrentProduct(product)
         setShowWarning(Boolean(product?.purchaseWarning && String(product.purchaseWarning).trim()))
         setPointDiscountEnabled(Boolean(product?.pointDiscountEnabled))
+        setCouponUsageRestriction(normalizeProductCouponUsageRestriction(product?.couponUsageRestriction))
         setVisibilityLevel(String(product?.visibilityLevel ?? -1))
         setProductImageValue(product?.image || '')
         setProductGalleryValues(parseStoredProductImages(product?.productImages))
@@ -119,6 +136,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                     setCurrentProduct(latest as any)
                     setShowWarning(Boolean(latest?.purchaseWarning && String(latest.purchaseWarning).trim()))
                     setPointDiscountEnabled(Boolean((latest as any)?.pointDiscountEnabled))
+                    setCouponUsageRestriction(normalizeProductCouponUsageRestriction((latest as any)?.couponUsageRestriction))
                     setVisibilityLevel(String(latest?.visibilityLevel ?? -1))
                     setProductImageValue(latest?.image || '')
                     setProductGalleryValues(parseStoredProductImages((latest as any)?.productImages))
@@ -424,6 +442,9 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                             loading={loading}
                             pointDiscountEnabled={pointDiscountEnabled}
                             setPointDiscountEnabled={setPointDiscountEnabled}
+                            couponUsageRestriction={couponUsageRestriction}
+                            setCouponUsageRestriction={setCouponUsageRestriction}
+                            supportedCoupons={supportedCoupons}
                             visibilityLevel={visibilityLevel}
                             setVisibilityLevel={setVisibilityLevel}
                             onCancel={() => router.back()}

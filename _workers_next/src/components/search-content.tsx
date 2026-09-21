@@ -145,8 +145,22 @@ export function SearchContent(props: {
               pointDiscountEnabled: product.pointDiscountEnabled,
               pointDiscountPercent: product.pointDiscountPercent,
             })
+            const isSoldOut = product.stockCount <= 0
 
-            return <Card key={product.id} className="group overflow-hidden hover:border-primary/30 transition-all duration-300 tech-card flex flex-col">
+            return <Card
+              key={product.id}
+              className={cn(
+                "group relative overflow-hidden hover:border-primary/30 transition-all duration-300 tech-card flex flex-col",
+                isSoldOut && "grayscale"
+              )}
+            >
+              {isSoldOut && (
+                <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-background/20" aria-hidden="true">
+                  <span className="-rotate-12 rounded-md border border-white/50 bg-neutral-700/80 px-4 py-2 text-base font-bold text-white shadow-lg backdrop-blur-[1px]">
+                    {t('common.soldOut')}
+                  </span>
+                </div>
+              )}
               <div className="relative overflow-hidden">
                 {product.isHot && (
                   <Badge className="absolute top-3 left-3 bg-primary/15 text-primary border border-primary/30">

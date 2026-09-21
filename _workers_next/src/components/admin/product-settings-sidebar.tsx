@@ -1,6 +1,6 @@
 'use client'
 
-import { Loader2, Zap, PackageOpen, Check } from "lucide-react"
+import { Loader2, Zap, PackageOpen, Check, Ban, ListChecks, TicketPercent } from "lucide-react"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
+import type { ProductCouponUsageRestriction, SupportedProductCoupon } from "@/lib/coupons/product-policy"
 
 type ProductSettingsSidebarProps = {
     currentProduct: any
@@ -15,6 +16,9 @@ type ProductSettingsSidebarProps = {
     loading: boolean
     pointDiscountEnabled: boolean
     setPointDiscountEnabled: (value: boolean) => void
+    couponUsageRestriction: ProductCouponUsageRestriction
+    setCouponUsageRestriction: (value: ProductCouponUsageRestriction) => void
+    supportedCoupons: SupportedProductCoupon[]
     visibilityLevel: string
     setVisibilityLevel: (value: string) => void
     onCancel: () => void
@@ -27,6 +31,9 @@ export function ProductSettingsSidebar({
     loading,
     pointDiscountEnabled,
     setPointDiscountEnabled,
+    couponUsageRestriction,
+    setCouponUsageRestriction,
+    supportedCoupons,
     visibilityLevel,
     setVisibilityLevel,
     onCancel,
@@ -35,6 +42,42 @@ export function ProductSettingsSidebar({
     const [fulfillmentMode, setFulfillmentMode] = useState<string>(
         currentProduct?.fulfillmentMode === 'manual' ? 'manual' : 'auto'
     )
+    const couponRestrictionOptions: Array<{
+        value: ProductCouponUsageRestriction
+        label: string
+        hint: string
+        icon: typeof TicketPercent
+    }> = [
+        {
+            value: 'none',
+            label: t('admin.productForm.couponRestrictionNone'),
+            hint: t('admin.productForm.couponRestrictionNoneHint'),
+            icon: Ban,
+        },
+        {
+            value: 'selected',
+            label: t('admin.productForm.couponRestrictionSelected'),
+            hint: t('admin.productForm.couponRestrictionSelectedHint'),
+            icon: ListChecks,
+        },
+        {
+            value: 'all',
+            label: t('admin.productForm.couponRestrictionAll'),
+            hint: t('admin.productForm.couponRestrictionAllHint'),
+            icon: TicketPercent,
+        },
+    ]
+
+    const describeCouponStatus = (coupon: SupportedProductCoupon) => {
+        const statusKeys = {
+            draft: 'admin.productForm.couponStatusDraft',
+            disabled: 'admin.productForm.couponStatusDisabled',
+            scheduled: 'admin.productForm.couponStatusScheduled',
+            expired: 'admin.productForm.couponStatusExpired',
+            active: 'admin.productForm.couponStatusActive',
+        } as const
+        return t(statusKeys[coupon.runtimeStatus])
+    }
     return (
         <div className="space-y-4 lg:sticky lg:top-6">
             <Card className="border-primary/20 bg-primary/[0.03]">
@@ -56,6 +99,81 @@ export function ProductSettingsSidebar({
                     <Button type="button" variant="outline" className="w-full" onClick={onCancel} disabled={loading}>
                         {t('common.cancel')}
                     </Button>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>{t('admin.productForm.couponSectionTitle')}</CardTitle>
+                    <CardDescription>{t('admin.productForm.couponSectionHint')}</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                    <input type="hidden" name="couponUsageRestriction" value={couponUsageRestriction} />
+                    <div className="grid gap-2">
+                        {couponRestrictionOptions.map((option) => {
+                            const Icon = option.icon
+                            const selected = couponUsageRestriction === option.value
+                            return (
+                                <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() => setCouponUsageRestriction(option.value)}
+                                    className={cn(
+                                        "flex items-start gap-3 rounded-lg border p-3 text-left transition-colors",
+                                        selected
+                                            ? "border-primary/70 bg-primary/5 ring-1 ring-primary/30"
+                                            : "border-border/60 bg-muted/15 hover:border-border hover:bg-muted/30"
+                                    )}
+                                >
+                                    <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", selected ? "text-primary" : "text-muted-foreground")} />
+                                    <span className="min-w-0 flex-1">
+                                        <span className="flex items-center justify-between gap-2 text-xs font-semibold text-foreground">
+                                            {option.label}
+                                            {selected && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+                                        </span>
+                                        <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
+                                            {option.hint}
+                                        </span>
+                                    </span>
+                                </button>
+                            )
+                        })}
+                    </div>
+
+                    {couponUsageRestriction === 'selected' && (
+                        <div className="space-y-2 border-t border-border/50 pt-3">
+                            <div className="text-xs font-semibold text-foreground">
+                                {t('admin.productForm.supportedCouponsTitle')}
+                            </div>
+                            {!currentProduct ? (
+                                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                                    {t('admin.productForm.supportedCouponsSaveFirst')}
+                                </p>
+                            ) : supportedCoupons.length === 0 ? (
+                                <p className="text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+                                    {t('admin.productForm.supportedCouponsEmpty')}
+                                </p>
+                            ) : (
+                                <div className="max-h-52 space-y-1.5 overflow-y-auto pr-1">
+                                    {supportedCoupons.map((coupon) => (
+                                        <div key={coupon.id} className="rounded-md border border-border/50 bg-background px-2.5 py-2">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="truncate font-mono text-[11px] font-semibold text-foreground">
+                                                    {coupon.code}
+                                                </span>
+                                                <span className="shrink-0 text-[10px] text-muted-foreground">
+                                                    {describeCouponStatus(coupon)}
+                                                </span>
+                                            </div>
+                                            <p className="mt-0.5 truncate text-[11px] text-muted-foreground" title={coupon.name}>
+                                                {coupon.name}
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </CardContent>
             </Card>
 

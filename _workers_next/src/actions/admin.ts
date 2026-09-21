@@ -25,6 +25,7 @@ import {
     validateProductImageRef,
 } from "@/lib/product-images"
 import { logServerError, sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
+import { normalizeProductCouponUsageRestriction, PRODUCT_COUPON_USAGE_RESTRICTIONS } from "@/lib/coupons/product-policy"
 
 export async function checkAdmin() {
     const session = await auth()
@@ -87,6 +88,11 @@ async function saveProductOrThrow(formData: FormData) {
     const purchaseWarning = (formData.get('purchaseWarning') as string | null)?.trim() || null
     const pointDiscountEnabled = formData.get('pointDiscountEnabled') === 'on'
     const pointDiscountPercentRaw = (formData.get('pointDiscountPercent') as string | null)?.trim() ?? ''
+    const couponUsageRestrictionRaw = (formData.get('couponUsageRestriction') as string | null)?.trim() ?? 'all'
+    if (!(PRODUCT_COUPON_USAGE_RESTRICTIONS as readonly string[]).includes(couponUsageRestrictionRaw)) {
+        throw new Error('admin.productForm.couponRestrictionInvalid')
+    }
+    const couponUsageRestriction = normalizeProductCouponUsageRestriction(couponUsageRestrictionRaw)
     const visibilityLevelRaw = (formData.get('visibilityLevel') as string | null)?.trim() ?? ''
     const variantGroupId = (formData.get('variantGroupId') as string | null)?.trim() || null
     const variantLabel = (formData.get('variantLabel') as string | null)?.trim() || null
@@ -163,6 +169,7 @@ async function saveProductOrThrow(formData: FormData) {
             purchaseWarning,
             pointDiscountEnabled: pointDiscountConfig.pointDiscountEnabled,
             pointDiscountPercent: pointDiscountConfig.pointDiscountPercent,
+            couponUsageRestriction,
             isHot,
             isShared,
             visibilityLevel,
@@ -187,6 +194,7 @@ async function saveProductOrThrow(formData: FormData) {
                 purchaseWarning,
                 pointDiscountEnabled: pointDiscountConfig.pointDiscountEnabled,
                 pointDiscountPercent: pointDiscountConfig.pointDiscountPercent,
+                couponUsageRestriction,
                 isHot,
                 isShared,
                 visibilityLevel,

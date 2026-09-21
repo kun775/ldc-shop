@@ -351,6 +351,7 @@ export function HomeContent({
                                 pointDiscountPercent: product.pointDiscountPercent,
                             })
                             const isManual = product.fulfillmentMode === 'manual' || product.groupManual
+                            const isSoldOut = product.stockCount <= 0
 
                             return (
                                 <Link
@@ -360,11 +361,18 @@ export function HomeContent({
                                     aria-label={t("common.viewDetails")}
                                     className={cn(
                                         "group tech-card relative flex h-full flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-2xs transition-all duration-300 hover:border-primary/50 hover:shadow-md animate-in fade-in motion-reduce:animate-none",
-                                        product.stockCount <= 0 && "opacity-85"
+                                        isSoldOut && "grayscale"
                                     )}
                                     style={{ animationDelay: `${index * 40}ms` }}
                                 >
                                     <div className="absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                                    {isSoldOut && (
+                                        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-background/20" aria-hidden="true">
+                                            <span className="-rotate-12 rounded-md border border-white/50 bg-neutral-700/80 px-4 py-2 text-base font-bold text-white shadow-lg backdrop-blur-[1px]">
+                                                {t("common.soldOut")}
+                                            </span>
+                                        </div>
+                                    )}
 
                                     <div className="relative m-3 aspect-[16/10] overflow-hidden rounded-xl bg-muted/30">
                                         {product.image ? (

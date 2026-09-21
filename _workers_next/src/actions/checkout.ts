@@ -80,6 +80,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
             manualStockCount: true,
             pointDiscountEnabled: true,
             pointDiscountPercent: true,
+            couponUsageRestriction: true,
         }
     })
     if (!product) return { success: false, error: 'buy.productNotFound' }

@@ -3,6 +3,7 @@ import { coupons, couponProducts, couponUsages, couponUserCounters, orders, prod
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm'
 import { ensureDatabaseInitialized } from '@/lib/db/queries'
 import { normalizeCouponCode, orderCouponEntriesByCode } from './code.ts'
+import type { SupportedProductCoupon } from './product-policy.ts'
 import type {
     CouponRecord,
     CouponRuntimeState,
@@ -671,6 +672,57 @@ export async function listActiveProductOptions(): Promise<Array<{ id: string; na
         .from(products)
         .orderBy(asc(products.sortOrder), desc(products.createdAt))
     return rows.map((row) => ({ id: String(row.id), name: String(row.name || row.id) }))
+}
+
+export async function listCouponsForProduct(productId: string): Promise<SupportedProductCoupon[]> {
+    const id = String(productId || '').trim()
+    if (!id) return []
+    await ensureDatabaseInitialized()
+    const now = Date.now()
+
+    const rows = await db
+        .select({
+            id: coupons.id,
+            code: coupons.code,
+            name: coupons.name,
+            description: coupons.description,
+            status: coupons.status,
+            startsAt: coupons.startsAt,
+            endsAt: coupons.endsAt,
+        })
+        .from(coupons)
+        .innerJoin(couponProducts, eq(couponProducts.couponId, coupons.id))
+        .where(and(
+            eq(couponProducts.productId, id),
+            eq(coupons.scope, 'selected')
+        ))
+        .orderBy(asc(coupons.code))
+
+    return rows.map((row) => {
+        const status = String(row.status || 'draft')
+        const startsAt = toMs(row.startsAt)
+        const endsAt = toMs(row.endsAt)
+        const runtimeStatus = status === 'draft'
+            ? 'draft'
+            : status === 'disabled'
+                ? 'disabled'
+                : startsAt !== null && startsAt > now
+                    ? 'scheduled'
+                    : endsAt !== null && endsAt < now
+                        ? 'expired'
+                        : 'active'
+
+        return {
+            id: String(row.id),
+            code: String(row.code || ''),
+            name: String(row.name || ''),
+            description: row.description ?? null,
+            status,
+            startsAt,
+            endsAt,
+            runtimeStatus,
+        }
+    })
 }
 
 export async function findCouponIdByCode(code: string): Promise<string | null> {

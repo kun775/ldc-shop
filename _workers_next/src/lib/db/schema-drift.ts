@@ -59,11 +59,16 @@ export const DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT downloaded_at FROM order_delivery_files LIMIT 0",
 ]
 
+export const PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES: readonly string[] = [
+    "SELECT coupon_usage_restriction FROM products LIMIT 0",
+]
+
 export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     ...BASELINE_SCHEMA_DRIFT_PROBES,
     ...POINT_LEDGER_SCHEMA_DRIFT_PROBES,
     ...AUDIT_SCHEMA_DRIFT_PROBES,
     ...DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES,
+    ...PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES,
 ]
 
 /**

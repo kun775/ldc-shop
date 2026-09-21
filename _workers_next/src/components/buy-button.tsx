@@ -32,6 +32,7 @@ interface BuyButtonProps {
     checkoutFieldsIncomplete?: boolean
     pointDiscountEnabled?: boolean
     pointDiscountPercent?: number
+    couponUsageRestriction?: string | null
     className?: string
 }
 
@@ -48,6 +49,7 @@ export function BuyButton({
     checkoutFieldsIncomplete = false,
     pointDiscountEnabled = false,
     pointDiscountPercent = 0,
+    couponUsageRestriction = 'all',
     className,
 }: BuyButtonProps) {
     const [loading, setLoading] = useState(false)
@@ -82,6 +84,8 @@ export function BuyButton({
         : (usePoints && preview.pointsToUse > 0 ? numericalPrice - preview.finalAmount : 0)
     const finalPrice = couponPreview ? couponPreview.finalAmountLdc : preview.finalAmount
     const pointsStackingBlocked = couponPreview ? !couponPreview.stackableWithPoints : false
+    const couponsDisabledForProduct = couponUsageRestriction === 'none'
+    const selectedCouponsOnly = couponUsageRestriction === 'selected'
 
     const openDialog = async () => {
         if (disabled) return
@@ -116,6 +120,13 @@ export function BuyButton({
             openDialog()
         }
     }, [autoOpen, hasAutoOpened, disabled])
+
+    useEffect(() => {
+        setCouponInput('')
+        setAppliedCodes([])
+        setCouponPreview(null)
+        setCouponError(null)
+    }, [productId, couponUsageRestriction])
 
     const handleInitialClick = async () => {
         if (checkoutFieldsIncomplete) {
@@ -183,6 +194,10 @@ export function BuyButton({
     }
 
     const handleApplyCoupon = async () => {
+        if (couponsDisabledForProduct) {
+            setCouponError(t('coupon.errors.productDisabled'))
+            return
+        }
         const code = couponInput.trim().toUpperCase()
         if (!code) return
         if (appliedCodes.includes(code)) {
@@ -363,18 +378,28 @@ export function BuyButton({
                                             }
                                         }}
                                         className="h-10 rounded-xl font-mono text-sm uppercase"
-                                        disabled={couponLoading || appliedCodes.length >= MAX_COUPONS_PER_ORDER}
+                                        disabled={couponsDisabledForProduct || couponLoading || appliedCodes.length >= MAX_COUPONS_PER_ORDER}
                                     />
                                     <Button
                                         type="button"
                                         variant="outline"
                                         className="h-10 shrink-0 rounded-xl px-4 text-sm"
                                         onClick={() => void handleApplyCoupon()}
-                                        disabled={couponLoading || !couponInput.trim()}
+                                        disabled={couponsDisabledForProduct || couponLoading || !couponInput.trim()}
                                     >
                                         {couponLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : t('coupon.modal.apply')}
                                     </Button>
                                 </div>
+                                {couponsDisabledForProduct && (
+                                    <p className="text-[11px] leading-normal text-amber-600 dark:text-amber-400">
+                                        {t('coupon.modal.productDisabled')}
+                                    </p>
+                                )}
+                                {selectedCouponsOnly && !couponsDisabledForProduct && (
+                                    <p className="text-[11px] leading-normal text-muted-foreground">
+                                        {t('coupon.modal.selectedOnly')}
+                                    </p>
+                                )}
                                 {appliedCodes.length > 0 && (
                                     <div className="flex flex-wrap gap-1.5">
                                         {appliedCodes.map((code) => (
