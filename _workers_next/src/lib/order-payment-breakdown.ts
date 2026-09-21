@@ -72,7 +72,7 @@ export function parseOrderCouponLines(raw: string | null | undefined): OrderPaym
 export interface OrderPaymentBreakdown {
     /** 网关实付金额（元，两位小数字符串），等于 orders.amount */
     ldcAmount: string
-    /** 使用的积分数量（1 积分 = ¥1） */
+    /** 使用的积分数量（1 积分 = 1 K 币） */
     pointsAmount: number
     /** 积分抵扣金额（元，正数），展示时加负号 */
     pointsDiscountAmount: number
@@ -102,7 +102,7 @@ export function getOrderPaymentBreakdown(input: {
     const hasCouponBreakdown = hasValue(input.subtotalAmountCents)
 
     const couponDiscountAmount = hasCouponBreakdown ? centsToAmount(input.couponDiscountAmountCents) : 0
-    // 老订单（优惠券功能上线前）没有定价快照，退回积分数量：1 积分 = ¥1，两者数值等价
+    // 老订单（优惠券功能上线前）没有定价快照，退回积分数量：1 积分 = 1 K 币，两者数值等价
     const pointsDiscountAmount = hasValue(input.pointsDiscountAmountCents)
         ? centsToAmount(input.pointsDiscountAmountCents)
         : pointsAmount

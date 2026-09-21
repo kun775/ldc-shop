@@ -7,6 +7,7 @@ import type { CouponPreviewPayload } from "@/actions/coupons"
 import { getUserPoints } from "@/actions/points"
 import { calculatePointDiscountPreview } from "@/lib/points/product-point-discount"
 import { Button } from "@/components/ui/button"
+import { KCurrencySymbol } from "@/components/k-currency-symbol"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
@@ -427,8 +428,8 @@ export function BuyButton({
                                         <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
                                             {t('buy.modal.usePoints')}
                                             {usePoints && pointsDiscountDisplay > 0 && (
-                                                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                                                    -¥{pointsDiscountDisplay.toFixed(2)}
+                                                <span className="inline-flex items-center text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                                                    -<KCurrencySymbol className="h-3 w-3" />{pointsDiscountDisplay.toFixed(2)}
                                                 </span>
                                             )}
                                         </span>
@@ -458,7 +459,9 @@ export function BuyButton({
                         <div className="rounded-xl border border-border/60 bg-muted/20 p-3.5 space-y-2 text-sm">
                             <div className="flex justify-between items-center text-xs text-muted-foreground">
                                 <span>{t('buy.modal.price')}</span>
-                                <span className="tabular-nums font-medium text-foreground">¥{subtotalDisplay.toFixed(2)}</span>
+                                <span className="inline-flex items-center tabular-nums font-medium text-foreground">
+                                    <KCurrencySymbol className="h-3 w-3" />{subtotalDisplay.toFixed(2)}
+                                </span>
                             </div>
                             {couponDiscountDisplay > 0 && (
                                 <div className="flex justify-between items-center text-xs">
@@ -466,8 +469,8 @@ export function BuyButton({
                                         <Ticket className="h-3 w-3" />
                                         <span>{t('coupon.modal.discountLabel')}</span>
                                     </span>
-                                    <span className="tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
-                                        -¥{couponDiscountDisplay.toFixed(2)}
+                                    <span className="inline-flex items-center tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
+                                        -<KCurrencySymbol className="h-3 w-3" />{couponDiscountDisplay.toFixed(2)}
                                     </span>
                                 </div>
                             )}
@@ -477,15 +480,15 @@ export function BuyButton({
                                         <Coins className="h-3 w-3" />
                                         <span>积分抵扣 ({couponPreview ? couponPreview.pointsToUse : preview.pointsToUse} 积分)</span>
                                     </span>
-                                    <span className="tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
-                                        -¥{pointsDiscountDisplay.toFixed(2)}
+                                    <span className="inline-flex items-center tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
+                                        -<KCurrencySymbol className="h-3 w-3" />{pointsDiscountDisplay.toFixed(2)}
                                     </span>
                                 </div>
                             )}
                             <div className="pt-2 border-t border-border/50 flex justify-between items-baseline">
                                 <span className="text-sm font-semibold text-foreground">{t('buy.modal.total')}</span>
                                 <div className="flex items-baseline gap-1 text-primary">
-                                    <span className="text-sm font-semibold">¥</span>
+                                    <KCurrencySymbol className="h-4 w-4 self-center" />
                                     <span className="text-2xl font-extrabold tabular-nums tracking-tight">
                                         {finalPrice.toFixed(2)}
                                     </span>

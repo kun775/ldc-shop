@@ -5,6 +5,7 @@ import { useI18n } from "@/lib/i18n/context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { BuyButton } from "@/components/buy-button"
+import { KCurrencySymbol } from "@/components/k-currency-symbol"
 import { StarRating } from "@/components/star-rating"
 import { ReviewForm } from "@/components/review-form"
 import { ReviewList } from "@/components/review-list"
@@ -601,8 +602,8 @@ export function BuyContent({
                                                             )}
                                                         </div>
                                                         <div className="mt-2 flex items-baseline justify-between gap-2">
-                                                            <span className="text-sm font-bold tabular-nums text-foreground">
-                                                                ¥{Number(v.price).toFixed(2)}
+                                                            <span className="inline-flex items-center text-sm font-bold tabular-nums text-foreground">
+                                                                <KCurrencySymbol className="h-3.5 w-3.5" />{Number(v.price).toFixed(2)}
                                                             </span>
                                                             <span className={cn(
                                                                 "text-[10px] font-medium px-1.5 py-0.5 rounded-md",
@@ -631,7 +632,7 @@ export function BuyContent({
                                             {t('buy.title')}
                                         </div>
                                         <div className="flex flex-wrap items-baseline gap-2">
-                                            <span className="text-base font-semibold text-primary">¥</span>
+                                            <KCurrencySymbol className="h-5 w-5 self-center text-primary" />
                                             <span className="text-3xl font-extrabold tracking-tight text-primary tabular-nums">
                                                 {priceValue.toFixed(2)}
                                             </span>
@@ -640,8 +641,8 @@ export function BuyContent({
                                             </span>
                                             {compareAtPriceValue && compareAtPriceValue > priceValue && (
                                                 <>
-                                                    <span className="text-sm tabular-nums text-muted-foreground/50 line-through">
-                                                        ¥{compareAtPriceValue.toFixed(2)}
+                                                    <span className="inline-flex items-center text-sm tabular-nums text-muted-foreground/50 line-through">
+                                                        <KCurrencySymbol className="h-3.5 w-3.5" />{compareAtPriceValue.toFixed(2)}
                                                     </span>
                                                     <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-600 dark:bg-red-500/15 dark:text-red-400">
                                                         -{Math.round((1 - priceValue / compareAtPriceValue) * 100)}%

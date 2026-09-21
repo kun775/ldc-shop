@@ -5,6 +5,7 @@ import Link from "next/link"
 import Image from "next/image"
 import { ArrowRight, Search, Zap, PackageOpen, X, Check, Clock, ChevronRight, Inbox } from "lucide-react"
 import { ProductImagePlaceholder } from "@/components/product-image-placeholder"
+import { KCurrencySymbol } from "@/components/k-currency-symbol"
 import { AnnouncementPopup, type AnnouncementPopupData } from "@/components/announcement-popup"
 import { CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -446,28 +447,28 @@ export function HomeContent({
                                                     <div className="flex flex-wrap items-baseline gap-1">
                                                         {product.variantCount != null && product.variantCount > 1 && product.priceMin != null && product.priceMax != null ? (
                                                             <>
-                                                                <span className="text-xs font-semibold text-primary">¥</span>
+                                                                <KCurrencySymbol className="h-3.5 w-3.5 self-center text-primary" />
                                                                 <span className="whitespace-nowrap text-lg font-bold tracking-tight text-primary tabular-nums">
                                                                     {product.priceMin} - {product.priceMax}
                                                                 </span>
                                                             </>
                                                         ) : product.variantCount != null && product.variantCount > 1 && product.priceMin != null ? (
                                                             <>
-                                                                <span className="text-xs font-semibold text-primary">¥</span>
+                                                                <KCurrencySymbol className="h-3.5 w-3.5 self-center text-primary" />
                                                                 <span className="whitespace-nowrap text-lg font-bold tracking-tight text-primary tabular-nums">
                                                                     {product.priceMin} 起
                                                                 </span>
                                                             </>
                                                         ) : (
                                                             <>
-                                                                <span className="text-xs font-semibold text-primary">¥</span>
+                                                                <KCurrencySymbol className="h-3.5 w-3.5 self-center text-primary" />
                                                                 <span className="whitespace-nowrap text-lg font-bold tracking-tight text-primary tabular-nums">
                                                                     {Number(product.price).toFixed(2)}
                                                                 </span>
                                                                 {product.compareAtPrice && Number(product.compareAtPrice) > Number(product.price) && (
                                                                     <>
-                                                                        <span className="text-[11px] tabular-nums text-muted-foreground/60 line-through ml-1">
-                                                                            ¥{Number(product.compareAtPrice).toFixed(2)}
+                                                                        <span className="inline-flex items-center text-[11px] tabular-nums text-muted-foreground/60 line-through ml-1">
+                                                                            <KCurrencySymbol className="h-3 w-3" />{Number(product.compareAtPrice).toFixed(2)}
                                                                         </span>
                                                                         <span className="rounded bg-rose-500/10 px-1 py-0.2 text-[9px] font-semibold text-rose-600 dark:text-rose-400">
                                                                             -{Math.round((1 - Number(product.price) / Number(product.compareAtPrice)) * 100)}%
