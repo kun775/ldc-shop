@@ -32,7 +32,7 @@ import { isMissingRelationError } from "./schema-errors";
 import { canonicalGitHubUserId, isSameGitHubAccount } from "@/lib/github-identity";
 import { buildLoginUserMergeStatements } from "./user-merge";
 import { getCustomerActivityThresholds } from "@/lib/customer-activity";
-import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt, isNull } from "drizzle-orm";
+import { eq, sql, desc, and, asc, gte, or, inArray, lte, isNull } from "drizzle-orm";
 import { updateTag, revalidatePath } from "next/cache";
 import { cache } from "react";
 
@@ -3329,7 +3329,7 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
             .from(orders)
             .where(and(
                 eq(orders.status, 'pending'),
-                lt(orders.createdAt, new Date(fiveMinutesAgoMs)),
+                lte(orders.createdAt, new Date(fiveMinutesAgoMs)),
                 productId ? eq(orders.productId, productId) : sql`1=1`,
                 userId ? eq(orders.userId, userId) : sql`1=1`,
                 orderId ? eq(orders.orderId, orderId) : sql`1=1`
