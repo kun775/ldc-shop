@@ -7,24 +7,8 @@
 基于 **Next.js 16**、**Cloudflare Workers**（OpenNext）、**D1 Database** 和 **Shadcn UI** 构建的无服务器虚拟商品商店。
 
 > [!IMPORTANT]
-> **⚠️ Vercel 版本已停止更新，请使用 Cloudflare Workers 版本或 Docker 版！**
-> 
-> Workers 版本是当前持续维护的版本，包含所有最新功能。Docker 版可能会滞后更新。
-
-> 🚀 **推荐部署方式：Cloudflare Workers 或 Docker 自托管**
-> 
-> | 对比项 | Cloudflare Workers | Docker 自托管 | Vercel |
-> |--------|-------------------|--------------|--------|
-> | 维护状态 | **✅ 持续更新** | ✅ 同步更新 | ⚠️ 停止更新 |
-> | 免费请求 | **10 万次/天** | 无限制 | 有限制 |
-> | 数据库 | **D1 免费 5GB** | SQLite 无限制 | Postgres 有限额 |
-> | 冷启动 | **几乎无延迟** | 无冷启动 | 有冷启动 |
-> | 部署要求 | 无需服务器 | 需要 VPS | 无需服务器 |
-> | 全球边缘 | ✅ 全球节点 | 单节点 | 部分地区 |
-> 
-> 👉 **[Workers 完整功能与部署指南 → `_workers_next/README.md`](./_workers_next/README.md)**
-> 
-> 👉 **[Docker 部署指南 → `_docker/README.md`](./_docker/README.md)**
+> 本仓库仅维护 Cloudflare Workers 版本，正式工程位于 [`_workers_next`](./_workers_next)。
+> 原 Docker、Vercel 和其他部署版本已于 2026 年 9 月 22 日移除，不再提供更新和技术支持。
 
 ## 📢 登录状态公告（2026-03-04）
 
@@ -32,8 +16,11 @@
 
 项目保留 **GitHub 登录** 作为备用方式（配置见 `_workers_next/README.md` 中的 GitHub OAuth 说明）。如有变化将在本公告更新。
 
-## 🆕 近期更新（2026-09-18）
+## 🆕 近期更新（2026-09-22）
 
+- **订单超时清理**：定时任务改为每分钟执行，未支付订单满 5 分钟后通常会在下一次分钟任务中取消。
+- **手动发货稳定性**：修复首次提交时的异常遮罩与文件类型判断问题。
+- **时间显示**：订单、顾客、消息、优惠券和公告等时间统一精确到秒。
 - **后台审计中心**：记录登录、签到、下单、退款、积分调整、优惠券和手动发货等关键操作；平台运行错误支持按错误 ID 查询、筛选、分页、查看脱敏详情、填写处理说明和重新打开。
 - **数据库升级管理**：数据库结构升级改为管理员在后台手动执行，支持结构自检、幂等升级、失败记录与重试；普通页面访问和日志写入不再自动执行 DDL。
 - **后台交互稳定性**：新增延迟显示的页面级 Loading 遮罩，修复优惠券编辑、积分调整和手动发货中的异常遮罩、重复提交及错误状态无法恢复问题。
@@ -42,7 +29,7 @@
 
 ## ✨ 特性概览
 
-当前 **Workers 版本** 主要特性如下（完整列表见 [_workers_next/README.md](./_workers_next/README.md)）：
+当前正式版本的主要特性如下（完整列表见 [_workers_next/README.md](./_workers_next/README.md)）：
 
 - **技术栈**: Next.js 16 (App Router)、Tailwind CSS、TypeScript；边缘部署为 **Cloudflare Workers + D1**。
 - **Linux DO 集成**: OIDC 登录、EasyPay 支付；可选 GitHub 登录。
@@ -54,25 +41,23 @@
 - **多语言与主题**: 中英切换、浅色/深色/跟随系统。
 - **通知**: Resend 发货邮件、Telegram 与 **Bark** 新订单/退款/用户消息推送、站内收件箱与桌面通知、联系管理员、LDC 导航（含商店数目）。
 
-## 🚀 部署指南
+## 🚀 Cloudflare Workers 部署
 
-> 详细步骤与环境变量说明请查看：**[_workers_next/README.md](./_workers_next/README.md)**。
+使用 Cloudflare Workers Builds 连接本仓库时，配置如下：
 
-### ⭐ 推荐：Cloudflare Workers 部署
+| 配置项 | 值 |
+|---|---|
+| Path | `_workers_next` |
+| Build command | `npm install && npx opennextjs-cloudflare build` |
+| Deploy command | `npx wrangler deploy` |
 
-免费额度高、全球访问快、无冷启动。
+部署前需要创建并绑定：
 
-👉 **[完整部署指南 → _workers_next/README.md](./_workers_next/README.md)**
+- D1 数据库，默认名称为 `ldc-shop-next`，绑定名为 `DB`。
+- R2 Bucket，默认名称为 `ldc-shop-files`，绑定名为 `FILES`。
+- OAuth、支付、管理员和站点地址等环境变量。
 
-### 备选：Docker 自托管
-
-适用于 VPS/自有服务器，本地 SQLite，不依赖第三方云库。
-
-👉 **[Docker 部署指南 → _docker/README.md](./_docker/README.md)**
-
-### 备选：Vercel 部署（已停止更新）
-
-Vercel 版本已停止维护，仅建议作为历史参考。新部署请使用 Workers 或 Docker。本仓库已独立维护，不再同步上游。
+详细步骤和完整环境变量列表见 [Workers 部署指南](./_workers_next/README.md)。
 
 ## 💡 建议：绑定自定义域名
 
@@ -80,7 +65,34 @@ Vercel 版本已停止维护，仅建议作为历史参考。新部署请使用 
 
 ## ⚙️ 配置与本地开发
 
-Workers 版所需的环境变量、OIDC/EPay 配置及本地开发步骤，请直接查看：**[_workers_next/README.md](./_workers_next/README.md)**。
+```bash
+cd _workers_next
+npm install
+npm run dev
+```
+
+常用验证命令：
+
+```bash
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
+环境变量、OIDC/EPay 配置及完整说明见 [_workers_next/README.md](./_workers_next/README.md)。
+
+## 📁 项目结构
+
+```text
+_workers_next/
+├── src/                 # Next.js 应用、Server Actions 和业务逻辑
+├── public/              # 静态资源
+├── docs/                # 当前 Worker 版本的专项设计文档
+├── wrangler.json        # Worker、D1、R2 和 Cron 配置
+├── open-next.config.ts  # OpenNext Cloudflare 配置
+└── package.json         # 开发、测试、构建和部署命令
+```
 
 ## 📄 许可证
 MIT

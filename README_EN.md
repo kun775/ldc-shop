@@ -7,24 +7,8 @@
 A serverless virtual goods shop built with **Next.js 16**, **Cloudflare Workers** (OpenNext), **D1 Database**, and **Shadcn UI**.
 
 > [!IMPORTANT]
-> **⚠️ Vercel edition is no longer maintained. Use the Cloudflare Workers or Docker edition.**
-> 
-> The Workers edition is the actively maintained version with all latest features. The Docker edition may lag behind.
-
-> 🚀 **Recommended: Cloudflare Workers or Docker self-hosted**
-> 
-> | Comparison | Cloudflare Workers | Docker self-hosted | Vercel |
-> |------------|-------------------|---------------------|--------|
-> | Maintenance | **✅ Active** | ✅ Synced | ⚠️ Stopped |
-> | Free requests | **100K/day** | Unlimited | Limited |
-> | Database | **D1 free 5GB** | SQLite unlimited | Postgres quota |
-> | Cold start | **Near zero** | None | Yes |
-> | Requirements | No server | VPS needed | No server |
-> | Global edge | ✅ Worldwide | Single node | Partial |
-> 
-> 👉 **[Full features & Workers deployment guide → `_workers_next/README.md`](./_workers_next/README.md)**
-> 
-> 👉 **[Docker deployment guide → `_docker/README.md`](./_docker/README.md)**
+> This repository maintains only the Cloudflare Workers edition. The production application is in [`_workers_next`](./_workers_next).
+> The former Docker, Vercel, and other deployment editions were removed on September 22, 2026 and are no longer maintained or supported.
 
 ## 📢 Login status (2026-03-04)
 
@@ -32,8 +16,11 @@ A serverless virtual goods shop built with **Next.js 16**, **Cloudflare Workers*
 
 **GitHub login** remains available as a fallback (see `_workers_next/README.md` for GitHub OAuth setup). This notice will be updated if anything changes.
 
-## 🆕 Recent updates (2026-09-18)
+## 🆕 Recent updates (2026-09-22)
 
+- **Order expiration cleanup**: The scheduled task now runs every minute, so unpaid orders are normally cancelled by the next minute-level run after reaching five minutes.
+- **Manual fulfillment stability**: Fixed the first-submit overlay and file-type detection issues.
+- **Timestamp display**: Order, customer, message, coupon, and announcement timestamps now include seconds.
 - **Admin audit center**: Records important login, check-in, order, refund, point, coupon, and manual-fulfillment operations. Platform errors support error-ID lookup, filters, pagination, sanitized details, resolution notes, and reopening.
 - **Database upgrade management**: Schema upgrades are now explicitly run by an administrator, with structure checks, idempotent execution, failure records, and retries. Ordinary page requests and log writes no longer execute DDL automatically.
 - **More resilient admin interactions**: Added a delayed page-level loading overlay and fixed unreleased overlays, duplicate submissions, and unrecoverable error states in coupon editing, point adjustments, and manual fulfillment.
@@ -42,7 +29,7 @@ A serverless virtual goods shop built with **Next.js 16**, **Cloudflare Workers*
 
 ## ✨ Feature overview
 
-The current **Workers edition** includes (full list in [_workers_next/README.md](./_workers_next/README.md)):
+The production edition includes (full list in [_workers_next/README_EN.md](./_workers_next/README_EN.md)):
 
 - **Stack**: Next.js 16 (App Router), Tailwind CSS, TypeScript; edge runtime **Cloudflare Workers + D1**.
 - **Linux DO**: OIDC login, EasyPay; optional GitHub login.
@@ -54,25 +41,23 @@ The current **Workers edition** includes (full list in [_workers_next/README.md]
 - **I18n & theme**: English/Chinese, light/dark/system.
 - **Notifications**: Resend delivery email, Telegram and **Bark** for new orders/refunds/user messages, in-app inbox and desktop notifications, contact admin, LDC nav (with store count).
 
-## 🚀 Deployment
+## 🚀 Cloudflare Workers deployment
 
-> For detailed steps and env vars, see **[_workers_next/README.md](./_workers_next/README.md)**.
+When connecting this repository through Cloudflare Workers Builds, use:
 
-### ⭐ Recommended: Cloudflare Workers
+| Setting | Value |
+|---|---|
+| Path | `_workers_next` |
+| Build command | `npm install && npx opennextjs-cloudflare build` |
+| Deploy command | `npx wrangler deploy` |
 
-High free tier, fast global access, no cold start.
+Create and bind the following resources before deployment:
 
-👉 **[Full deployment guide → _workers_next/README.md](./_workers_next/README.md)**
+- A D1 database named `ldc-shop-next` by default, bound as `DB`.
+- An R2 bucket named `ldc-shop-files` by default, bound as `FILES`.
+- Environment variables for OAuth, payments, administrators, and the public application URL.
 
-### Alternative: Docker self-hosted
-
-For VPS or your own server; local SQLite, no third-party DB.
-
-👉 **[Docker guide → _docker/README.md](./_docker/README.md)**
-
-### Alternative: Vercel (no longer maintained)
-
-The Vercel edition is no longer maintained; use Workers or Docker for new deployments. This repository is independently maintained and no longer syncs from upstream.
+See the [Workers deployment guide](./_workers_next/README_EN.md) for detailed instructions and the complete environment variable list.
 
 ## 💡 Custom domain
 
@@ -80,7 +65,34 @@ For the best experience (instant payment status updates), we recommend binding a
 
 ## ⚙️ Configuration & local development
 
-Environment variables, OIDC/EPay setup, and local dev steps for the Workers edition are in **[_workers_next/README.md](./_workers_next/README.md)**.
+```bash
+cd _workers_next
+npm install
+npm run dev
+```
+
+Common verification commands:
+
+```bash
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
+See [_workers_next/README_EN.md](./_workers_next/README_EN.md) for environment variables, OIDC/EPay setup, and the complete guide.
+
+## 📁 Project structure
+
+```text
+_workers_next/
+├── src/                 # Next.js application, Server Actions, and business logic
+├── public/              # Static assets
+├── docs/                # Design documents for the current Workers edition
+├── wrangler.json        # Worker, D1, R2, and Cron configuration
+├── open-next.config.ts  # OpenNext Cloudflare configuration
+└── package.json         # Development, test, build, and deployment commands
+```
 
 ## 📄 License
 
