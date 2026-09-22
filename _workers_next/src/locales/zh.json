@@ -751,6 +751,7 @@
             "totalCount": "共 {{total}} 笔订单",
             "confirmMarkPaid": "确认将此订单标记为已支付？",
             "confirmMarkDelivered": "确认将此订单标记为已发货？",
+            "confirmMarkDeliveredWithoutFiles": "当前未上传附件，将仅发送发货描述。确认将此订单标记为已发货？",
             "confirmCancel": "确认取消此订单？如有锁定库存将尝试释放。",
             "detailTitle": "订单详情（管理）",
             "detail": "详情",

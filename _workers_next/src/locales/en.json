@@ -751,6 +751,7 @@
             "totalCount": "{{total}} orders in total",
             "confirmMarkPaid": "Mark this order as paid?",
             "confirmMarkDelivered": "Mark this order as delivered?",
+            "confirmMarkDeliveredWithoutFiles": "No files are attached. Deliver this order using only the delivery note?",
             "confirmCancel": "Cancel this order? This will release reserved stock if any.",
             "detailTitle": "Order Detail",
             "detail": "Details",

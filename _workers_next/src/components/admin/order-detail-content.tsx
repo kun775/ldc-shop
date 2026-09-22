@@ -192,9 +192,29 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
     }
 
     if (action === 'delivered') {
+      let manualDeliveryFormData: FormData | undefined
+      let hasDeliveryFiles = false
+      if (isManual) {
+        manualDeliveryFormData = new FormData(deliveryFormRef.current || undefined)
+        manualDeliveryFormData.set('deliveryNote', deliveryNote)
+        hasDeliveryFiles = manualDeliveryFormData
+          .getAll('deliveryFiles')
+          .some((item) => item instanceof File && item.size > 0)
+
+        if (!deliveryNote.trim() && !hasDeliveryFiles) {
+          const errorKey = 'admin.orders.deliveryContentRequired'
+          setSubmitError({ key: errorKey, errorId: '' })
+          toast.error(t(errorKey))
+          deliveryFormRef.current?.querySelector<HTMLElement>('[name="deliveryNote"]')?.focus()
+          return
+        }
+      }
+
       const ok = await confirm({
         title: t('admin.orders.markDelivered') || "标记订单为已发货",
-        description: t('admin.orders.confirmMarkDelivered'),
+        description: isManual && !hasDeliveryFiles
+          ? t('admin.orders.confirmMarkDeliveredWithoutFiles')
+          : t('admin.orders.confirmMarkDelivered'),
         variant: 'default',
         icon: 'check',
         confirmText: t('common.confirm'),
@@ -202,10 +222,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
       })
       if (!ok) return
       await runSubmit(async () => {
-        // 手动发货必须带上正文与附件；失败时保留 deliveryNote state，不清空输入
-        const formData = isManual ? new FormData(deliveryFormRef.current || undefined) : undefined
-        if (isManual) formData?.set('deliveryNote', deliveryNote)
-        const result = await markOrderDelivered(order.orderId, formData)
+        const result = await markOrderDelivered(order.orderId, manualDeliveryFormData)
         if (result.ok) {
           toast.success(t('admin.orders.deliverySuccess'))
           router.refresh()
@@ -505,21 +522,6 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
 
             {isManual && status === 'paid' && (
               <div className="relative rounded-xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-4">
-                {/* 提交遮罩限定在当前业务卡片内，使用 absolute 而非 fixed：
-                    不会盖住页面级 Loading（z-[90]），也不会在视觉消失后残留拦截点击。
-                    错误态下自动收起，管理员可以立即修改内容重试。 */}
-                {isSubmitting && (
-                  <div
-                    data-delivery-overlay="true"
-                    role="status"
-                    aria-live="polite"
-                    aria-busy="true"
-                    className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-xl bg-background/80 backdrop-blur-[2px] motion-reduce:backdrop-blur-none"
-                  >
-                    <Loader2 className="h-5 w-5 animate-spin text-primary motion-reduce:animate-none" />
-                    <span className="text-xs text-muted-foreground">{t('admin.orders.delivering')}</span>
-                  </div>
-                )}
                 <div className="flex items-center gap-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
                   <PackageOpen className="h-4 w-4" />
                   <span>手动发货履约工作台 · 待商家交付</span>
@@ -533,7 +535,10 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                       id="deliveryNote"
                       name="deliveryNote"
                       value={deliveryNote}
-                      onChange={(event) => setDeliveryNote(event.target.value)}
+                      onChange={(event) => {
+                        setDeliveryNote(event.target.value)
+                        if (submitError?.key === 'admin.orders.deliveryContentRequired') setSubmitError(null)
+                      }}
                       placeholder={t('admin.orders.deliveryNotePlaceholder')}
                       className="min-h-24 rounded-xl text-sm"
                       disabled={isSubmitting}
@@ -552,6 +557,9 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                         accept=".pdf,.png,.jpg,.jpeg,.webp,.zip,.7z" 
                         className="cursor-pointer file:cursor-pointer rounded-lg text-xs"
                         disabled={isSubmitting}
+                        onChange={() => {
+                          if (submitError?.key === 'admin.orders.deliveryContentRequired') setSubmitError(null)
+                        }}
                       />
                       <p className="text-xs text-muted-foreground">{t('admin.orders.deliveryFilesHint')}</p>
                     </div>
