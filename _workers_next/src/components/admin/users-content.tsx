@@ -14,6 +14,7 @@ import { getAdminUserProfileUrl, getDisplayUsername, getExternalProfileUrl } fro
 import { UserPointAdjustmentDialog } from "./user-point-adjustment-dialog"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { AdminListPage, AdminListScroll } from "@/components/admin/admin-page-shell"
+import { ClientDate } from "@/components/client-date"
 
 interface User {
     userId: string
@@ -263,10 +264,10 @@ export function UsersContent({ data }: UsersContentProps) {
                                     <TableCell className="font-bold">{user.points}</TableCell>
                                     <TableCell>{user.orderCount}</TableCell>
                                     <TableCell className="text-muted-foreground text-xs">
-                                        {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString() : '-'}
+                                        <ClientDate value={user.lastLoginAt} format="dateTime" placeholder="-" />
                                     </TableCell>
                                     <TableCell className="text-muted-foreground text-xs">
-                                        {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : '-'}
+                                        <ClientDate value={user.createdAt} format="dateTime" placeholder="-" />
                                     </TableCell>
                                     <TableCell className="text-right flex justify-end gap-2">
                                         <Button

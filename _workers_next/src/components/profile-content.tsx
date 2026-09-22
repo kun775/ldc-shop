@@ -16,6 +16,7 @@ import { CheckInButton } from "@/components/checkin-button"
 import { clearMyNotifications, getMyNotifications, markAllNotificationsRead, markNotificationRead } from "@/actions/user-notifications"
 import { sendUserMessage, clearMyMessages } from "@/actions/user-messages"
 import { cn } from "@/lib/utils"
+import { ClientDate } from "@/components/client-date"
 import { signOut } from "next-auth/react"
 import {
     Coins,
@@ -824,7 +825,6 @@ export function ProfileContent({
                                             const content = typeof meta.body === "string" && meta.body.trim()
                                                 ? meta.body
                                                 : t(n.contentKey, params)
-                                            const time = n.createdAt ? new Date(n.createdAt).toLocaleString() : '-'
                                             const isExpanded = expandedIds.includes(n.id)
                                             const badgeStyle = getNotificationBadge(n.type)
                                             const BadgeIcon = badgeStyle.icon
@@ -858,7 +858,7 @@ export function ProfileContent({
                                                                     )}
                                                                 </div>
                                                                 <span className="text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
-                                                                    {time}
+                                                                    <ClientDate value={n.createdAt} format="dateTime" placeholder="-" />
                                                                 </span>
                                                             </div>
 
@@ -961,7 +961,7 @@ export function ProfileContent({
                                                                             {m.title || t('profile.messages.noTitle')}
                                                                         </span>
                                                                         <span className="text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
-                                                                            {m.createdAt ? new Date(m.createdAt).toLocaleString() : '-'}
+                                                                            <ClientDate value={m.createdAt} format="dateTime" placeholder="-" />
                                                                         </span>
                                                                     </div>
                                                                     <p

@@ -15,6 +15,7 @@ import { useRouter } from "next/navigation"
 import { useConfirm } from "@/components/confirm-dialog-provider"
 import { AdminPageShell } from "@/components/admin/admin-page-shell"
 import { resolveClientActionErrorKey } from "@/lib/errors/safe-error"
+import { ClientDate } from "@/components/client-date"
 
 type TargetType = "all" | "username" | "userId"
 
@@ -243,7 +244,7 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                                             </TableCell>
                                             <TableCell className="text-xs text-muted-foreground">{row.sender || '-'}</TableCell>
                                             <TableCell className="text-xs text-muted-foreground">
-                                                {row.createdAt ? new Date(row.createdAt).toLocaleString() : '-'}
+                                                <ClientDate value={row.createdAt} format="dateTime" placeholder="-" />
                                             </TableCell>
                                             <TableCell className="text-right">
                                                 <Button
@@ -344,7 +345,7 @@ export function AdminMessagesContent({ history, inbox }: { history: any[]; inbox
                                                     </div>
                                                 </TableCell>
                                                 <TableCell className="text-xs text-muted-foreground">
-                                                    {row.createdAt ? new Date(row.createdAt).toLocaleString() : '-'}
+                                                    <ClientDate value={row.createdAt} format="dateTime" placeholder="-" />
                                                 </TableCell>
                                                 <TableCell className="text-right">
                                                     <div className="flex justify-end gap-2 flex-wrap">

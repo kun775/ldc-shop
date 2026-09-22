@@ -420,6 +420,7 @@ export function CouponForm({
                             <Input
                                 id="coupon-starts-at"
                                 type="datetime-local"
+                                step={1}
                                 value={form.startsAtInput}
                                 onChange={(event) => update('startsAtInput', event.target.value)}
                                 className="h-10 text-sm"
@@ -431,6 +432,7 @@ export function CouponForm({
                             <Input
                                 id="coupon-ends-at"
                                 type="datetime-local"
+                                step={1}
                                 value={form.endsAtInput}
                                 onChange={(event) => update('endsAtInput', event.target.value)}
                                 className="h-10 text-sm"

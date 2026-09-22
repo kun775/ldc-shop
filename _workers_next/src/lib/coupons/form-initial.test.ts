@@ -41,7 +41,7 @@ test('coupon records are converted into editable form values', () => {
     assert.equal(initial.minSpendValue, '100')
     assert.equal(initial.totalUseLimit, '100')
     assert.equal(initial.perUserLimit, '2')
-    assert.equal(initial.startsAtInput, '2026-09-17T12:34')
+    assert.equal(initial.startsAtInput, '2026-09-17T12:34:00')
     assert.equal(initial.endsAtInput, '')
     assert.deepEqual(initial.productIds, ['product-1'])
 })

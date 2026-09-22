@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '@/lib/i18n/context'
 
-type DateValue = Date | string | null | undefined
+type DateValue = Date | string | number | null | undefined
 type DateFormat = 'date' | 'dateTime'
 
 interface ClientDateProps {
@@ -13,7 +13,7 @@ interface ClientDateProps {
     className?: string
 }
 
-export function ClientDate({ value, format = 'date', placeholder = '', className }: ClientDateProps) {
+export function ClientDate({ value, format = 'dateTime', placeholder = '', className }: ClientDateProps) {
     const { locale } = useI18n()
     const [mounted, setMounted] = useState(false)
 
@@ -29,7 +29,7 @@ export function ClientDate({ value, format = 'date', placeholder = '', className
 
         const intlLocale = locale === 'zh' ? 'zh-CN' : 'en-US'
         const options: Intl.DateTimeFormatOptions = format === 'dateTime'
-            ? { dateStyle: 'medium', timeStyle: 'short' }
+            ? { dateStyle: 'medium', timeStyle: 'medium' }
             : { dateStyle: 'medium' }
 
         return new Intl.DateTimeFormat(intlLocale, options).format(date)

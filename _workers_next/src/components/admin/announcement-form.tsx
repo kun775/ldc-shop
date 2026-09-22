@@ -19,7 +19,7 @@ function toDatetimeLocal(value: string | null | undefined): string {
     const date = new Date(value)
     if (Number.isNaN(date.getTime())) return ''
     const pad = (n: number) => String(n).padStart(2, '0')
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
 export function AnnouncementForm({ initialConfig }: AnnouncementFormProps) {
@@ -69,6 +69,7 @@ export function AnnouncementForm({ initialConfig }: AnnouncementFormProps) {
                         <Input
                             id="announcement-start"
                             type="datetime-local"
+                            step={1}
                             value={startAt}
                             onChange={(e) => setStartAt(e.target.value)}
                         />
@@ -78,6 +79,7 @@ export function AnnouncementForm({ initialConfig }: AnnouncementFormProps) {
                         <Input
                             id="announcement-end"
                             type="datetime-local"
+                            step={1}
                             value={endAt}
                             onChange={(e) => setEndAt(e.target.value)}
                         />

@@ -86,7 +86,7 @@ function formatWindow(coupon: CouponListRow) {
         if (value === null) return null
         const date = new Date(value)
         const pad = (n: number) => String(n).padStart(2, '0')
-        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
     }
     const start = format(coupon.startsAt)
     const end = format(coupon.endsAt)
