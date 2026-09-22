@@ -672,12 +672,6 @@ export async function saveShopLogo(logoUrl: string) {
     updateTag('home:product-categories')
 }
 
-export async function saveRefundReclaimCards(enabled: boolean) {
-    await checkAdmin()
-    await setSetting('refund_reclaim_cards', enabled ? 'true' : 'false')
-    revalidatePath('/admin/settings')
-}
-
 export async function deleteReview(reviewId: number) {
     await checkAdmin()
     const existing = await db.select({

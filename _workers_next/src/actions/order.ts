@@ -12,6 +12,7 @@ import { withOrderColumnFallback, recalcProductAggregates } from "@/lib/db/queri
 import { cookies } from "next/headers"
 import { updateTag } from "next/cache"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
+import { releaseCouponUsages } from "@/lib/coupons/reservation"
 import { isAdminIdentity } from "@/lib/admin-auth"
 import { hasOrderAccessToken, ORDER_ACCESS_COOKIE } from "@/lib/order-access"
 
@@ -94,45 +95,70 @@ export async function cancelPendingOrder(orderId: string) {
 
     if (!order) return { success: false, error: 'order.notFound' }
     if (order.userId !== session.user.id) return { success: false, error: 'common.error' }
-    if (order.status !== 'pending') return { success: false, error: 'order.cannotCancel' }
+    if (order.status !== 'pending' && order.status !== 'cancelled') {
+        return { success: false, error: 'order.cannotCancel' }
+    }
 
     try {
-        const cancelled = await db.update(orders)
-            .set({ status: 'cancelled' })
-            .where(and(
-                eq(orders.orderId, orderId),
-                eq(orders.userId, session.user.id),
-                eq(orders.status, 'pending'),
-            ))
-            .returning({ orderId: orders.orderId })
-        if (!cancelled.length) return { success: false, error: 'order.cannotCancel' }
-
-        if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
-            await ensurePointLedgerUserRecord({
-                userId: order.userId,
-                username: order.username ?? null,
-                email: order.email ?? null,
-            })
-            await applyUserAutomaticPointEvent({
-                userId: order.userId,
-                username: order.username ?? null,
-                email: order.email ?? null,
-                eventType: "refund_return",
-                delta: order.pointsUsed,
-                businessKey: `refund_return:${orderId}`,
-                sourceType: "order",
-                sourceId: orderId,
-                reason: `订单 ${orderId} 用户取消返还积分`,
-                metadata: JSON.stringify({
-                    action: "user_cancel",
-                }),
-            })
+        if (order.status === 'pending') {
+            const cancelled = await db.update(orders)
+                .set({ status: 'cancelled' })
+                .where(and(
+                    eq(orders.orderId, orderId),
+                    eq(orders.userId, session.user.id),
+                    eq(orders.status, 'pending'),
+                ))
+                .returning({ orderId: orders.orderId })
+            if (!cancelled.length) return { success: false, error: 'order.cannotCancel' }
         }
 
-        // Release reserved cards
-        await db.update(cards)
-            .set({ reservedOrderId: null, reservedAt: null })
-            .where(eq(cards.reservedOrderId, orderId))
+        const cleanupErrors: Array<{ step: string; error: unknown }> = []
+        const runCleanupStep = async (step: string, operation: () => Promise<unknown>) => {
+            try {
+                await operation()
+            } catch (error) {
+                cleanupErrors.push({ step, error })
+                console.error(`[Order] Cancel cleanup failed at ${step} for ${orderId}:`, error)
+            }
+        }
+
+        await runCleanupStep('points', async () => {
+            if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
+                await ensurePointLedgerUserRecord({
+                    userId: order.userId,
+                    username: order.username ?? null,
+                    email: order.email ?? null,
+                })
+                await applyUserAutomaticPointEvent({
+                    userId: order.userId,
+                    username: order.username ?? null,
+                    email: order.email ?? null,
+                    eventType: "refund_return",
+                    delta: order.pointsUsed,
+                    businessKey: `refund_return:${orderId}`,
+                    sourceType: "order",
+                    sourceId: orderId,
+                    reason: `订单 ${orderId} 用户取消返还积分`,
+                    metadata: JSON.stringify({
+                        action: "user_cancel",
+                    }),
+                })
+            }
+        })
+
+        await runCleanupStep('coupons', async () => {
+            await releaseCouponUsages(orderId, 'user_cancel')
+        })
+
+        await runCleanupStep('cards', async () => {
+            await db.update(cards)
+                .set({ reservedOrderId: null, reservedAt: null })
+                .where(eq(cards.reservedOrderId, orderId))
+        })
+
+        if (cleanupErrors.length > 0) {
+            return { success: false, error: 'common.error' }
+        }
 
         revalidatePath(`/order/${orderId}`)
         revalidatePath('/orders')

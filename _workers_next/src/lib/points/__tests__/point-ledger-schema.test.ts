@@ -11,6 +11,7 @@ const {
     USER_POINT_LEDGER_BALANCE_TRIGGER_STATEMENT,
     USER_POINT_LEDGER_COLUMN_DEFINITIONS,
     USER_POINT_LEDGER_CREATE_TABLE_STATEMENT,
+    USER_POINT_LEDGER_REBUILD_STATEMENTS,
     USER_POINT_LEDGER_INDEX_NAMES,
     USER_POINT_LEDGER_REQUIRED_COLUMNS,
     USER_POINT_LEDGER_TRIGGER_REQUIRED_MARKERS,
@@ -159,6 +160,124 @@ test('the balance trigger parses and applies balance changes atomically', () => 
     )
     assert.equal(database.prepare(`SELECT points FROM login_users WHERE user_id = 'user-1'`).get().points, 5)
     assert.equal(database.prepare(`SELECT status FROM user_point_ledger WHERE id = 2`).get().status, 'pending')
+})
+
+test('point ledger rebuild removes the cascading user foreign key without losing rows', () => {
+    const database = new DatabaseSync(':memory:')
+    database.exec(`
+        CREATE TABLE login_users (user_id TEXT PRIMARY KEY);
+        CREATE TABLE user_point_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL REFERENCES login_users(user_id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            delta INTEGER NOT NULL,
+            balance_after INTEGER,
+            business_key TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id TEXT,
+            reason TEXT NOT NULL,
+            operator_user_id TEXT,
+            operator_username TEXT,
+            metadata TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            claim_id TEXT,
+            claimed_at INTEGER,
+            created_at INTEGER
+        );
+        INSERT INTO login_users (user_id) VALUES ('legacy-user');
+        INSERT INTO user_point_ledger (
+            user_id, event_type, delta, business_key, source_type, reason
+        ) VALUES ('legacy-user', 'checkin_reward', 5, 'checkin:legacy-user', 'checkin', 'history');
+    `)
+
+    for (const statement of USER_POINT_LEDGER_REBUILD_STATEMENTS) {
+        database.exec(statement)
+    }
+    database.exec(`DELETE FROM login_users WHERE user_id = 'legacy-user'`)
+
+    const row = database.prepare(`SELECT user_id, delta FROM user_point_ledger WHERE business_key = 'checkin:legacy-user'`).get()
+    assert.equal(row.user_id, 'legacy-user')
+    assert.equal(row.delta, 5)
+    assert.equal(database.prepare(`PRAGMA foreign_key_list(user_point_ledger)`).all().length, 0)
+})
+
+test('point ledger rebuild can recover a legacy interruption after the original table was dropped', () => {
+    const database = new DatabaseSync(':memory:')
+    database.exec(`
+        CREATE TABLE login_users (user_id TEXT PRIMARY KEY);
+        CREATE TABLE user_point_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL REFERENCES login_users(user_id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            delta INTEGER NOT NULL,
+            balance_after INTEGER,
+            business_key TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id TEXT,
+            reason TEXT NOT NULL,
+            operator_user_id TEXT,
+            operator_username TEXT,
+            metadata TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            claim_id TEXT,
+            claimed_at INTEGER,
+            created_at INTEGER
+        );
+        INSERT INTO login_users VALUES ('legacy-user');
+        INSERT INTO user_point_ledger (
+            user_id, event_type, delta, business_key, source_type, reason
+        ) VALUES ('legacy-user', 'checkin_reward', 5, 'recover-me', 'checkin', 'history');
+    `)
+
+    for (const statement of USER_POINT_LEDGER_REBUILD_STATEMENTS.slice(0, 3)) {
+        database.exec(statement)
+    }
+    assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'user_point_ledger'`).get().count, 0)
+    assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM user_point_ledger_nocascade`).get().count, 1)
+
+    database.exec(USER_POINT_LEDGER_REBUILD_STATEMENTS[3])
+    assert.equal(database.prepare(`SELECT business_key FROM user_point_ledger`).get().business_key, 'recover-me')
+    assert.equal(database.prepare(`PRAGMA foreign_key_list(user_point_ledger)`).all().length, 0)
+})
+
+test('point ledger rebuild transaction keeps the original table when a statement fails', () => {
+    const database = new DatabaseSync(':memory:')
+    database.exec(`
+        CREATE TABLE login_users (user_id TEXT PRIMARY KEY);
+        CREATE TABLE user_point_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL REFERENCES login_users(user_id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            delta INTEGER NOT NULL,
+            balance_after INTEGER,
+            business_key TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id TEXT,
+            reason TEXT NOT NULL,
+            operator_user_id TEXT,
+            operator_username TEXT,
+            metadata TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            claim_id TEXT,
+            claimed_at INTEGER,
+            created_at INTEGER
+        );
+        INSERT INTO login_users VALUES ('legacy-user');
+        INSERT INTO user_point_ledger (
+            user_id, event_type, delta, business_key, source_type, reason
+        ) VALUES ('legacy-user', 'checkin_reward', 5, 'rollback-me', 'checkin', 'history');
+    `)
+
+    database.exec('BEGIN')
+    assert.throws(() => {
+        for (const statement of USER_POINT_LEDGER_REBUILD_STATEMENTS) database.exec(statement)
+        database.exec('SELECT missing_column FROM user_point_ledger')
+    }, /missing_column/)
+    database.exec('ROLLBACK')
+
+    assert.equal(database.prepare(`SELECT business_key FROM user_point_ledger`).get().business_key, 'rollback-me')
+    assert.equal(database.prepare(`PRAGMA foreign_key_list(user_point_ledger)`).all().length, 1)
+    assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'user_point_ledger_nocascade'`).get().count, 0)
 })
 
 test('every DDL statement is idempotent', () => {

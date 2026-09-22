@@ -27,6 +27,7 @@ import { parseCheckoutFieldConfigs, validateCheckoutFieldValues } from "@/lib/ch
 import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
 import { createOrderAccessToken, ORDER_ACCESS_COOKIE, ORDER_ACCESS_TTL_SECONDS } from "@/lib/order-access"
 import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
+import { processOrderFulfillment } from "@/lib/order-processing"
 
 const MAX_ORDER_QUANTITY = 10000
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -395,27 +396,40 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     const candidateCardId = candidate.id
                     const candidateOrderId = candidate.reservedOrderId
 
-                    let isPaid = false
-                    try {
-                        if (candidateOrderId) {
-                            const statusRes = await queryOrderStatus(candidateOrderId)
+                    let reservationCanBeReclaimed = !candidateOrderId
+                    if (candidateOrderId) {
+                        const candidateOrder = await db.query.orders.findFirst({
+                            where: eq(orders.orderId, candidateOrderId),
+                            columns: {
+                                status: true,
+                                amount: true,
+                                currentPaymentId: true,
+                            },
+                        })
+
+                        if (!candidateOrder || candidateOrder.status === 'cancelled' || candidateOrder.status === 'refunded') {
+                            reservationCanBeReclaimed = true
+                        } else if (candidateOrder.status === 'pending') {
+                            const statusRes = await queryOrderStatus(candidateOrder.currentPaymentId || candidateOrderId)
                             if (statusRes.success && statusRes.status === 1) {
-                                isPaid = true
+                                const paidAmount = Number.parseFloat(statusRes.data?.money || candidateOrder.amount)
+                                const tradeNo = statusRes.data?.trade_no
+                                    || statusRes.data?.transaction_id
+                                    || `RESERVATION_RECOVERY_${Date.now()}`
+                                try {
+                                    await processOrderFulfillment(candidateOrderId, paidAmount, tradeNo)
+                                } catch (error) {
+                                    console.error(`[Checkout] Failed to fulfill paid expired reservation ${candidateOrderId}:`, error)
+                                }
+                                // Never steal from an order that the gateway confirmed as paid,
+                                // even when fulfillment needs a later retry.
+                                continue
                             }
+                            reservationCanBeReclaimed = statusRes.success && statusRes.status === 0
                         }
-                    } catch {
-                        // ignore
                     }
 
-                    if (isPaid) {
-                        await db.update(cards)
-                            .set({ isUsed: true, usedAt: new Date() })
-                            .where(eq(cards.id, candidateCardId));
-                        await db.update(orders)
-                            .set({ status: 'paid', paidAt: new Date() })
-                            .where(and(eq(orders.orderId, candidateOrderId!), eq(orders.status, 'pending')));
-                        continue
-                    } else {
+                    if (reservationCanBeReclaimed) {
                         // Steal the expired card only if it is still expired and unchanged
                         const now = new Date();
                         const updated = await db.update(cards)
@@ -434,6 +448,10 @@ export async function createOrder(productId: string, quantity: number = 1, email
                             reservedCards.push({ id: updated[0].id, key: updated[0].cardKey });
                             success = true;
                         }
+                    } else {
+                        // Gateway errors and active paid/processing orders are inconclusive.
+                        // Keep their reservation instead of risking duplicate delivery.
+                        continue
                     }
                 } // end while
 

@@ -180,7 +180,7 @@ export const loginUsers = sqliteTable('login_users', {
 
 export const userPointLedger = sqliteTable('user_point_ledger', {
     id: integer('id', { mode: 'number' }).primaryKey({ autoIncrement: true }),
-    userId: text('user_id').notNull().references(() => loginUsers.userId, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull(),
     eventType: text('event_type').notNull(),
     delta: integer('delta').notNull(),
     balanceAfter: integer('balance_after'),

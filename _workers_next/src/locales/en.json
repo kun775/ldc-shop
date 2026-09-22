@@ -140,6 +140,7 @@
         "outOfStock": "Product is out of stock",
         "limitExceeded": "Purchase quantity limit exceeded. Please reduce the quantity and try again.",
         "invalidQuantity": "Invalid quantity.",
+        "invalidPrice": "This product has an invalid price configuration. Please contact an administrator.",
         "quantityTooLarge": "Quantity is too large. Please reduce and try again.",
         "stockLocked": "Stock is temporarily reserved. Please try again in a minute.",
         "stockLockedMessage": "Stock is currently locked. If reserved orders are not paid within 5 minutes, stock will be released. Please try again later!",

@@ -69,7 +69,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                 pointsUsed: Number(order.pointsUsed || 0),
                 quantity: Number(order.quantity || 1),
                 status: order.status || 'pending',
-                cardKey: order.cardKey,
+                cardKey: order.status === 'delivered' ? order.cardKey : null,
                 payee: order.payee,
                 createdAt: order.createdAt,
                 paidAt: order.paidAt,

@@ -103,6 +103,15 @@ test('product coupon restriction is registered after delivery tracking', () => {
     )
 })
 
+test('point ledger history preservation is registered after product coupon restriction', () => {
+    const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
+    assert.ok(ids.includes('0034_point_ledger_preserve_history'))
+    assert.ok(
+        ids.indexOf('0034_point_ledger_preserve_history') > ids.indexOf('0033_product_coupon_restriction'),
+        'point ledger foreign key removal must be owned by a new immutable upgrade item',
+    )
+})
+
 test('registered upgrades start from the schema version before the registry was introduced', () => {
     assert.equal(DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION, 27)
     assert.equal(supportsRegisteredDatabaseUpgrades(null), false)

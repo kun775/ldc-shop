@@ -100,7 +100,7 @@ export function parseCouponForm(
     } else {
         const discountValue = readString(formData, 'discountValue')
         const parsed = parseLdcToCents(discountValue)
-        if (!discountValue || parsed <= 0) {
+        if (parsed === null || parsed <= 0) {
             return { ok: false, error: 'coupon.admin.errors.discountInvalid' }
         }
         discountAmountCents = parsed
@@ -110,7 +110,7 @@ export function parseCouponForm(
     let maxDiscountCents: number | null = null
     if (maxDiscountRaw) {
         const parsed = parseLdcToCents(maxDiscountRaw)
-        if (parsed <= 0) {
+        if (parsed === null || parsed <= 0) {
             return { ok: false, error: 'coupon.admin.errors.maxDiscountInvalid' }
         }
         maxDiscountCents = parsed
@@ -119,10 +119,11 @@ export function parseCouponForm(
     const minSpendRaw = readString(formData, 'minSpendValue')
     let minSpendCents = 0
     if (minSpendRaw) {
-        minSpendCents = parseLdcToCents(minSpendRaw)
-        if (minSpendCents < 0) {
+        const parsedMinSpend = parseLdcToCents(minSpendRaw)
+        if (parsedMinSpend === null || parsedMinSpend < 0) {
             return { ok: false, error: 'coupon.admin.errors.minSpendInvalid' }
         }
+        minSpendCents = parsedMinSpend
     }
     if (discountTypeRaw === 'threshold_fixed' && minSpendCents <= 0) {
         return { ok: false, error: 'coupon.admin.errors.minSpendRequired' }

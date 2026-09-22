@@ -10,16 +10,14 @@ const LDC_DECIMAL_PATTERN = /^(-)?(\d*)(?:\.(\d*))?$/
 //   - 创建时间: 2026-03-05
 //   - 更新时间: 2026-03-05
 //   - 更新内容: 新增基于字符串截断的舍入逻辑，避免浮点乘法误差。
-export function parseLdcToCents(value: string | number | null | undefined): number {
-    if (value === null || value === undefined) return 0
-    if (typeof value === 'number') {
-        if (!Number.isFinite(value)) return 0
-    }
+export function parseLdcToCents(value: string | number | null | undefined): number | null {
+    if (value === null || value === undefined) return null
+    if (typeof value === 'number' && !Number.isFinite(value)) return null
     const raw = typeof value === 'number' ? String(value) : String(value).trim()
-    if (!raw) return 0
+    if (!raw) return null
 
     const match = LDC_DECIMAL_PATTERN.exec(raw)
-    if (!match) return 0
+    if (!match) return null
 
     const sign = match[1] === '-' ? -1 : 1
     const intPart = match[2] || '0'
@@ -29,12 +27,16 @@ export function parseLdcToCents(value: string | number | null | undefined): numb
     const roundingDigit = fracPart.charAt(2)
 
     let cents = Number(intPart) * 100 + Number(keptFrac)
-    if (!Number.isFinite(cents)) return 0
+    if (!Number.isFinite(cents)) return null
     if (roundingDigit && Number(roundingDigit) >= 5) {
         cents += 1
     }
 
     return sign * cents
+}
+
+export function parseLdcToCentsOrZero(value: string | number | null | undefined): number {
+    return parseLdcToCents(value) ?? 0
 }
 
 // centsToLdcString 将整数分格式化为 LDC 金额字符串

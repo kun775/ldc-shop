@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { AdminPageShell } from "@/components/admin/admin-page-shell"
-import { saveShopName, saveShopDescription, saveShopLogo, saveShopFooter, saveThemeColor, saveThemeFont, saveLowStockThreshold, saveCheckinReward, saveCheckinEnabled, saveWishlistEnabled, saveNoIndex, saveRefundReclaimCards, saveRegistryHideNav, saveCurrencyUnit } from "@/actions/admin"
+import { saveShopName, saveShopDescription, saveShopLogo, saveShopFooter, saveThemeColor, saveThemeFont, saveLowStockThreshold, saveCheckinReward, saveCheckinEnabled, saveWishlistEnabled, saveNoIndex, saveRegistryHideNav, saveCurrencyUnit } from "@/actions/admin"
 import { joinRegistry, leaveRegistry } from "@/actions/registry"
 import { checkForUpdatesClient, type ClientUpdateCheckResult } from "@/lib/update-check-client"
 import { toast } from "sonner"
@@ -31,7 +31,6 @@ interface AdminSettingsContentProps {
     checkinEnabled: boolean
     wishlistEnabled: boolean
     noIndexEnabled: boolean
-    refundReclaimCards: boolean
     registryHideNav: boolean
     registryOptIn: boolean
     registryEnabled: boolean
@@ -58,7 +57,7 @@ const THEME_COLORS = [
 
 const SHOP_LOGO_UPLOAD_MAX_BYTES = 500 * 1024
 
-export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shopFooter, currencyUnit, themeColor, themeFont, lowStockThreshold, checkinReward, checkinEnabled, wishlistEnabled, noIndexEnabled, refundReclaimCards, registryHideNav, registryOptIn, registryEnabled, currentVersion }: AdminSettingsContentProps) {
+export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shopFooter, currencyUnit, themeColor, themeFont, lowStockThreshold, checkinReward, checkinEnabled, wishlistEnabled, noIndexEnabled, registryHideNav, registryOptIn, registryEnabled, currentVersion }: AdminSettingsContentProps) {
     const { t } = useI18n()
     const router = useRouter()
     const shopLogoFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -88,8 +87,6 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
     const [savingWishlist, setSavingWishlist] = useState(false)
     const [enabledNoIndex, setEnabledNoIndex] = useState(noIndexEnabled)
     const [savingNoIndex, setSavingNoIndex] = useState(false)
-    const [refundReclaimEnabled, setRefundReclaimEnabled] = useState(refundReclaimCards)
-    const [savingRefundReclaim, setSavingRefundReclaim] = useState(false)
     const [checkingUpdate, setCheckingUpdate] = useState(false)
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
     const [submittingRegistry, setSubmittingRegistry] = useState(false)
@@ -223,19 +220,6 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
             toast.error(t(resolveClientActionErrorKey(e)))
         } finally {
             setSavingEnabled(false)
-        }
-    }
-
-    const handleToggleRefundReclaim = async (checked: boolean) => {
-        setSavingRefundReclaim(true)
-        try {
-            await saveRefundReclaimCards(checked)
-            setRefundReclaimEnabled(checked)
-            toast.success(t('common.success'))
-        } catch (e: any) {
-            toast.error(t(resolveClientActionErrorKey(e)))
-        } finally {
-            setSavingRefundReclaim(false)
         }
     }
 
@@ -529,28 +513,6 @@ export function AdminSettingsContent({ shopName, shopDescription, shopLogo, shop
                             </div>
                         </div>
                     )}
-                </CardContent>
-            </Card>
-
-            {/* Refund Settings */}
-            <Card>
-                <CardHeader>
-                    <CardTitle>{t('admin.settings.refund.title')}</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2">
-                    <div className="flex items-center gap-4">
-                        <Label htmlFor="refund-reclaim" className="cursor-pointer">{t('admin.settings.refund.reclaimLabel')}</Label>
-                        <Button
-                            id="refund-reclaim"
-                            variant={refundReclaimEnabled ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => handleToggleRefundReclaim(!refundReclaimEnabled)}
-                            disabled={savingRefundReclaim}
-                        >
-                            {refundReclaimEnabled ? t('admin.settings.refund.reclaimEnabled') : t('admin.settings.refund.reclaimDisabled')}
-                        </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">{t('admin.settings.refund.reclaimHint')}</p>
                 </CardContent>
             </Card>
 

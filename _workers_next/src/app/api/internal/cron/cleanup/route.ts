@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { secretsEqual } from "@/lib/crypto";
 import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded } from "@/lib/db/queries";
 
 const CRON_TOKEN_HEADER = "x-cron-cleanup-token";
@@ -13,7 +14,7 @@ function getCronToken(): string | null {
 
 function isAuthorized(request: Request, expectedToken: string): boolean {
     const received = request.headers.get(CRON_TOKEN_HEADER)?.trim();
-    return !!received && received === expectedToken;
+    return !!received && secretsEqual(received, expectedToken);
 }
 
 export async function POST(request: Request) {

@@ -7,6 +7,7 @@ const {
     BASELINE_SCHEMA_DRIFT_PROBES,
     DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES,
     POINT_LEDGER_SCHEMA_DRIFT_PROBES,
+    POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES,
     PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES,
     SCHEMA_DRIFT_PROBES,
     isSchemaDriftError,
@@ -68,6 +69,7 @@ test('upgrade-specific probes do not leak into the 0028 baseline scope', () => {
     const audit = AUDIT_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
     const deliveryDownload = DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
     const productCouponRestriction = PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
+    const pointLedgerHistory = POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
 
     assert.ok(baseline.includes('products'))
     assert.ok(baseline.includes('database_migrations'))
@@ -83,6 +85,8 @@ test('upgrade-specific probes do not leak into the 0028 baseline scope', () => {
     assert.ok(deliveryDownload.includes('downloaded_at'))
     assert.ok(productCouponRestriction.includes('products'))
     assert.ok(productCouponRestriction.includes('coupon_usage_restriction'))
+    assert.ok(pointLedgerHistory.includes('user_point_ledger'))
+    assert.ok(pointLedgerHistory.includes('business_key'))
 })
 
 test("missing table/column errors are recognised as drift", () => {

@@ -58,6 +58,28 @@ class D1Proxy {
     }
 }
 
+export interface AtomicD1Statement {
+    query: string
+    bindings?: readonly unknown[]
+}
+
+/**
+ * Execute related writes in one D1 batch. D1 commits a batch atomically and
+ * rolls the whole batch back when any statement fails.
+ */
+export async function runAtomicD1Batch(statements: readonly AtomicD1Statement[]) {
+    if (statements.length === 0) return []
+
+    const client = await getD1()
+    const prepared = statements.map((statement) => {
+        const query = client.prepare(statement.query)
+        return statement.bindings?.length
+            ? query.bind(...statement.bindings as any[])
+            : query
+    })
+    return client.batch(prepared)
+}
+
 function createBuildTimeMockD1() {
     return {
         prepare() {

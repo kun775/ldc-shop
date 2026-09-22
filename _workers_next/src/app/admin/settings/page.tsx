@@ -27,7 +27,6 @@ export default async function AdminSettingsPage() {
     const wishlistEnabled = settingsMap['wishlist_enabled'] === 'true'
     const noIndexEnabled = settingsMap['noindex_enabled'] === 'true'
     const registryOptIn = settingsMap['registry_opt_in'] === 'true'
-    const refundReclaimCards = settingsMap['refund_reclaim_cards'] !== 'false'
     const registryHideNav = settingsMap['registry_hide_nav'] === 'true'
 
     return (
@@ -45,7 +44,6 @@ export default async function AdminSettingsPage() {
             wishlistEnabled={wishlistEnabled}
             noIndexEnabled={noIndexEnabled}
             registryOptIn={registryOptIn}
-            refundReclaimCards={refundReclaimCards}
             registryHideNav={registryHideNav}
             registryEnabled={isRegistryEnabled()}
             currentVersion={APP_VERSION}

@@ -1,10 +1,10 @@
 'use server'
 
-import { db } from "@/lib/db"
-import { cards, orders, refundRequests, products } from "@/lib/db/schema"
-import { and, eq, inArray } from "drizzle-orm"
+import { db, runAtomicD1Batch, type AtomicD1Statement } from "@/lib/db"
+import { orders, products, refundRequests } from "@/lib/db/schema"
+import { eq } from "drizzle-orm"
 import { revalidatePath, updateTag } from "next/cache"
-import { getSetting, recalcProductAggregates } from "@/lib/db/queries"
+import { recalcProductAggregates } from "@/lib/db/queries"
 import { checkAdmin } from "@/actions/admin"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
 import {
@@ -21,12 +21,22 @@ export async function markOrderRefunded(orderId: string) {
     try {
         await checkAdmin()
 
-        // No transaction - D1 doesn't support SQL transactions in HTTP api easily
+        // Points and coupon operations are idempotent. The order/key/card state
+        // transition below is committed in one D1 batch.
         const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
         if (!order) throw new Error("Order not found")
         if (order.status === 'refunded') {
             return { success: true }
         }
+        if (order.status !== 'paid' && order.status !== 'delivered') {
+            throw new Error(`Order ${orderId} cannot be refunded from status ${order.status || 'unknown'}`)
+        }
+        const product = order.productId
+            ? await db.query.products.findFirst({
+                where: eq(products.id, order.productId),
+                columns: { isShared: true },
+            })
+            : null
 
         // Refund points if used
         if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
@@ -51,9 +61,6 @@ export async function markOrderRefunded(orderId: string) {
             })
         }
 
-        // Update order status
-        await db.update(orders).set({ status: 'refunded' }).where(eq(orders.orderId, orderId))
-
         // 优惠券处理：未核销的预占一律释放；已核销的按券的退款策略决定是否返还次数
         try {
             await releaseCouponUsages(orderId, 'refund_release')
@@ -72,45 +79,59 @@ export async function markOrderRefunded(orderId: string) {
             console.error('[Coupon] Refund reversal failed:', error)
         }
 
-        // Reclaim card back to stock (best effort)
-        let reclaimCards = true
-        try {
-            const v = await getSetting('refund_reclaim_cards')
-            reclaimCards = v !== 'false'
-        } catch {
-            reclaimCards = true
-        }
-        if (reclaimCards && order.productId) {
-            const product = await db.query.products.findFirst({
-                where: eq(products.id, order.productId),
-                columns: { isShared: true }
-            });
-            if (product?.isShared) {
-                reclaimCards = false;
+        const refundStatements: AtomicD1Statement[] = []
+
+        // Only delivered keys are permanently consumed. A paid manual or
+        // out-of-stock order never disclosed a key, so its reservations can be released.
+        const rawIds = order.cardIds || '';
+        const parsedIds = rawIds
+            .split(',')
+            .map((id) => Number(id.trim()))
+            .filter((id) => Number.isInteger(id) && id > 0);
+        const uniqueIds = Array.from(new Set(parsedIds));
+        const consumedAt = Date.now()
+
+        if (order.status === 'delivered' && !product?.isShared && uniqueIds.length > 0) {
+            const placeholders = uniqueIds.map(() => '?').join(', ')
+            refundStatements.push({
+                query: `UPDATE cards
+                    SET is_used = 1, used_at = ?, reserved_order_id = NULL, reserved_at = NULL
+                    WHERE id IN (${placeholders})`,
+                bindings: [consumedAt, ...uniqueIds],
+            })
+        } else if (order.status === 'delivered' && !product?.isShared && order.cardKey && order.productId) {
+            const keys = order.cardKey.split('\n').map((k: string) => k.trim()).filter((k: string) => k !== '')
+            if (keys.length > 0) {
+                const uniqueKeys = Array.from(new Set(keys)) as string[]
+                const placeholders = uniqueKeys.map(() => '?').join(', ')
+                refundStatements.push({
+                    query: `UPDATE cards
+                        SET is_used = 1, used_at = ?, reserved_order_id = NULL, reserved_at = NULL
+                        WHERE product_id = ? AND card_key IN (${placeholders})`,
+                    bindings: [consumedAt, order.productId, ...uniqueKeys],
+                })
             }
+        } else if (order.status === 'paid') {
+            refundStatements.push({
+                query: `UPDATE cards
+                    SET reserved_order_id = NULL, reserved_at = NULL
+                    WHERE reserved_order_id = ? AND (is_used = 0 OR is_used IS NULL)`,
+                bindings: [orderId],
+            })
         }
 
-        if (reclaimCards) {
-            const rawIds = order.cardIds || '';
-            const parsedIds = rawIds
-                .split(',')
-                .map((id) => Number(id.trim()))
-                .filter((id) => Number.isFinite(id));
-
-            const uniqueIds = Array.from(new Set(parsedIds));
-
-            if (uniqueIds.length > 0) {
-                await db.update(cards).set({ isUsed: false, usedAt: null, reservedOrderId: null, reservedAt: null })
-                    .where(inArray(cards.id, uniqueIds));
-            } else if (order.cardKey) {
-                const keys = order.cardKey.split('\n').map((k: string) => k.trim()).filter((k: string) => k !== '')
-                if (keys.length > 0) {
-                    const uniqueKeys = Array.from(new Set(keys)) as string[]
-                    await db.update(cards).set({ isUsed: false, usedAt: null, reservedOrderId: null, reservedAt: null })
-                        .where(and(eq(cards.productId, order.productId), inArray(cards.cardKey, uniqueKeys)))
-                }
-            }
-        }
+        refundStatements.push({
+            query: `UPDATE orders
+                SET status = 'refunded',
+                    card_key = NULL,
+                    card_ids = NULL,
+                    current_payment_id = NULL,
+                    fulfillment_claim_id = NULL,
+                    fulfillment_claimed_at = NULL
+                WHERE order_id = ? AND status IN ('paid', 'delivered')`,
+            bindings: [orderId],
+        })
+        await runAtomicD1Batch(refundStatements)
 
         // Mark refund request processed if table exists
         try {

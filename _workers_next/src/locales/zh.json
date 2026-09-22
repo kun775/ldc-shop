@@ -140,6 +140,7 @@
         "outOfStock": "商品已售罄",
         "limitExceeded": "超出限购数量，请减少购买数量后重试",
         "invalidQuantity": "购买数量无效",
+        "invalidPrice": "商品价格配置无效，请联系管理员",
         "quantityTooLarge": "购买数量过大，请减少后重试",
         "stockLocked": "库存已被锁定，请稍后再试",
         "stockLockedMessage": "该商品库存已被锁定，如果用户五分钟内未支付，库存将自动释放，请稍后再来！",

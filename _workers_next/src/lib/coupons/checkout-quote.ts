@@ -45,6 +45,9 @@ export type CouponQuoteOutcome =
 export async function resolveCouponQuote(input: CouponQuoteInput): Promise<CouponQuoteOutcome> {
     const quantity = Number.isFinite(input.quantity) && input.quantity > 0 ? Math.floor(input.quantity) : 1
     const unitPriceCents = parseLdcToCents(input.product.price)
+    if (unitPriceCents === null || unitPriceCents < 0) {
+        return { ok: false, error: 'checkout.invalidPrice' }
+    }
     const subtotalCents = unitPriceCents * quantity
     const codes = normalizeCouponCodeList(input.codes)
     const now = input.now ?? Date.now()

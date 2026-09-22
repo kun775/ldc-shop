@@ -38,6 +38,12 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
         description: '为商品新增优惠券使用限制，支持禁用优惠券、仅允许指定商品券或允许全部优惠券。',
         verifiesStructure: true,
     },
+    {
+        id: '0034_point_ledger_preserve_history',
+        name: '积分流水脱离用户级联删除',
+        description: '重建积分流水表并移除指向用户的级联删除外键，避免合并或删除历史账号时清掉积分流水。',
+        verifiesStructure: true,
+    },
 ] as const
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']

@@ -63,12 +63,17 @@ export const PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES: readonly string[] =
     "SELECT coupon_usage_restriction FROM products LIMIT 0",
 ]
 
+export const POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES: readonly string[] = [
+    "SELECT user_id, event_type, delta, business_key, status FROM user_point_ledger LIMIT 0",
+]
+
 export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     ...BASELINE_SCHEMA_DRIFT_PROBES,
     ...POINT_LEDGER_SCHEMA_DRIFT_PROBES,
     ...AUDIT_SCHEMA_DRIFT_PROBES,
     ...DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES,
     ...PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES,
+    ...POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES,
 ]
 
 /**

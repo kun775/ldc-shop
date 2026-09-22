@@ -1,6 +1,6 @@
 import { couponFailure } from './errors.ts'
 import type { CouponErrorCode } from './errors.ts'
-import { centsToLdcNumber, parseLdcToCents } from './money.ts'
+import { centsToLdcNumber, parseLdcToCentsOrZero } from './money.ts'
 import {
     evaluateCouponRule,
     getCouponStackingConflict,
@@ -222,5 +222,5 @@ export function getPricingDiscountCents(raw: string | null | undefined): {
 }
 
 export function centsFromLdc(value: string | number | null | undefined): number {
-    return parseLdcToCents(value)
+    return parseLdcToCentsOrZero(value)
 }

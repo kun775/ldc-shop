@@ -14,10 +14,41 @@
 
 export const USER_POINT_LEDGER_TABLE = 'user_point_ledger'
 
+export const USER_POINT_LEDGER_REBUILD_STATEMENTS = [
+    `CREATE TABLE IF NOT EXISTS user_point_ledger_nocascade (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        delta INTEGER NOT NULL,
+        balance_after INTEGER,
+        business_key TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id TEXT,
+        reason TEXT NOT NULL,
+        operator_user_id TEXT,
+        operator_username TEXT,
+        metadata TEXT,
+        status TEXT NOT NULL DEFAULT 'completed',
+        claim_id TEXT,
+        claimed_at INTEGER,
+        created_at INTEGER DEFAULT (unixepoch() * 1000)
+    )`,
+    `INSERT OR IGNORE INTO user_point_ledger_nocascade (
+        id, user_id, event_type, delta, balance_after, business_key, source_type, source_id,
+        reason, operator_user_id, operator_username, metadata, status, claim_id, claimed_at, created_at
+    )
+    SELECT
+        id, user_id, event_type, delta, balance_after, business_key, source_type, source_id,
+        reason, operator_user_id, operator_username, metadata, status, claim_id, claimed_at, created_at
+    FROM user_point_ledger`,
+    `DROP TABLE user_point_ledger`,
+    `ALTER TABLE user_point_ledger_nocascade RENAME TO user_point_ledger`,
+] as const
+
 export const USER_POINT_LEDGER_CREATE_TABLE_STATEMENT = `
     CREATE TABLE IF NOT EXISTS user_point_ledger (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL REFERENCES login_users(user_id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL,
         event_type TEXT NOT NULL,
         delta INTEGER NOT NULL,
         balance_after INTEGER,

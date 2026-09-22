@@ -1,6 +1,6 @@
 import { db } from "@/lib/db"
 import { orders } from "@/lib/db/schema"
-import { md5 } from "@/lib/crypto"
+import { md5, secretsEqual } from "@/lib/crypto"
 import { eq } from "drizzle-orm"
 import { withOrderColumnFallback } from "@/lib/db/queries"
 
@@ -41,7 +41,7 @@ function verifySignature(params: Record<string, string>, merchantKey: string) {
         .map((key) => `${key}=${params[key]}`)
         .join("&")
 
-    return params.sign === md5(`${sorted}${merchantKey}`)
+    return secretsEqual(params.sign, md5(`${sorted}${merchantKey}`))
 }
 
 async function processNotify(params: Record<string, string>) {
