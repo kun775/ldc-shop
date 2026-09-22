@@ -16,5 +16,7 @@ test('manual delivery validates content before confirmation without a blocking o
     assert.ok(validation > deliveredBranch)
     assert.ok(confirmation > validation)
     assert.match(component, /confirmMarkDeliveredWithoutFiles/)
+    assert.match(component, /typeof item !== 'string' && item\.size > 0/)
+    assert.doesNotMatch(component, /instanceof File/)
     assert.doesNotMatch(component, /data-delivery-overlay/)
 })

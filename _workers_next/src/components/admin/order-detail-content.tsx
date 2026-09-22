@@ -27,7 +27,7 @@ import {
   Download, 
   FileArchive, 
   FileText, 
-  File, 
+  File as FileIcon,
   CheckCircle2, 
   AlertCircle, 
   Clock, 
@@ -68,7 +68,7 @@ function getFileIcon(fileName: string) {
   if (['pdf', 'doc', 'docx', 'txt', 'md'].includes(ext)) {
     return <FileText className="h-4 w-4 text-blue-500" />
   }
-  return <File className="h-4 w-4 text-muted-foreground" />
+  return <FileIcon className="h-4 w-4 text-muted-foreground" />
 }
 
 function statusVariant(status: string | null) {
@@ -199,7 +199,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
         manualDeliveryFormData.set('deliveryNote', deliveryNote)
         hasDeliveryFiles = manualDeliveryFormData
           .getAll('deliveryFiles')
-          .some((item) => item instanceof File && item.size > 0)
+          .some((item) => typeof item !== 'string' && item.size > 0)
 
         if (!deliveryNote.trim() && !hasDeliveryFiles) {
           const errorKey = 'admin.orders.deliveryContentRequired'
