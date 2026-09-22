@@ -19,7 +19,6 @@ import {
     DialogTitle,
     DialogTrigger
 } from "@/components/ui/dialog"
-import ReactMarkdown from 'react-markdown'
 import { ChevronLeft, ChevronRight, Expand, Loader2, Minus, Plus, Share2, Zap, PackageOpen, Check, ShieldCheck, Clock } from "lucide-react"
 import { ProductImagePlaceholder } from "@/components/product-image-placeholder"
 import { toast } from "sonner"
@@ -32,6 +31,7 @@ import { getProductPointDiscountBadge } from "@/lib/points/product-point-discoun
 import { parseCheckoutFieldConfigs } from "@/lib/checkout-fields"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import { MarkdownContent } from "@/components/markdown-content"
 
 interface Product {
     id: string
@@ -550,11 +550,11 @@ export function BuyContent({
                                     </div>
 
                                     <div className="rounded-[1.55rem] border border-border/20 bg-background/55 p-5 md:p-6">
-                                        <div className="prose prose-sm max-w-none break-words text-foreground/88 dark:prose-invert md:prose-base">
-                                            <ReactMarkdown>
-                                                {displayProduct.description || t('buy.noDescription')}
-                                            </ReactMarkdown>
-                                        </div>
+                                        <MarkdownContent
+                                            content={displayProduct.description || ''}
+                                            emptyText={t('buy.noDescription')}
+                                            className="text-foreground/88 md:prose-base"
+                                        />
                                     </div>
                                 </div>
                             </div>
@@ -855,9 +855,7 @@ export function BuyContent({
                                                                 </DialogTitle>
                                                             </DialogHeader>
                                                             <div className="py-4 text-sm leading-relaxed text-muted-foreground">
-                                                                <div className="prose prose-sm max-w-none dark:prose-invert [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                                                                    <ReactMarkdown>{displayProduct.purchaseWarning || ''}</ReactMarkdown>
-                                                                </div>
+                                                                <MarkdownContent content={displayProduct.purchaseWarning || ''} />
                                                             </div>
                                                             <div className="flex justify-end gap-3">
                                                                 <Button

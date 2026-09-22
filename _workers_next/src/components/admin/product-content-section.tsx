@@ -3,7 +3,7 @@
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Textarea } from "@/components/ui/textarea"
+import { MarkdownEditor } from "@/components/admin/markdown-editor"
 
 type ProductContentSectionProps = {
     currentProduct: any
@@ -60,12 +60,13 @@ export function ProductContentSection({
 
                     <div className="grid gap-2">
                         <Label htmlFor="description">{t('admin.productForm.descLabel')}</Label>
-                        <Textarea
+                        <MarkdownEditor
                             id="description"
                             name="description"
                             defaultValue={currentProduct?.description}
                             placeholder={t('admin.productForm.descPlaceholder')}
-                            className="min-h-[220px]"
+                            height={280}
+                            t={t}
                         />
                     </div>
                 </CardContent>
@@ -134,12 +135,13 @@ export function ProductContentSection({
                         {showWarning && (
                             <div className="grid gap-2">
                                 <Label htmlFor="purchaseWarning">{t('admin.productForm.purchaseWarningLabel')}</Label>
-                                <Textarea
+                                <MarkdownEditor
                                     id="purchaseWarning"
                                     name="purchaseWarning"
                                     defaultValue={currentProduct?.purchaseWarning || ''}
                                     placeholder={t('admin.productForm.purchaseWarningPlaceholder')}
-                                    className="min-h-[120px]"
+                                    height={180}
+                                    t={t}
                                 />
                                 <p className="text-xs text-muted-foreground">{t('admin.productForm.purchaseWarningHint')}</p>
                             </div>
