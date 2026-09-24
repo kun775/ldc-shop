@@ -16,6 +16,7 @@ import {
     DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES,
     POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES,
     PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES,
+    RATE_LIMIT_SCHEMA_DRIFT_PROBES,
     isSchemaDriftError,
 } from "./schema-drift";
 import {
@@ -25,7 +26,10 @@ import {
 } from "@/lib/coupons/counter-triggers";
 import { MANUAL_STOCK_TRIGGER_NAMES, MANUAL_STOCK_TRIGGER_STATEMENTS } from "@/lib/manual-stock-triggers";
 import { LOGIN_USERS_COLUMN_DEFINITIONS, LOGIN_USERS_CREATE_TABLE_STATEMENT } from "./login-users-schema";
-import { collectErrorText, isDuplicateColumnError } from "./error-utils";
+import { collectErrorText, isDuplicateColumnError, isDuplicateSchemaObjectError } from "./error-utils";
+import { isManualFulfillment, resolveProductStockCount } from "@/lib/product-stock";
+import { RATE_LIMIT_EXPIRES_INDEX_NAME, resetRateLimitSchemaReady } from "@/lib/rate-limit";
+import { RATE_LIMIT_DDL_STATEMENTS } from "./rate-limit-schema";
 import { executeDatabaseUpgrades, ensureDatabaseMigrationsTable, readDatabaseUpgradeStatus } from "./database-upgrades";
 import { supportsRegisteredDatabaseUpgrades, type DatabaseUpgradeHealth } from "./database-upgrade-registry";
 import { isMissingRelationError } from "./schema-errors";
@@ -40,7 +44,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 34;
+const CURRENT_SCHEMA_VERSION = 36;
 const dbInitializationState = createAsyncOnceState();
 const databaseUpgradePreparationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
@@ -52,7 +56,13 @@ const columnEnsureState: Record<ColumnEnsureKey, { ready: boolean; pending: Prom
     loginUsers: { ready: false, pending: null },
 };
 const reviewRepliesEnsureState = { ready: false, pending: null as Promise<void> | null };
+// reviews 表此前由 src/actions/reviews.ts 在每次提交/回复时裸跑 CREATE TABLE。
+// 这里收敛为 isolate 级一次性的 ensure*，让写入路径不再重复发 DDL。
+const reviewsEnsureState = { ready: false, pending: null as Promise<void> | null };
 let persistedSchemaVersion: number | null = null;
+
+/** reviews(order_id) 唯一索引名：0035 升级项、写入路径 ensure 与结构校验共用 */
+export const REVIEW_ORDER_ID_UNIQUE_INDEX = 'reviews_order_id_uq';
 
 function primePersistedSchemaVersion(version: number | null) {
     persistedSchemaVersion = version;
@@ -68,6 +78,8 @@ function markCurrentSchemaReady(version: number = CURRENT_SCHEMA_VERSION) {
     wishlistTablesReady = true;
     reviewRepliesEnsureState.ready = true;
     reviewRepliesEnsureState.pending = null;
+    reviewsEnsureState.ready = true;
+    reviewsEnsureState.pending = null;
 
     for (const key of Object.keys(columnEnsureState) as ColumnEnsureKey[]) {
         columnEnsureState[key].ready = true;
@@ -91,10 +103,13 @@ function resetSchemaReadyFlags() {
     wishlistTablesReady = false;
     reviewRepliesEnsureState.ready = false;
     reviewRepliesEnsureState.pending = null;
+    reviewsEnsureState.ready = false;
+    reviewsEnsureState.pending = null;
     // 积分账本和审计模块各自维护 isolate 级 ready 标记；管理员在同一
     // isolate 内继续执行独立升级项时必须重新探测，不能沿用旧就绪状态。
     resetPointLedgerSchemaReady();
     resetAuditSchemaReady();
+    resetRateLimitSchemaReady();
 
     for (const key of Object.keys(columnEnsureState) as ColumnEnsureKey[]) {
         columnEnsureState[key].ready = false;
@@ -204,8 +219,50 @@ async function verifyProductCouponRestrictionStructure(): Promise<boolean> {
     return true;
 }
 
+/** indexExists 按名查询 sqlite_master 中的索引（索引无法用 SELECT LIMIT 0 探测）。 */
+async function indexExists(indexName: string): Promise<boolean> {
+    const rows = await db.all(sql`
+        SELECT name FROM sqlite_master WHERE type = 'index' AND name = ${indexName}
+    `) as Array<{ name?: string }>
+    return rows.some((row) => row.name === indexName)
+}
+
+async function verifyReviewOrderIdStructure(): Promise<boolean> {
+    try {
+        return await indexExists(REVIEW_ORDER_ID_UNIQUE_INDEX)
+    } catch (error: unknown) {
+        return !isSchemaDriftError(error)
+    }
+}
+
+async function verifyRateLimitStructure(): Promise<boolean> {
+    for (const probe of RATE_LIMIT_SCHEMA_DRIFT_PROBES) {
+        try {
+            await db.run(sql.raw(probe))
+        } catch (error: unknown) {
+            if (isSchemaDriftError(error)) return false
+        }
+    }
+
+    try {
+        return await indexExists(RATE_LIMIT_EXPIRES_INDEX_NAME)
+    } catch (error: unknown) {
+        return !isSchemaDriftError(error)
+    }
+}
+
 async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth> {
-    const [baseline, pointLedger, auditBase, auditCurrent, deliveryFileDownload, productCouponRestriction, pointLedgerHistory] = await Promise.all([
+    const [
+        baseline,
+        pointLedger,
+        auditBase,
+        auditCurrent,
+        deliveryFileDownload,
+        productCouponRestriction,
+        pointLedgerHistory,
+        reviewOrderId,
+        rateLimit,
+    ] = await Promise.all([
         verifyBaselineDatabaseStructure(),
         verifyPointLedgerStructure(),
         verifyAuditBaseStructure(),
@@ -213,6 +270,8 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         verifyDeliveryFileDownloadStructure(),
         verifyProductCouponRestrictionStructure(),
         verifyPointLedgerHistoryStructure(),
+        verifyReviewOrderIdStructure(),
+        verifyRateLimitStructure(),
     ]);
     return {
         '0028_database_upgrade_registry': baseline,
@@ -222,6 +281,8 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         '0032_delivery_file_download_tracking': deliveryFileDownload,
         '0033_product_coupon_restriction': productCouponRestriction,
         '0034_point_ledger_preserve_history': pointLedgerHistory,
+        '0035_review_order_id_unique': reviewOrderId,
+        '0036_rate_limit_counters': rateLimit,
     };
 }
 
@@ -371,6 +432,104 @@ async function ensureReviewRepliesTable() {
     }
 }
 
+// reviews 建表语句。与基线 DDL、升级项共用同一段结构，避免三处漂移。
+const REVIEWS_CREATE_TABLE_STATEMENT = `CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    order_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    rating INTEGER NOT NULL,
+    comment TEXT,
+    created_at INTEGER DEFAULT (unixepoch() * 1000)
+)`
+
+// ensureReviewsTable 创建 reviews 表并尽力建立 order_id 唯一索引。
+//
+// 元数据:
+//   - 作者: 达不溜
+//   - 创建时间: 2026-09-24
+//   - 更新内容: 取代 src/actions/reviews.ts 里每次提交都裸跑的 CREATE TABLE。
+//
+// 说明: 唯一索引在**存在历史重复行**时会创建失败（SQLite 不允许在重复值上建唯一索引），
+// 此时不抛错、留给升级项 0035 先去重再建，保证写入路径不会因为脏数据而不可用。
+export async function ensureReviewsTable() {
+    if (reviewsEnsureState.ready) return;
+    if (reviewsEnsureState.pending) {
+        await reviewsEnsureState.pending;
+        return;
+    }
+
+    const pending = (async () => {
+        try {
+            await db.run(sql.raw(REVIEWS_CREATE_TABLE_STATEMENT))
+        } catch (error: unknown) {
+            // 建表失败必须暴露：没有表，评价功能彻底不可用。
+            if (!isDuplicateSchemaObjectError(error)) throw error;
+        }
+        await ensureReviewsOrderIdIndex();
+        reviewsEnsureState.ready = true;
+    })();
+
+    reviewsEnsureState.pending = pending;
+    try {
+        await pending;
+    } finally {
+        reviewsEnsureState.pending = null;
+    }
+}
+
+/**
+ * ensureReviewsOrderIdIndex 幂等创建 reviews(order_id) 唯一索引。
+ *
+ * 返回是否已建立索引。失败（历史重复行）时返回 false，由升级项 0035 负责去重建。
+ */
+async function ensureReviewsOrderIdIndex(): Promise<boolean> {
+    try {
+        await db.run(sql.raw(
+            `CREATE UNIQUE INDEX IF NOT EXISTS ${REVIEW_ORDER_ID_UNIQUE_INDEX} ON reviews(order_id)`
+        ));
+        return true;
+    } catch (error: unknown) {
+        console.warn(
+            '[Schema] reviews(order_id) unique index not applied; upgrade 0035 will dedupe then retry',
+            error,
+        );
+        return false;
+    }
+}
+
+/**
+ * dedupeAndIndexReviewsOrderId 归并同一订单的历史重复评价并建立唯一索引。
+ *
+ * 升级项 0035 的执行体：先删除 order_id 重复行（保留 id 最小的一条，即最早提交的那条），
+ * 再建立唯一索引。两步都幂等，可安全重复执行。
+ */
+async function dedupeAndIndexReviewsOrderId() {
+    try {
+        await db.run(sql`
+            DELETE FROM reviews
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM reviews GROUP BY order_id
+            )
+        `)
+    } catch (error: unknown) {
+        if (!isSchemaDriftError(error)) throw error
+    }
+    await db.run(sql.raw(
+        `CREATE UNIQUE INDEX IF NOT EXISTS ${REVIEW_ORDER_ID_UNIQUE_INDEX} ON reviews(order_id)`
+    ));
+}
+
+// ensureRateLimitStructureObjects 创建限流计数表与过期索引（升级项 0036 的执行体）。
+// DDL 与 src/lib/rate-limit.ts 的请求路径 ensure 共用同一份常量。
+async function ensureRateLimitStructureObjects() {
+    resetRateLimitSchemaReady();
+    for (const statement of RATE_LIMIT_DDL_STATEMENTS) {
+        await db.run(sql.raw(statement));
+    }
+}
+
 // ensureStructuralSchema 确保所有表、列与索引等结构对象存在（全部幂等）。
 // 只能从管理员手动升级路径调用，普通页面访问不得触发此函数。
 //
@@ -387,6 +546,7 @@ async function ensureStructuralSchema() {
     await ensureCouponTables();
     await ensureCardsColumns();
     await ensureCardKeyDuplicatesAllowed();
+    await ensureReviewsTable();
     await ensureReviewRepliesTable();
     await ensureLoginUsersTable();
     await ensureLoginUsersColumns();
@@ -436,6 +596,15 @@ async function runRegisteredDatabaseUpgrades() {
             },
             async '0034_point_ledger_preserve_history'() {
                 await preservePointLedgerHistory();
+            },
+            async '0035_review_order_id_unique'() {
+                // 独立升级项：只处理 reviews(order_id) 的唯一性。
+                // 不复用 ensureStructuralSchema —— 那会连带重跑全部表/列/索引 DDL。
+                await dedupeAndIndexReviewsOrderId();
+            },
+            async '0036_rate_limit_counters'() {
+                // 独立升级项：只创建限流计数表与过期索引。
+                await ensureRateLimitStructureObjects();
             },
         },
         verifyStructures: verifyDatabaseUpgradeStructures,
@@ -733,6 +902,20 @@ async function prepareDatabaseForManualUpgrade() {
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS wishlist_votes_item_user_uq ON wishlist_votes(item_id, user_id);
+
+        -- 订单评价唯一索引（升级项 0035）：全新库不存在重复行，可直接建。
+        CREATE UNIQUE INDEX IF NOT EXISTS reviews_order_id_uq ON reviews(order_id);
+
+        -- 写入口限流计数表（升级项 0036）
+        CREATE TABLE IF NOT EXISTS rate_limit_counters (
+            bucket TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            window_start INTEGER NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            expires_at INTEGER NOT NULL,
+            PRIMARY KEY (bucket, subject, window_start)
+        );
+        CREATE INDEX IF NOT EXISTS rate_limit_counters_expires_idx ON rate_limit_counters(expires_at);
     `);
 
         await migrateTimestampColumnsToMs();
@@ -1452,48 +1635,9 @@ function visibilityCondition(isLoggedIn?: boolean, trustLevel?: number | null) {
     return lte(sql<number>`COALESCE(${products.visibilityLevel}, -1)`, threshold);
 }
 
-// Get only active products (for home page); groups by variant_group_id and returns one representative per group with variantCount and priceRange
-export async function getActiveProducts(options?: { isLoggedIn?: boolean; trustLevel?: number | null }) {
-    // Auto-initialize database on first access
-    await ensureDatabaseInitialized();
-
-    const rows = await withProductColumnFallback(async () => {
-        return await db.select({
-            id: products.id,
-            name: products.name,
-            description: sql<string | null>`CASE
-                WHEN ${products.description} IS NULL THEN NULL
-                WHEN length(${products.description}) > 1000 THEN substr(${products.description}, 1, 1000)
-                ELSE ${products.description}
-            END`,
-            price: products.price,
-            compareAtPrice: products.compareAtPrice,
-            image: products.image,
-            category: products.category,
-            isHot: products.isHot,
-            isShared: products.isShared,
-            fulfillmentMode: products.fulfillmentMode,
-            purchaseLimit: products.purchaseLimit,
-            pointDiscountEnabled: products.pointDiscountEnabled,
-            pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
-            visibilityLevel: products.visibilityLevel,
-            sortOrder: products.sortOrder,
-            createdAt: products.createdAt,
-            variantGroupId: products.variantGroupId,
-            variantLabel: products.variantLabel,
-            stock: sql<number>`COALESCE(${products.stockCount}, 0)`,
-            locked: sql<number>`COALESCE(${products.lockedCount}, 0)`,
-            sold: sql<number>`COALESCE(${products.soldCount}, 0)`,
-            rating: sql<number>`COALESCE(${products.rating}, 0)`,
-            reviewCount: sql<number>`COALESCE(${products.reviewCount}, 0)`
-        })
-            .from(products)
-            .where(and(eq(products.isActive, true), visibilityCondition(options?.isLoggedIn, options?.trustLevel)))
-            .orderBy(asc(products.sortOrder), desc(products.createdAt));
-    });
-
-    return groupProductsAsVariants(rows);
-}
+// 首页已改用 searchActiveProducts（服务端筛选/排序/分页），原先「无 LIMIT 取全表
+// 再交给浏览器筛选」的 getActiveProducts 已无调用方，故移除。
+// 参考 outputs/ldc-shop-code-review-2026-09-24.md §2.1。
 
 function groupProductsAsVariants<T extends {
     id: string;
@@ -1983,19 +2127,53 @@ export async function getAdminOverview(lowStockThreshold = 5) {
         return await withOrderColumnFallback(async () => {
             const monthStartMs = new Date(new Date(nowMs).getFullYear(), new Date(nowMs).getMonth(), 1).getTime()
 
-            const [financeRows, refundRows, messageRows, visitorRows, trendRows, topProductRows, recentOrderRows, productRows, pointRows] = await Promise.all([
+            // 时间戳兼容阈值：值 < 1e12 说明该行仍是「秒」精度（历史数据），比较前需 ×1000。
+            // 写成 `paid_at >= ? OR (paid_at < 1e12 AND paid_at * 1000 >= ?)`，而不是把整列包进
+            // 兼容函数 —— 这样第一支能命中 orders_status_paid_at_idx，只有极少数历史行走第二支。
+            const LEGACY_SECONDS_CEILING = 1_000_000_000_000
+
+            const [
+                monthlyRows,
+                totalRevenueRows,
+                opsRows,
+                refundWindowRows,
+                refundRows,
+                messageRows,
+                visitorRows,
+                trendRows,
+                topProductRows,
+                recentOrderRows,
+                productRows,
+                pointRows,
+            ] = await Promise.all([
+                // 财务窗口（今日 / 昨日 / 本月）：只扫「本月已付款」的订单。
+                // 此前这是**无 WHERE 的全表聚合**，且 10 个聚合条件都包着兼容函数，
+                // 于是每次打开后台都要把 orders 全表扫一遍、索引完全用不上。
                 db.select({
-                    todayRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') AND ${normalizeTimestampMs(orders.paidAt)} >= ${todayStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
-                    yesterdayRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') AND ${normalizeTimestampMs(orders.paidAt)} >= ${yesterdayStartMs} AND ${normalizeTimestampMs(orders.paidAt)} < ${todayStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
-                    todayOrders: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') AND ${normalizeTimestampMs(orders.paidAt)} >= ${todayStartMs} THEN 1 ELSE 0 END), 0)`,
-                    yesterdayOrders: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') AND ${normalizeTimestampMs(orders.paidAt)} >= ${yesterdayStartMs} AND ${normalizeTimestampMs(orders.paidAt)} < ${todayStartMs} THEN 1 ELSE 0 END), 0)`,
-                    monthRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') AND ${normalizeTimestampMs(orders.paidAt)} >= ${monthStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
-                    totalRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} IN ('paid', 'delivered') THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
-                    todayRefunds: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} = 'refunded' AND COALESCE(${normalizeTimestampMs(orders.deliveredAt)}, ${normalizeTimestampMs(orders.paidAt)}, ${normalizeTimestampMs(orders.createdAt)}) >= ${todayStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
-                    monthRefunds: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} = 'refunded' AND COALESCE(${normalizeTimestampMs(orders.deliveredAt)}, ${normalizeTimestampMs(orders.paidAt)}, ${normalizeTimestampMs(orders.createdAt)}) >= ${monthStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    todayRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${normalizeTimestampMs(orders.paidAt)} >= ${todayStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    yesterdayRevenue: sql<number>`COALESCE(SUM(CASE WHEN ${normalizeTimestampMs(orders.paidAt)} >= ${yesterdayStartMs} AND ${normalizeTimestampMs(orders.paidAt)} < ${todayStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    todayOrders: sql<number>`COALESCE(SUM(CASE WHEN ${normalizeTimestampMs(orders.paidAt)} >= ${todayStartMs} THEN 1 ELSE 0 END), 0)`,
+                    yesterdayOrders: sql<number>`COALESCE(SUM(CASE WHEN ${normalizeTimestampMs(orders.paidAt)} >= ${yesterdayStartMs} AND ${normalizeTimestampMs(orders.paidAt)} < ${todayStartMs} THEN 1 ELSE 0 END), 0)`,
+                    monthRevenue: sql<number>`COALESCE(SUM(CAST(${orders.amount} AS REAL)), 0)`,
+                }).from(orders).where(and(
+                    sql`${orders.status} IN ('paid', 'delivered')`,
+                    sql`(${orders.paidAt} >= ${monthStartMs} OR (${orders.paidAt} < ${LEGACY_SECONDS_CEILING} AND ${orders.paidAt} * 1000 >= ${monthStartMs}))`,
+                )),
+                // 历史累计营收：无法避免一次全表聚合，但只取一个 SUM，
+                // 不再在同一趟扫描里顺带求 9 个窗口条件。
+                db.select({
+                    totalRevenue: sql<number>`COALESCE(SUM(CAST(${orders.amount} AS REAL)), 0)`,
+                }).from(orders).where(sql`${orders.status} IN ('paid', 'delivered')`),
+                // 待处理运单：只扫 pending / paid 两类状态。
+                db.select({
                     pendingOrders: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} = 'pending' THEN 1 ELSE 0 END), 0)`,
                     awaitingDelivery: sql<number>`COALESCE(SUM(CASE WHEN ${orders.status} = 'paid' AND COALESCE(${orders.fulfillmentMode}, 'auto') = 'manual' THEN 1 ELSE 0 END), 0)`,
-                }).from(orders),
+                }).from(orders).where(sql`${orders.status} IN ('pending', 'paid')`),
+                // 退款窗口：只扫已退款行（占比极小），因此这里保留三段式 COALESCE 时间戳。
+                db.select({
+                    todayRefunds: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${normalizeTimestampMs(orders.deliveredAt)}, ${normalizeTimestampMs(orders.paidAt)}, ${normalizeTimestampMs(orders.createdAt)}) >= ${todayStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                    monthRefunds: sql<number>`COALESCE(SUM(CASE WHEN COALESCE(${normalizeTimestampMs(orders.deliveredAt)}, ${normalizeTimestampMs(orders.paidAt)}, ${normalizeTimestampMs(orders.createdAt)}) >= ${monthStartMs} THEN CAST(${orders.amount} AS REAL) ELSE 0 END), 0)`,
+                }).from(orders).where(sql`${orders.status} = 'refunded'`),
                 db.select({
                     pendingRefunds: sql<number>`COALESCE(SUM(CASE WHEN ${refundRequests.status} = 'pending' THEN 1 ELSE 0 END), 0)`,
                 }).from(refundRequests).catch(() => [{ pendingRefunds: 0 }]),
@@ -2054,7 +2232,16 @@ export async function getAdminOverview(lowStockThreshold = 5) {
                 })(),
             ])
 
-            const finance = financeRows[0] || {}
+            // 窗口聚合与累计值来自不同查询，这里合并回原来的 finance 形状，
+            // 让下游 toSafeNumber(finance.xxx) 的取值方式保持不变。
+            const finance = {
+                ...(monthlyRows[0] || {}),
+                totalRevenue: (totalRevenueRows[0] as { totalRevenue?: number } | undefined)?.totalRevenue,
+                todayRefunds: (refundWindowRows[0] as { todayRefunds?: number } | undefined)?.todayRefunds,
+                monthRefunds: (refundWindowRows[0] as { monthRefunds?: number } | undefined)?.monthRefunds,
+                pendingOrders: (opsRows[0] as { pendingOrders?: number } | undefined)?.pendingOrders,
+                awaitingDelivery: (opsRows[0] as { awaitingDelivery?: number } | undefined)?.awaitingDelivery,
+            }
             const refundCount = toSafeNumber((refundRows as any)?.[0]?.pendingRefunds)
             const unreadMessages = toSafeNumber((messageRows as any)?.[0]?.unreadMessages)
             const visitorCount = toSafeNumber((visitorRows as any)?.[0]?.count)
@@ -2345,12 +2532,14 @@ export async function searchActiveProducts(params: {
     sort?: string
     page?: number
     pageSize?: number
+    fulfillment?: string
     isLoggedIn?: boolean
     trustLevel?: number | null
 }) {
     const q = (params.q || '').trim()
     const category = (params.category || '').trim()
     const sort = (params.sort || 'default').trim()
+    const fulfillment = (params.fulfillment || 'all').trim()
     const page = params.page && params.page > 0 ? params.page : 1
     const pageSize = Math.min(params.pageSize && params.pageSize > 0 ? params.pageSize : 24, 60)
     const offset = (page - 1) * pageSize
@@ -2389,11 +2578,17 @@ export async function searchActiveProducts(params: {
             break
     }
 
-    const [rows] = await withProductColumnFallback(async () => {
-        const rowsPromise = db.select({
+    const rows = await withProductColumnFallback(async () => {
+        return await db.select({
             id: products.id,
             name: products.name,
-            description: products.description,
+            // 列表页最多展示两行摘要，整篇 Markdown 只在详情页需要。
+            // 这里截断到 1000 字符，避免把长描述原样搬进 RSC payload。
+            description: sql<string | null>`CASE
+                WHEN ${products.description} IS NULL THEN NULL
+                WHEN length(${products.description}) > 1000 THEN substr(${products.description}, 1, 1000)
+                ELSE ${products.description}
+            END`,
             price: products.price,
             compareAtPrice: products.compareAtPrice,
             image: products.image,
@@ -2417,13 +2612,25 @@ export async function searchActiveProducts(params: {
             .from(products)
             .where(whereExpr)
             .orderBy(...orderByParts)
-
-        return [await rowsPromise] as const
     })
 
+    // 变体归组只能在 SQL 之外完成：同一变体组的行不保证相邻，且库存/价格/销量
+    // 都要按组聚合，因此「总数」与「分页」只能发生在归组之后。这是当前 schema
+    // 的固有限制（详见 outputs/ldc-shop-code-review-2026-09-24.md §2.1 路线 B）。
     const grouped = groupProductsAsVariants(rows)
-    const total = grouped.length
-    const items = grouped.slice(offset, offset + pageSize)
+    const withStock = grouped.map((item) => ({ ...item, stockCount: resolveProductStockCount(item) }))
+
+    const filtered = fulfillment && fulfillment !== 'all'
+        ? withStock.filter((item) => {
+            if (fulfillment === 'auto') return !isManualFulfillment(item)
+            if (fulfillment === 'manual') return isManualFulfillment(item)
+            if (fulfillment === 'inStock') return item.stockCount > 0
+            return true
+        })
+        : withStock
+
+    const total = filtered.length
+    const items = filtered.slice(offset, offset + pageSize)
 
     return {
         items,
@@ -2576,6 +2783,29 @@ export async function createReview(data: {
     await recalcProductAggregates(data.productId);
 
     return res;
+}
+
+/**
+ * reviewExistsForOrder 判断某订单是否已有评价。
+ *
+ * 这是「一单一评」的**廉价预检**：命中时直接返回业务错误，避免走进异常分支。
+ * 真正的唯一性保证由 `reviews_order_id_uq` 唯一索引承担 ——
+ * 预检与插入之间存在竞态，并发下仍可能两处都通过预检，
+ * 此时后到的那次插入会被数据库拒绝（见 submitReview 的冲突处理）。
+ */
+export async function reviewExistsForOrder(orderId: string): Promise<boolean> {
+    const normalized = String(orderId || '').trim()
+    if (!normalized) return false
+    try {
+        const rows = await db.select({ id: reviews.id })
+            .from(reviews)
+            .where(eq(reviews.orderId, normalized))
+            .limit(1)
+        return rows.length > 0
+    } catch (error: unknown) {
+        if (isSchemaDriftError(error)) return false
+        throw error
+    }
 }
 
 export async function createReviewReply(data: {
@@ -3403,15 +3633,6 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
                 });
             }
             try {
-                // Mirror manual cancel behavior to guarantee release
-                await db.update(cards)
-                    .set({ reservedOrderId: null, reservedAt: null })
-                    .where(eq(cards.reservedOrderId, expiredOrderId));
-            } catch (error: any) {
-                if (!isMissingTableOrColumn(error)) throw error;
-            }
-
-            try {
                 // 超时取消同时释放优惠券预占，避免次数被永久占用
                 const { releaseCouponUsages } = await import("@/lib/coupons/reservation");
                 releasedCouponUsageCount += await releaseCouponUsages(expiredOrderId, 'timeout_cancel');
@@ -3424,10 +3645,29 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
             console.info('[Coupon] Released reservations on timeout cancel:', releasedCouponUsageCount);
         }
 
-        const productIds = Array.from(new Set(actuallyCancelled.map((row) => row.productId).filter(Boolean)));
-        for (const pid of productIds) {
+        // 卡密释放改为**循环外一次性批量**：
+        // 此前每取消一单就发一条 UPDATE，超时清理扫到 N 单就是 N 次 D1 写往返。
+        // 现在按 reserved_order_id IN (...) 合并为一条，写入次数从 O(N) 降到 O(1)。
+        const cancelledOrderIds = actuallyCancelled
+            .map((row) => row.orderId)
+            .filter((value): value is string => Boolean(value));
+        if (cancelledOrderIds.length > 0) {
             try {
-                await recalcProductAggregates(pid);
+                // Mirror manual cancel behavior to guarantee release
+                await db.update(cards)
+                    .set({ reservedOrderId: null, reservedAt: null })
+                    .where(inArray(cards.reservedOrderId, cancelledOrderIds));
+            } catch (error: any) {
+                if (!isMissingTableOrColumn(error)) throw error;
+            }
+        }
+
+        // 商品聚合一次性重算：recalcProductAggregatesForMany 内部按批处理，
+        // 不再「每个受影响商品各跑一遍全量聚合」。
+        const productIds = Array.from(new Set(actuallyCancelled.map((row) => row.productId).filter(Boolean)));
+        if (productIds.length > 0) {
+            try {
+                await recalcProductAggregatesForMany(productIds);
             } catch {
                 // best effort
             }

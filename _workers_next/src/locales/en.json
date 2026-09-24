@@ -23,6 +23,14 @@
         "categories": "Categories",
         "all": "All",
         "searchPlaceholder": "Search products...",
+        "clearSearch": "Clear search",
+        "tooManyRequests": "Too many requests. Please try again in a moment.",
+        "remove": "Remove",
+        "increaseQuantity": "Increase quantity",
+        "decreaseQuantity": "Decrease quantity",
+        "accountMenu": "Account menu",
+        "starLabel": "Rate {{count}} star",
+        "ratingLabel": "Rating",
         "logout": "Log out",
         "admin": "Admin",
         "adminTitle": "Admin Panel",
@@ -33,6 +41,8 @@
         "loggedInAs": "Logged in as",
         "dashboard": "Dashboard",
         "myOrders": "My Orders",
+        "home": "Home",
+        "profile": "Profile",
         "loading": "Loading...",
         "error": "Error",
         "success": "Success",
@@ -90,7 +100,10 @@
         "errorTitle": "This page couldn't load",
         "errorDescription": "Something went wrong. You can retry or go back.",
         "errorIdLabel": "Error ID",
-        "goHome": "Go home"
+        "goHome": "Go home",
+        "notFoundTitle": "Page not found",
+        "notFoundDescription": "The page you are looking for doesn't exist or has been moved.",
+        "browseProducts": "Browse products"
     },
     "home": {
         "title": "Welcome to LDC Shop",
@@ -127,7 +140,23 @@
             "priceDesc": "Price ↓"
         },
         "priceFrom": "From {{price}}",
-        "variantCount": "{{count}} variants"
+        "priceFromSuffix": " and up",
+        "variantCount": "{{count}} variants",
+        "itemCount": "{{count}} items",
+        "stockShort": "Stock {{count}}",
+        "stockPlenty": "Plenty",
+        "soldShort": "Sold {{count}}",
+        "resetFilters": "Reset filters",
+        "filter": {
+            "all": "All",
+            "instant": "Instant",
+            "manual": "Manual",
+            "inStock": "In stock only"
+        },
+        "badge": {
+            "instantDelivery": "Instant",
+            "manualDelivery": "Manual delivery"
+        }
     },
     "buy": {
         "title": "Product Details",
@@ -135,6 +164,18 @@
         "noDescription": "No description available.",
         "hot": "Hot",
         "loginToBuy": "Please sign in to purchase this product.",
+        "assurance": {
+            "manualTitle": "Manual fulfillment · Attachments verified",
+            "manualDesc": "Our team fulfills your order personally after payment. The order page supports attachment download and progress tracking, with round-the-clock after-sales support.",
+            "manualPointDelivery": "Hand-delivered",
+            "manualPointWarranty": "Platform warranty",
+            "manualPointArchive": "Kept on record",
+            "autoTitle": "Instant auto-delivery · Revealed on payment",
+            "autoDesc": "The system extracts your card key automatically around the clock and shows it on the order page as soon as payment completes, with a copy saved to your account and email.",
+            "autoPointRealtime": "24/7 automated",
+            "autoPointSafe": "Secure payment",
+            "autoPointInstant": "Use instantly"
+        },
         "outOfStockMessage": "This product is currently out of stock.",
         "productNotFound": "Product not found",
         "outOfStock": "Product is out of stock",
@@ -168,7 +209,10 @@
             "proceedPayment": "Proceed to Payment",
             "emailLabelConfigured": "Email or Note (Optional)",
             "emailLabelUnconfigured": "Note (Optional)",
-            "emailPlaceholder": "Enter email or note"
+            "emailPlaceholder": "Enter email or note",
+            "secureCheckout": "Secure checkout",
+            "emailUsage": "Used to receive card keys and delivery notices",
+            "pointsDeduction": "Points discount ({{points}} points)"
         },
         "warningTitle": "Important Notice",
         "confirmWarning": "I understand, continue",
@@ -220,6 +264,26 @@
     },
     "order": {
         "title": "Order Details",
+        "progress": {
+            "title": "Fulfillment progress",
+            "statusDelivered": "All steps completed",
+            "statusPaidManual": "Awaiting manual delivery",
+            "statusPaidAuto": "Auto-delivering now",
+            "statusPending": "Waiting for your payment",
+            "stepSubmit": "Order placed",
+            "stepVerify": "Payment check",
+            "stepManual": "Manual delivery",
+            "stepAuto": "Auto delivery",
+            "stepInspect": "Delivery check",
+            "descGenerated": "Created",
+            "descPendingPayment": "Unpaid",
+            "descPaid": "Paid",
+            "descCompleted": "Done",
+            "descInProgress": "In progress",
+            "descQueued": "Queued",
+            "descDelivered": "Delivered",
+            "descAwaitingInspect": "Pending check"
+        },
         "product": "Product",
         "amountPaid": "Amount Paid",
         "createdAt": "Created At",
@@ -267,6 +331,8 @@
         "amountPlaceholder": "Enter amount",
         "payButton": "Proceed to Pay",
         "invalidAmount": "Please enter a valid amount.",
+        "amountTooLarge": "The amount exceeds the allowed maximum.",
+        "notConfigured": "Payment is not configured. Please contact the shop owner.",
         "notice": "You will be redirected to the payment provider to complete the payment.",
         "adminMenu": "Payment QR",
         "adminTitle": "Payment QR Code",

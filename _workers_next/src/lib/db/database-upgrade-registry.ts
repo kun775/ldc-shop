@@ -44,6 +44,18 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
         description: '重建积分流水表并移除指向用户的级联删除外键，避免合并或删除历史账号时清掉积分流水。',
         verifiesStructure: true,
     },
+    {
+        id: '0035_review_order_id_unique',
+        name: '订单评价唯一约束',
+        description: '为 reviews.order_id 建立唯一索引（先归并历史重复评价），把「一单一评」从应用层判重升级为数据库约束，消除并发重复提交。',
+        verifiesStructure: true,
+    },
+    {
+        id: '0036_rate_limit_counters',
+        name: '写入口限流计数表',
+        description: '新增 rate_limit_counters 表与过期索引，为下单、收款、评价等写入口提供跨 isolate 的原子计数限流基础。',
+        verifiesStructure: true,
+    },
 ] as const
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']

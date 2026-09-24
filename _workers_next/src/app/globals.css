@@ -212,6 +212,20 @@
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
+  /* 移动端底部导航（h-16）的内容占位。
+     导航自身带 .safe-area-pb，在 iPhone home indicator 机型上实际高度是
+     4rem + env(safe-area-inset-bottom)，固定 4rem 的占位会让最后一行内容被盖住。 */
+  .safe-area-pb-nav {
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  @media (min-width: 768px) {
+    /* 桌面端不显示底部导航，无需占位 */
+    .safe-area-pb-nav {
+      padding-bottom: 0;
+    }
+  }
+
   /* Glassmorphism Effect */
   .glass {
     background: oklch(1 0 0 / 0.05);

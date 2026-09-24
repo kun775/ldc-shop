@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useEffect, useState } from "react"
 import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Sheet, SheetContent, SheetTrigger, SheetClose } from "@/components/ui/sheet"
+import { Sheet, SheetContent, SheetTrigger, SheetClose, SheetTitle } from "@/components/ui/sheet"
 import { Package, CreditCard, Megaphone, Star, Download, Tags, RotateCcw, Users, Settings, QrCode, Bell, Menu, MessageSquare, LayoutDashboard, TicketPercent, Database, ShieldCheck } from "lucide-react"
 import { useI18n } from "@/lib/i18n/context"
 import { getPendingRefundRequestCount } from "@/actions/refund-requests"
@@ -199,6 +199,9 @@ export function AdminSidebar({ username }: { username: string }) {
                             </Button>
                         </SheetTrigger>
                         <SheetContent side="left" className="w-4/5 max-w-sm">
+                            {/* Radix 要求 Sheet 必须有一个可读标题，否则屏幕阅读器读不出抽屉是什么。
+                                视觉上抽屉里已有侧栏分组标题，这里补一个 sr-only 标题即可。 */}
+                            <SheetTitle className="sr-only">{t('common.adminTitle')}</SheetTitle>
                             <div className="flex flex-1 flex-col gap-4 px-4 pb-4 pt-6">
                                 <SidebarContent closeOnNavigate showTitle={false} username={username} t={t} />
                             </div>

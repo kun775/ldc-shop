@@ -37,16 +37,19 @@ const providers: any[] = [
                 if (contentType.includes("application/json")) return response
 
                 const body = await response.clone().text()
-                const bodyPreview = body.slice(0, 1000)
+                // 仅用于判断响应体是不是 JSON 形状；不要把这个值写进日志 —— token 接口的
+                // 响应体可能包含 access_token / refresh_token，落日志等于明文泄露凭证。
+                const looksLikeJson = body.trimStart().startsWith("{")
 
-                console.error("[auth-temp][linuxdo-token]", {
+                console.error("[auth][linuxdo-token] non-json response", {
                     status: response.status,
                     contentType,
-                    bodyPreview,
+                    bodyLength: body.length,
+                    looksLikeJson,
                 })
 
                 // Some providers return JSON with an unexpected content-type.
-                if (bodyPreview.trim().startsWith("{")) {
+                if (looksLikeJson) {
                     return new Response(body, {
                         status: response.status,
                         statusText: response.statusText,
@@ -494,16 +497,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         // redirect_uri 未登记），Auth.js 默认错误页不会给出可操作的提示。
         error: "/login",
     },
-    // Temporary diagnostics: keep this until OAuth callback issue is resolved.
     logger: {
         error(error) {
-            console.error("[auth-temp]", {
-                name: error.name,
-                message: error.message,
-                // Auth.js puts provider details under error.cause when available.
-                cause: (error as Error & { cause?: unknown }).cause,
-                stack: error.stack,
-            })
+            // 早期排查 OAuth 回调问题时这里还额外打了一份 `[auth-temp]` 原始日志，
+            // 会把 provider 返回的 error.message / cause 直接落到 Worker 日志里。
+            // 现在统一走 recordServerError：同样可检索（auth.login + errorId），
+            // 但经过脱敏并按审计事件归档，不再重复输出。
             void recordServerError('auth.login', error, {
                 actorType: 'system',
                 auditEvent: {

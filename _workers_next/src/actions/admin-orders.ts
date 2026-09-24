@@ -516,7 +516,9 @@ export async function verifyOrderRefundStatus(orderId: string) {
         return { success: true, status: result.status, msg: `Status: ${result.status}` }
       }
     } else {
-      return { success: false, error: result.error }
+      // 该返回值直接进管理端界面：上游 `data.msg` 属于业务语义可以透传，
+      // 但网络/驱动层异常原文必须脱敏。
+      return { success: false, error: sanitizeClientErrorMessage(result.error, 'common.error') }
     }
 
   } catch (e: any) {

@@ -1,10 +1,23 @@
-import { getActiveProductCategories, getCategories, getActiveProducts, getVisitorCount, getUserPendingOrders, getSetting } from "@/lib/db/queries";
+import { getActiveProductCategories, getCategories, searchActiveProducts, getUserPendingOrders } from "@/lib/db/queries";
 import { getActiveAnnouncement } from "@/actions/settings";
 import { auth } from "@/lib/auth";
-import { HomeContent } from "@/components/home-content";
-import { INFINITE_STOCK } from "@/lib/constants";
+import { HomeContent, type HomeFilters } from "@/components/home-content";
 
 const PAGE_SIZE = 24;
+const MAX_PAGE_SIZE = 60;
+
+const ALLOWED_SORTS = new Set(['default', 'stockDesc', 'soldDesc', 'priceAsc', 'priceDesc', 'hot']);
+const ALLOWED_FULFILLMENT = new Set(['all', 'auto', 'manual', 'inStock']);
+
+function firstParam(value: string | string[] | undefined): string {
+  if (!value) return '';
+  return (Array.isArray(value) ? value[0] : value).trim();
+}
+
+function parseIntParam(value: string, fallback: number) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function stripMarkdown(input: string): string {
   return input
@@ -15,79 +28,65 @@ function stripMarkdown(input: string): string {
     .trim();
 }
 
-function resolveProductStockCount(product: any): number {
-  const isGroup = product.allVariantIds && product.allVariantIds.length > 1;
-  if (isGroup) {
-    const totalStock = Number(product.totalStock || 0);
-    const totalLocked = Number(product.totalLocked || 0);
-    if ((product.groupShared && totalStock > 0) || totalStock >= INFINITE_STOCK) {
-      return INFINITE_STOCK;
-    }
-    return totalStock + totalLocked;
-  }
-
-  const stock = Number(product.stock || 0);
-  const locked = Number(product.locked || 0);
-  if (product.fulfillmentMode === 'manual') return stock;
-  if (product.isShared) return stock > 0 ? INFINITE_STOCK : 0;
-  return stock >= INFINITE_STOCK ? INFINITE_STOCK : stock + locked;
-}
-
 export default async function Home({
   searchParams,
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const resolved = searchParams ? await searchParams : {}
-  const q = (typeof resolved.q === 'string' ? resolved.q : '').trim();
-  const categoryParam = (typeof resolved.category === 'string' ? resolved.category : '').trim();
-  const category = categoryParam && categoryParam !== 'all' ? categoryParam : '';
-  const sort = (typeof resolved.sort === 'string' ? resolved.sort : 'default').trim();
-  const page = Math.max(1, Number.parseInt(typeof resolved.page === 'string' ? resolved.page : '1', 10) || 1);
+  const resolved = searchParams ? await searchParams : {};
+
+  // 筛选/排序/分页全部在服务端解析并下推到 SQL —— 客户端只接收当前这一页。
+  // 未知取值一律回退到默认值，避免把任意字符串透传进查询构造。
+  const q = firstParam(resolved.q).slice(0, 100);
+  const categoryParam = firstParam(resolved.category);
+  const category = categoryParam && categoryParam !== 'all' ? categoryParam.slice(0, 100) : '';
+  const sortParam = firstParam(resolved.sort) || 'default';
+  const sort = ALLOWED_SORTS.has(sortParam) ? sortParam : 'default';
+  const fulfillmentParam = firstParam(resolved.fulfillment) || 'all';
+  const fulfillment = ALLOWED_FULFILLMENT.has(fulfillmentParam) ? fulfillmentParam : 'all';
+  const page = parseIntParam(firstParam(resolved.page), 1);
+  const pageSize = Math.min(parseIntParam(firstParam(resolved.pageSize), PAGE_SIZE), MAX_PAGE_SIZE);
 
   const session = await auth()
   const isLoggedIn = !!session?.user
   const trustLevel = Number.isFinite(Number(session?.user?.trustLevel)) ? Number(session?.user?.trustLevel) : 0
 
   // Run all independent queries in parallel for better performance
-  const [products, announcement, visitorCount, categoryConfig, productCategories, wishlistEnabled, checkinEnabled] = await Promise.all([
-    getActiveProducts({ isLoggedIn, trustLevel }).catch(() => []),
+  // 注意：首页此前还顺手取了访客数与两个开关，但它们从未被 HomeContent 使用
+  // （访客数由 site-footer 自己取），属于每个 PV 白搭的 D1 往返，已移除。
+  const [productResult, announcement, categoryConfig, productCategories] = await Promise.all([
+    searchActiveProducts({ q, category, sort, fulfillment, page, pageSize, isLoggedIn, trustLevel })
+      .catch(() => ({ items: [] as any[], total: 0, page, pageSize })),
     getActiveAnnouncement().catch(() => null),
-    getVisitorCount().catch(() => 0),
     getCategories().catch(() => []),
     getActiveProductCategories({ isLoggedIn, trustLevel }).catch(() => []),
-    (async () => {
-      try {
-        return (await getSetting('wishlist_enabled')) === 'true'
-      } catch {
-        return false
-      }
-    })(),
-    (async () => {
-      try {
-        return (await getSetting('checkin_enabled')) !== 'false'
-      } catch {
-        return true
-      }
-    })()
   ]);
 
-
-  const total = products.length;
-
-  const productsWithRatings = products.map((p: any) => {
-    const isGroup = p.allVariantIds && p.allVariantIds.length > 1;
+  const products = productResult.items.map((p: any) => {
+    const isGroup = p.variantCount != null && p.variantCount > 1;
 
     return {
-      ...p,
+      id: p.id,
+      name: p.name,
+      // 商品描述只下发纯文本摘要：列表最多渲染两行，Markdown 原文留在服务端。
+      descriptionPlain: stripMarkdown(p.description || ''),
+      price: p.price,
+      compareAtPrice: p.compareAtPrice ?? null,
       pointDiscountEnabled: Boolean(p.pointDiscountEnabled),
       pointDiscountPercent: Number(p.pointDiscountPercent || 0),
-      stockCount: resolveProductStockCount(p),
-      soldCount: isGroup ? (p.totalSold || 0) : (p.sold || 0),
-      isHot: isGroup ? (p.groupHot || false) : p.isHot,
-      descriptionPlain: stripMarkdown(p.description || ''),
+      image: p.image,
+      category: p.category,
+      // stockCount 由查询层按统一口径（卡密 / 手动库存 / 共享卡 / 变体聚合）算好
+      stockCount: Number(p.stockCount || 0),
+      soldCount: isGroup ? Number(p.totalSold || 0) : Number(p.sold || 0),
+      isHot: isGroup ? Boolean(p.groupHot) : Boolean(p.isHot),
       rating: isGroup ? Number(p.avgRating || 0) : Number(p.rating || 0),
-      reviewCount: isGroup ? Number(p.totalReviewCount || 0) : Number(p.reviewCount || 0)
+      reviewCount: isGroup ? Number(p.totalReviewCount || 0) : Number(p.reviewCount || 0),
+      variantCount: p.variantCount ?? undefined,
+      priceMin: p.priceMin ?? undefined,
+      priceMax: p.priceMax ?? undefined,
+      fulfillmentMode: p.fulfillmentMode ?? null,
+      groupManual: Boolean(p.groupManual),
     };
   });
 
@@ -107,17 +106,17 @@ export default async function Home({
   const extraCategories = productCategories.filter((c) => !categoryNames.includes(c)).sort();
   const categories = [...categoryNames, ...extraCategories];
 
+  const filters: HomeFilters = { q, category, sort, fulfillment };
+
   return <HomeContent
-    products={productsWithRatings}
+    products={products}
+    total={productResult.total}
+    page={productResult.page}
+    pageSize={productResult.pageSize}
+    filters={filters}
     announcement={announcement}
-    visitorCount={visitorCount}
     categories={categories}
     categoryConfig={categoryConfig}
     pendingOrders={pendingOrders}
-    wishlistEnabled={wishlistEnabled}
-    isLoggedIn={isLoggedIn}
-    checkinEnabled={checkinEnabled}
-    filters={{ q, category: category || null, sort }}
-    pagination={{ page, pageSize: PAGE_SIZE, total }}
   />;
 }

@@ -26,6 +26,7 @@ import {
 } from "@/lib/product-images"
 import { logServerError, sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 import { normalizeProductCouponUsageRestriction, PRODUCT_COUPON_USAGE_RESTRICTIONS } from "@/lib/coupons/product-policy"
+import { sanitizeFooterHtml } from "@/lib/footer-html"
 
 export async function checkAdmin() {
     const session = await auth()
@@ -780,11 +781,11 @@ export async function saveShopFooter(footer: string) {
         throw new Error("Footer text is too long")
     }
 
-    await setSetting('shop_footer', text)
+    // 写入侧净化：页脚会渲染在全站每个页面，只保留纯文本与 http(s) 链接。
+    // 渲染侧（components/footer-content.tsx）复用同一套规则，双端防御。
+    await setSetting('shop_footer', sanitizeFooterHtml(text))
     revalidatePath('/admin/settings')
     revalidatePath('/')
-    updateTag('home:products')
-    updateTag('home:product-categories')
 }
 
 export async function saveCurrencyUnit(rawCurrencyUnit: string) {

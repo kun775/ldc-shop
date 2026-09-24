@@ -11,7 +11,7 @@ import { revalidatePath, updateTag } from "next/cache"
 import { after } from "next/server"
 import { notifyAdminPaymentSuccess } from "@/lib/notifications"
 import { sendOrderEmail } from "@/lib/email"
-import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
+import { INFINITE_STOCK, RESERVATION_TTL_MS, SHARED_CARD_CANDIDATE_WINDOW } from "@/lib/constants"
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { getProductCardDeliveryNote } from "@/lib/card-delivery-note"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
@@ -28,6 +28,7 @@ import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
 import { createOrderAccessToken, ORDER_ACCESS_COOKIE, ORDER_ACCESS_TTL_SECONDS } from "@/lib/order-access"
 import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
 import { processOrderFulfillment } from "@/lib/order-processing"
+import { enforceRateLimit } from "@/lib/rate-limit"
 
 const MAX_ORDER_QUANTITY = 10000
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -58,6 +59,14 @@ export async function createOrder(productId: string, quantity: number = 1, email
     await ensureDatabaseInitialized()
     const session = await auth()
     const user = session?.user
+
+    // 限流必须挡在商品校验与卡密预留之前：
+    // 刷单请求的真实代价是「预留卡密 + 写 pending 订单」，越早拦截越省资源。
+    const rateLimit = await enforceRateLimit('order:create', user?.id)
+    if (!rateLimit.allowed) {
+        return { success: false, error: 'common.tooManyRequests' }
+    }
+
     const normalizedQuantity = Number(quantity)
 
     if (!Number.isFinite(normalizedQuantity) || !Number.isInteger(normalizedQuantity) || normalizedQuantity <= 0) {
@@ -315,20 +324,25 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
             // Let's grab ONE key for reference (randomly) just in case
             const nowMs = Date.now()
-            const availableCard = await db.select({ id: cards.id, cardKey: cards.cardKey })
-                .from(cards)
-                .where(and(
-                    eq(cards.productId, productId),
-                    or(isNull(cards.isUsed), eq(cards.isUsed, false)),
-                    or(isNull(cards.expiresAt), gt(cards.expiresAt, new Date(nowMs)))
-                ))
-                .orderBy(sql`RANDOM()`)
-                .limit(1);
+            // 先按 id 取有界候选窗口，再在窗口内随机：避免 ORDER BY RANDOM()
+            // 对该商品全部可用卡做全量排序（详见 SHARED_CARD_CANDIDATE_WINDOW 注释）。
+            const availableCard = await db.all(sql`
+                SELECT id, card_key FROM (
+                    SELECT id, card_key FROM cards
+                    WHERE product_id = ${productId}
+                      AND (is_used = 0 OR is_used IS NULL)
+                      AND (expires_at IS NULL OR expires_at > ${nowMs})
+                    ORDER BY id
+                    LIMIT ${SHARED_CARD_CANDIDATE_WINDOW}
+                ) ORDER BY RANDOM() LIMIT 1
+            `) as Array<{ id: unknown; card_key?: string | null }>;
 
             if (availableCard.length > 0) {
+                const referenceId = Number(availableCard[0].id);
+                const referenceKey = availableCard[0].card_key ?? '';
                 // We push the SAME key 'quantity' times
                 for (let i = 0; i < quantity; i++) {
-                    reservedCards.push({ id: availableCard[0].id, key: availableCard[0].cardKey });
+                    reservedCards.push({ id: referenceId, key: referenceKey });
                 }
             } else {
                 throw new Error('stock_locked') // Should be caught by stock check, but race condition possible
@@ -523,14 +537,15 @@ export async function createOrder(productId: string, quantity: number = 1, email
                             // For shared products, DO NOT mark as used.
                             // Just update order status (below)
                         } else {
-                            for (const cid of cardIds) {
-                                await db.update(cards).set({
-                                    isUsed: true,
-                                    usedAt: new Date(),
-                                    reservedOrderId: null,
-                                    reservedAt: null
-                                }).where(eq(cards.id, cid));
-                            }
+                            // 批量标记已用：此前是对每张卡各发一条 UPDATE，N 张卡 = N 次
+                            // D1 写往返（还要 N 次子请求），大额下单会直接撞上子请求上限。
+                            // 改成单条 WHERE id IN (...)，写入次数从 O(N) 降到 O(1)。
+                            await db.update(cards).set({
+                                isUsed: true,
+                                usedAt: new Date(),
+                                reservedOrderId: null,
+                                reservedAt: null
+                            }).where(inArray(cards.id, cardIds));
                         }
                     }
 

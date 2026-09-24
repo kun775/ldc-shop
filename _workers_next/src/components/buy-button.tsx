@@ -320,7 +320,7 @@ export function BuyButton({
                             </DialogTitle>
                             <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-semibold text-primary">
                                 <ShieldCheck className="h-3 w-3" />
-                                安全收银台
+                                {t('buy.modal.secureCheckout')}
                             </span>
                         </div>
                         <div className="flex items-center justify-between rounded-xl border border-border/60 bg-muted/30 p-3 text-sm">
@@ -341,7 +341,7 @@ export function BuyButton({
                         <div className="space-y-1.5">
                             <Label htmlFor="checkout-email" className="flex items-center justify-between text-xs font-medium text-foreground">
                                 <span>{emailConfigured ? t('buy.modal.emailLabelConfigured') : t('buy.modal.emailLabelUnconfigured')}</span>
-                                <span className="text-[11px] text-muted-foreground">用于接收卡密/交付通知</span>
+                                <span className="text-[11px] text-muted-foreground">{t('buy.modal.emailUsage')}</span>
                             </Label>
                             <div className="relative">
                                 <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -503,7 +503,7 @@ export function BuyButton({
                                 <div className="flex justify-between items-center text-xs">
                                     <span className="flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
                                         <Coins className="h-3 w-3" />
-                                        <span>积分抵扣 ({couponPreview ? couponPreview.pointsToUse : preview.pointsToUse} 积分)</span>
+                                        <span>{t('buy.modal.pointsDeduction', { points: couponPreview ? couponPreview.pointsToUse : preview.pointsToUse })}</span>
                                     </span>
                                     <span className="inline-flex items-center tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
                                         -<KCurrencySymbol className="h-3 w-3" />{pointsDiscountDisplay.toFixed(2)}

@@ -19,8 +19,9 @@ import { pageLoadingStore } from '@/lib/ui/page-loading-store'
  *      不会比现在多显示哪怕一帧；
  *   3. 兜底计时器保证任何漏判都在 MAX_NAVIGATION_MS 内释放，绝不留存遮罩。
  *
- * 生产环境注意：`framer-motion` 在模块加载时会调用 `history.pushState`，
- * 因此这里刻意不 patch history；链接点击是唯一可靠且零副作用的信号源。
+ * 刻意不 patch `history`：历史上曾有第三方动画库在模块加载阶段调用
+ * `history.pushState`（会产生无法与真实导航区分的假信号）。链接点击是
+ * 唯一可靠且零副作用的信号源，这条约束与具体依赖无关，继续保持。
  */
 const NAVIGATION_TASK_ID = 'route:navigation'
 /** RSC 导航超过该时长仍未上屏即放弃遮罩，避免误判造成永久遮罩 */

@@ -3,6 +3,7 @@ import { settings } from "./db/schema"
 import { inArray } from "drizzle-orm"
 import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 import { getOrderEmailSubject, renderOrderEmailHtml, type OrderEmailParams } from "@/lib/order-email-template"
+import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 
 async function getSettingsUncached(keys: string[]): Promise<Record<string, string>> {
     try {
@@ -246,7 +247,7 @@ export async function sendManualDeliveryEmail(params: ManualDeliveryEmailParams)
         return { success: true, id: result.id }
     } catch (e: any) {
         console.error('[Email] Send manual delivery email error:', e)
-        return { success: false, error: e.message }
+        return { success: false, error: sanitizeClientErrorMessage(e?.message, 'Email request failed') }
     }
 }
 
@@ -297,7 +298,7 @@ export async function sendOrderEmail(params: OrderEmailParams) {
         return { success: true, id: result.id }
     } catch (e: any) {
         console.error('[Email] Send Error:', e)
-        return { success: false, error: e.message }
+        return { success: false, error: sanitizeClientErrorMessage(e?.message, 'Email request failed') }
     }
 }
 
@@ -336,6 +337,6 @@ export async function testResendEmail(to: string) {
 
         return { success: true }
     } catch (e: any) {
-        return { success: false, error: e.message }
+        return { success: false, error: sanitizeClientErrorMessage(e?.message, 'Email request failed') }
     }
 }

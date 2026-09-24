@@ -81,6 +81,8 @@ export function ProductQuestionsSection({
                                     variant="ghost"
                                     size="icon"
                                     className="shrink-0 text-destructive hover:text-destructive"
+                                    aria-label={t('common.remove')}
+                                    title={t('common.remove')}
                                     onClick={() => setPurchaseQuestions(purchaseQuestions.filter((_, questionIndex) => questionIndex !== index))}
                                 >
                                     ×

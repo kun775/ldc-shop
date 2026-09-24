@@ -431,6 +431,8 @@ export function CardsContent({ productId, productName, unusedCards, apiConfig, d
                                         variant="ghost"
                                         size="icon"
                                         className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                        aria-label={t('common.delete')}
+                                        title={t('common.delete')}
                                         onClick={async () => {
                                             if (deleteLock.current === c.id) return
                                             const ok = await confirm({

@@ -60,6 +60,23 @@ export function isDuplicateColumnError(error: unknown): boolean {
 }
 
 /**
+ * isUniqueConstraintError 判断「唯一约束冲突」错误。
+ *
+ * 用于把「并发下同一订单被重复评价」这类**预期内的竞态失败**，
+ * 转换成与预检相同的业务结果（`review.alreadyReviewed`），
+ * 而不是当成未知异常抛出、给用户一个 500 体验。
+ *
+ * 注意：必须同时覆盖 D1 与 SQLite 的两种措辞：
+ *   - SQLite: `UNIQUE constraint failed: reviews.order_id`
+ *   - D1 包装后: `D1_ERROR: UNIQUE constraint failed: ...`
+ */
+export function isUniqueConstraintError(error: unknown): boolean {
+    const text = collectErrorText(error).toLowerCase()
+    if (text.includes('unique constraint')) return true
+    return text.includes('constraint failed') && text.includes('unique')
+}
+
+/**
  * isDuplicateSchemaObjectError 判断「对象已存在」类错误。
  *
  * 用于幂等 DDL（CREATE INDEX/TRIGGER IF NOT EXISTS 之外的兜底场景）：

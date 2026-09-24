@@ -785,8 +785,9 @@ export function BuyContent({
                                                     className="h-12 w-12 shrink-0 rounded-none text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
                                                     onClick={() => setQuantity(Math.max(1, quantity - 1))}
                                                     disabled={quantity <= 1}
+                                                    aria-label={t('common.decreaseQuantity')}
                                                 >
-                                                    <Minus className="h-4 w-4" />
+                                                    <Minus className="h-4 w-4" aria-hidden="true" />
                                                 </Button>
                                                 <Input
                                                     type="number"
@@ -815,8 +816,9 @@ export function BuyContent({
                                                     className="h-12 w-12 shrink-0 rounded-none text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-40"
                                                     onClick={() => quantity < maxSelectableQuantity && setQuantity(quantity + 1)}
                                                     disabled={quantity >= maxSelectableQuantity}
+                                                    aria-label={t('common.increaseQuantity')}
                                                 >
-                                                    <Plus className="h-4 w-4" />
+                                                    <Plus className="h-4 w-4" aria-hidden="true" />
                                                 </Button>
                                             </div>
                                             <div className="flex items-center justify-between rounded-xl bg-background/60 px-4 py-3 text-sm">
@@ -943,23 +945,23 @@ export function BuyContent({
                                     <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-2.5">
                                         <div className="flex items-center gap-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
                                             <PackageOpen className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
-                                            <span>人工专人履约 · 交付附件查验</span>
+                                            <span>{t('buy.assurance.manualTitle')}</span>
                                         </div>
                                         <p className="text-xs text-muted-foreground leading-relaxed">
-                                            付款后商家专人接单交付。订单详情页支持交付附件下载与进度追踪，售后全天候保障。
+                                            {t('buy.assurance.manualDesc')}
                                         </p>
                                         <div className="grid grid-cols-3 gap-1 pt-2 border-t border-blue-500/15 text-[11px] text-muted-foreground">
                                             <div className="flex items-center gap-1 font-medium">
                                                 <Check className="h-3 w-3 text-blue-600 dark:text-blue-400" />
-                                                <span>专人交付</span>
+                                                <span>{t('buy.assurance.manualPointDelivery')}</span>
                                             </div>
                                             <div className="flex items-center gap-1 font-medium">
                                                 <ShieldCheck className="h-3 w-3 text-blue-600 dark:text-blue-400" />
-                                                <span>平台质保</span>
+                                                <span>{t('buy.assurance.manualPointWarranty')}</span>
                                             </div>
                                             <div className="flex items-center gap-1 font-medium">
                                                 <Clock className="h-3 w-3 text-blue-600 dark:text-blue-400" />
-                                                <span>永久存底</span>
+                                                <span>{t('buy.assurance.manualPointArchive')}</span>
                                             </div>
                                         </div>
                                     </div>
@@ -967,23 +969,23 @@ export function BuyContent({
                                     <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4 space-y-2.5">
                                         <div className="flex items-center gap-2 text-xs font-semibold text-primary">
                                             <Zap className="h-4 w-4 shrink-0 text-primary" />
-                                            <span>自动秒级发货 · 付款即出密</span>
+                                            <span>{t('buy.assurance.autoTitle')}</span>
                                         </div>
                                         <p className="text-xs text-muted-foreground leading-relaxed">
-                                            系统全天候自动提取卡密，支付完成后立即在订单页展示，并同步备份至账户与邮箱。
+                                            {t('buy.assurance.autoDesc')}
                                         </p>
                                         <div className="grid grid-cols-3 gap-1 pt-2 border-t border-primary/15 text-[11px] text-muted-foreground">
                                             <div className="flex items-center gap-1 font-medium">
                                                 <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-                                                <span>7×24h 自动</span>
+                                                <span>{t('buy.assurance.autoPointRealtime')}</span>
                                             </div>
                                             <div className="flex items-center gap-1 font-medium">
                                                 <ShieldCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-                                                <span>资金安全</span>
+                                                <span>{t('buy.assurance.autoPointSafe')}</span>
                                             </div>
                                             <div className="flex items-center gap-1 font-medium">
                                                 <Clock className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-                                                <span>即买即用</span>
+                                                <span>{t('buy.assurance.autoPointInstant')}</span>
                                             </div>
                                         </div>
                                     </div>

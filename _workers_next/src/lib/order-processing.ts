@@ -17,6 +17,7 @@ import { consumeCouponReservations } from "@/lib/coupons/reservation"
 import { updateTag } from "next/cache"
 import { after } from "next/server"
 import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
+import { SHARED_CARD_CANDIDATE_WINDOW } from "@/lib/constants"
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const FULFILLMENT_CLAIM_STATUS = "processing"
@@ -458,14 +459,18 @@ export async function processOrderFulfillment(
         }
 
         if (product?.isShared) {
-            const availableCard = await db.select({ id: cards.id, cardKey: cards.cardKey })
-                .from(cards)
-                .where(and(
-                    eq(cards.productId, existing.productId),
-                    or(eq(cards.isUsed, false), isNull(cards.isUsed)),
-                ))
-                .orderBy(sql`RANDOM()`)
-                .limit(1)
+            // 共享商品随机取一张可用卡作为交付引用。原实现 `ORDER BY RANDOM()`
+            // 会先把该商品全部可用卡扫出来再排序，库存越大越慢；这里改成
+            // 「先按 id 取有界候选窗口，再在窗口内随机」，代价与库存解耦。
+            const availableCard = await db.all(sql`
+                SELECT id, card_key FROM (
+                    SELECT id, card_key FROM cards
+                    WHERE product_id = ${existing.productId}
+                      AND (is_used = 0 OR is_used IS NULL)
+                    ORDER BY id
+                    LIMIT ${SHARED_CARD_CANDIDATE_WINDOW}
+                ) ORDER BY RANDOM() LIMIT 1
+            `) as Array<{ id: unknown; card_key?: string | null }>
 
             if (!availableCard.length) {
                 await finalizePaidOrder(orderId, claimId, tradeNo)
@@ -478,7 +483,7 @@ export async function processOrderFulfillment(
                 console.error("[Order] Failed to load card delivery note:", error)
                 return ""
             })
-            const joinedKeys = await finalizeSharedDelivery(existing, claimId, tradeNo, availableCard[0].cardKey, deliveryNote)
+            const joinedKeys = await finalizeSharedDelivery(existing, claimId, tradeNo, availableCard[0].card_key ?? "", deliveryNote)
             await notifyUserDelivered(existing, productName)
             scheduleAdminNotification(existing, tradeNo, productName)
             scheduleDeliveryEmail(existing, productName, joinedKeys, deliveryNote)

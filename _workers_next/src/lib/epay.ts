@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
+import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 
 export async function queryOrderStatus(orderId: string) {
     const merchantId = process.env.MERCHANT_ID
@@ -57,6 +58,6 @@ export async function queryOrderStatus(orderId: string) {
 
     } catch (e: any) {
         console.error('Query order error', e)
-        return { success: false, error: e.message }
+        return { success: false, error: sanitizeClientErrorMessage(e?.message, 'Payment query failed') }
     }
 }

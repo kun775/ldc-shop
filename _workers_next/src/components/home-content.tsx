@@ -1,12 +1,14 @@
 "use client"
 
-import { useDeferredValue, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import Image from "next/image"
+import dynamic from "next/dynamic"
+import { useRouter } from "next/navigation"
 import { ArrowRight, Search, Zap, PackageOpen, X, Check, Clock, ChevronRight, Inbox } from "lucide-react"
 import { ProductImagePlaceholder } from "@/components/product-image-placeholder"
 import { KCurrencySymbol } from "@/components/k-currency-symbol"
-import { AnnouncementPopup, type AnnouncementPopupData } from "@/components/announcement-popup"
+import type { AnnouncementPopupData } from "@/components/announcement-popup"
 import { CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,10 +20,18 @@ import { useI18n } from "@/lib/i18n/context"
 import { INFINITE_STOCK } from "@/lib/constants"
 import { getProductPointDiscountBadge } from "@/lib/points/product-point-discount"
 
+// 公告弹窗内部依赖 react-markdown（+ micromark 全家桶，未压缩约 113KB）。
+// 它只在「配置了公告且用户未忽略」时才会真正上屏，因此必须走动态加载，
+// 否则这 113KB 会无条件计入首页首屏。
+const AnnouncementPopup = dynamic(
+    () => import("@/components/announcement-popup").then((mod) => mod.AnnouncementPopup),
+    { ssr: false }
+)
+
 interface Product {
     id: string
     name: string
-    description: string | null
+    /** 服务端 stripMarkdown 后的纯文本摘要（列表不渲染 Markdown 原文） */
     descriptionPlain?: string | null
     price: string
     compareAtPrice?: string | null
@@ -41,8 +51,21 @@ interface Product {
     groupManual?: boolean | null
 }
 
+export interface HomeFilters {
+    q: string
+    category: string
+    sort: string
+    fulfillment: string
+}
+
 interface HomeContentProps {
+    /** 当前页商品（服务端已按 filters 完成筛选/排序/分页） */
     products: Product[]
+    /** 命中 filters 的商品总数（变体已归组） */
+    total: number
+    page: number
+    pageSize: number
+    filters: HomeFilters
     announcement?: {
         banner: string | null
         popup: {
@@ -51,47 +74,87 @@ interface HomeContentProps {
             signature: string
         } | null
     } | null
-    visitorCount?: number
     categories?: string[]
     categoryConfig?: Array<{ name: string; icon: string | null; sortOrder: number }>
     pendingOrders?: Array<{ orderId: string; createdAt: Date; productName: string; amount: string }>
-    wishlistEnabled?: boolean
-    isLoggedIn?: boolean
-    checkinEnabled?: boolean
-    filters: { q?: string; category?: string | null; sort?: string }
-    pagination: { page: number; pageSize: number; total: number }
+}
+
+/**
+ * 首页筛选状态全部落在 URL 上。
+ *
+ * 需求背景（D1 读放大）：过去首页把**全量商品**塞进 RSC payload，再由浏览器
+ * 做 filter/sort/slice。商品数一涨，每个 PV（含爬虫与预取）都要传输整张商品表，
+ * 单次响应体达到数百 KB。现在筛选/排序/分页全部下推到 SQL，客户端只接收
+ * 当前这一页的数据，URL 同时承担「可分享、可后退」的职责。
+ */
+function buildHomeUrl(params: HomeFilters & { page?: number; pageSize?: number }) {
+    const search = new URLSearchParams()
+    const put = (key: string, value: string | number | undefined | null) => {
+        const text = value === undefined || value === null ? '' : String(value).trim()
+        if (!text || text === 'all' || text === 'default') return
+        search.set(key, text)
+    }
+
+    put('q', params.q)
+    put('category', params.category)
+    put('sort', params.sort)
+    put('fulfillment', params.fulfillment)
+    if (params.page && params.page > 1) put('page', params.page)
+    if (params.pageSize && params.pageSize !== 24) put('pageSize', params.pageSize)
+
+    const qs = search.toString()
+    return qs ? `/?${qs}` : '/'
 }
 
 export function HomeContent({
     products,
+    total,
+    page,
+    pageSize,
+    filters,
     announcement,
     categories = [],
     categoryConfig,
     pendingOrders,
-    filters,
-    pagination,
 }: HomeContentProps) {
     const { t } = useI18n()
-    const [selectedCategory, setSelectedCategory] = useState<string | null>(filters.category || null)
-    const [searchTerm, setSearchTerm] = useState(filters.q || "")
-    const [sortKey, setSortKey] = useState(filters.sort || "default")
-    const [fulfillmentFilter, setFulfillmentFilter] = useState<'all' | 'auto' | 'manual' | 'inStock'>('all')
-    const [paginationState, setPaginationState] = useState(() => ({
-        key: `${filters.category || ''}|${filters.q || ''}|${filters.sort || 'default'}|all`,
-        page: pagination.page || 1,
-    }))
-    const deferredSearch = useDeferredValue(searchTerm)
-    const filterKey = `${selectedCategory || ''}|${deferredSearch}|${sortKey}|${fulfillmentFilter}`
-    const page = paginationState.key === filterKey ? paginationState.page : 1
-    const setPage = (update: number | ((current: number) => number)) => {
-        setPaginationState((current) => {
-            const currentPage = current.key === filterKey ? current.page : 1
-            return {
-                key: filterKey,
-                page: typeof update === 'function' ? update(currentPage) : update,
-            }
-        })
+    const router = useRouter()
+    const [isPending, startTransition] = useTransition()
+
+    // 搜索框保留本地草稿以获得即时反馈；其余筛选直接改 URL（无草稿）。
+    // 只有当 props.filters.q 真的变化（路由前进/后退）时才把 props 回灌到草稿，
+    // 否则会把用户正在输入的值覆盖掉。
+    //
+    // 用「渲染期同步 props」而不是 useEffect：effect 里 setState 会多提交一轮，
+    // 且被 react-hooks/set-state-in-effect 判定为错误（React 官方也不推荐）。
+    const [query, setQuery] = useState(filters.q)
+    const [committedQuery, setCommittedQuery] = useState(filters.q)
+    const [syncedPropQuery, setSyncedPropQuery] = useState(filters.q)
+    if (syncedPropQuery !== filters.q) {
+        setSyncedPropQuery(filters.q)
+        setQuery(filters.q)
+        setCommittedQuery(filters.q)
     }
+
+    const pushFilters = useCallback((overrides: Partial<HomeFilters & { page: number }>) => {
+        const url = buildHomeUrl({ ...filters, ...overrides })
+        startTransition(() => {
+            router.push(url)
+        })
+    }, [filters, router])
+
+    // 输入停顿 350ms 后再发起一次 RSC 导航，避免逐键打服务端。
+    useEffect(() => {
+        if (query === committedQuery) return
+        const timer = window.setTimeout(() => {
+            setCommittedQuery(query)
+            const url = buildHomeUrl({ ...filters, q: query, page: 1 })
+            startTransition(() => {
+                router.push(url)
+            })
+        }, 350)
+        return () => window.clearTimeout(timer)
+    }, [query, committedQuery, filters, router])
 
     // Convert any active announcement (popup or banner) into modal popup
     const popupData = useMemo<AnnouncementPopupData>(() => {
@@ -100,7 +163,7 @@ export function HomeContent({
         }
         if (announcement?.banner?.trim()) {
             return {
-                title: t("announcement.popupDefaultTitle") || "站点公告",
+                title: t("announcement.popupDefaultTitle"),
                 content: announcement.banner,
                 signature: announcement.banner,
             }
@@ -108,45 +171,24 @@ export function HomeContent({
         return null
     }, [announcement, t])
 
-    const filteredProducts = useMemo(() => {
-        const keyword = deferredSearch.trim().toLowerCase()
-        return products.filter((product) => {
-            if (selectedCategory && product.category !== selectedCategory) return false
-            const isManual = product.fulfillmentMode === 'manual' || product.groupManual
-            if (fulfillmentFilter === 'auto' && isManual) return false
-            if (fulfillmentFilter === 'manual' && !isManual) return false
-            if (fulfillmentFilter === 'inStock' && product.stockCount <= 0) return false
-            if (!keyword) return true
-            const name = (product.name || "").toLowerCase()
-            const desc = (product.descriptionPlain || product.description || "").toLowerCase()
-            return name.includes(keyword) || desc.includes(keyword)
-        })
-    }, [products, selectedCategory, deferredSearch, fulfillmentFilter])
+    // 引用稳定 —— NavigationPill 的测量 effect 依赖 items，父组件每次渲染都
+    // 新建数组会让它反复 setState（渲染抖动）。
+    const pillItems = useMemo(() => [
+        { key: '', label: t('common.all') },
+        ...categories.map((cat) => {
+            const categoryIcon = categoryConfig?.find((c) => c.name === cat)?.icon
+            return {
+                key: cat,
+                label: categoryIcon ? `${categoryIcon} ${cat}` : cat,
+            }
+        }),
+    ], [categories, categoryConfig, t])
 
-    const sortedProducts = useMemo(() => {
-        const list = [...filteredProducts]
-        switch (sortKey) {
-            case "priceAsc":
-                return list.sort((a, b) => Number(a.price) - Number(b.price))
-            case "priceDesc":
-                return list.sort((a, b) => Number(b.price) - Number(a.price))
-            case "stockDesc":
-                return list.sort((a, b) => (b.stockCount || 0) - (a.stockCount || 0))
-            case "soldDesc":
-                return list.sort((a, b) => (b.soldCount || 0) - (a.soldCount || 0))
-            case "hot":
-                return list.sort((a, b) => Number(!!b.isHot) - Number(!!a.isHot))
-            default:
-                return list
-        }
-    }, [filteredProducts, sortKey])
-
-    const totalPages = Math.max(1, Math.ceil(sortedProducts.length / pagination.pageSize))
+    const totalPages = Math.max(1, Math.ceil(total / pageSize))
     const currentPage = Math.min(Math.max(1, page), totalPages)
-    const startIndex = (currentPage - 1) * pagination.pageSize
-    const pageItems = sortedProducts.slice(startIndex, startIndex + pagination.pageSize)
     const hasMore = currentPage < totalPages
     const hasPendingOrders = Boolean(pendingOrders && pendingOrders.length > 0)
+    const hasActiveFilters = Boolean(filters.category || filters.q || filters.fulfillment !== 'all')
 
     const sortOptions = [
         { key: "default", label: t("home.sort.default") },
@@ -155,6 +197,19 @@ export function HomeContent({
         { key: "priceAsc", label: t("home.sort.priceAsc") },
         { key: "priceDesc", label: t("home.sort.priceDesc") },
     ] as const
+
+    const fulfillmentOptions = [
+        { key: 'all', label: t("home.filter.all"), icon: null },
+        { key: 'auto', label: t("home.filter.instant"), icon: Zap, activeClass: "bg-primary text-primary-foreground shadow-2xs" },
+        { key: 'manual', label: t("home.filter.manual"), icon: PackageOpen, activeClass: "bg-blue-600 text-white shadow-2xs dark:bg-blue-500" },
+        { key: 'inStock', label: t("home.filter.inStock"), icon: Check, activeClass: "bg-emerald-600 text-white shadow-2xs dark:bg-emerald-500" },
+    ] as const
+
+    const resetFilters = () => {
+        setQuery("")
+        setCommittedQuery("")
+        pushFilters({ q: "", category: "", sort: "default", fulfillment: "all", page: 1 })
+    }
 
     return (
         <main className="container relative overflow-hidden py-4 md:py-6">
@@ -199,16 +254,21 @@ export function HomeContent({
                                 type="search"
                                 aria-label={t("common.searchPlaceholder")}
                                 placeholder={t("common.searchPlaceholder")}
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
+                                value={query}
+                                onChange={(e) => setQuery(e.target.value)}
                                 className="h-9 rounded-xl border-border/60 bg-background/90 pl-9 pr-8 text-xs shadow-none transition-colors focus-visible:ring-1"
                             />
-                            {searchTerm && (
+                            {query && (
                                 <button
                                     type="button"
-                                    onClick={() => setSearchTerm("")}
+                                    onClick={() => {
+                                        setQuery("")
+                                        setCommittedQuery("")
+                                        pushFilters({ q: "", page: 1 })
+                                    }}
                                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
-                                    title="清空搜索"
+                                    aria-label={t("common.clearSearch")}
+                                    title={t("common.clearSearch")}
                                 >
                                     <X className="h-3.5 w-3.5" />
                                 </button>
@@ -218,18 +278,9 @@ export function HomeContent({
                         {/* Category Navigation Pills */}
                         <div className="flex-1 min-w-0 overflow-x-auto no-scrollbar">
                             <NavigationPill
-                                items={[
-                                    { key: "", label: t("common.all") },
-                                    ...categories.map((cat) => {
-                                        const categoryIcon = categoryConfig?.find((c) => c.name === cat)?.icon
-                                        return {
-                                            key: cat,
-                                            label: categoryIcon ? `${categoryIcon} ${cat}` : cat,
-                                        }
-                                    }),
-                                ]}
-                                selectedKey={selectedCategory || ""}
-                                onSelect={(key) => setSelectedCategory(key || null)}
+                                items={pillItems}
+                                selectedKey={filters.category || ""}
+                                onSelect={(key) => pushFilters({ category: key, page: 1 })}
                             />
                         </div>
                     </div>
@@ -238,57 +289,29 @@ export function HomeContent({
                     <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/40 text-xs">
                         {/* Left: Fulfillment and Stock Quick Filter Chips */}
                         <div className="flex flex-wrap items-center gap-1">
-                            <button
-                                type="button"
-                                onClick={() => setFulfillmentFilter('all')}
-                                className={cn(
-                                    "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
-                                    fulfillmentFilter === 'all'
-                                        ? "bg-foreground text-background shadow-2xs"
-                                        : "bg-muted/40 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                                )}
-                            >
-                                全部
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setFulfillmentFilter('auto')}
-                                className={cn(
-                                    "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
-                                    fulfillmentFilter === 'auto'
-                                        ? "bg-primary text-primary-foreground shadow-2xs"
-                                        : "bg-muted/40 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                                )}
-                            >
-                                <Zap className="h-3 w-3" />
-                                <span>秒发</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setFulfillmentFilter('manual')}
-                                className={cn(
-                                    "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
-                                    fulfillmentFilter === 'manual'
-                                        ? "bg-blue-600 text-white shadow-2xs dark:bg-blue-500"
-                                        : "bg-muted/40 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                                )}
-                            >
-                                <PackageOpen className="h-3 w-3" />
-                                <span>手工</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setFulfillmentFilter(f => f === 'inStock' ? 'all' : 'inStock')}
-                                className={cn(
-                                    "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
-                                    fulfillmentFilter === 'inStock'
-                                        ? "bg-emerald-600 text-white shadow-2xs dark:bg-emerald-500"
-                                        : "bg-muted/40 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                                )}
-                            >
-                                <Check className="h-3 w-3" />
-                                <span>仅现货</span>
-                            </button>
+                            {fulfillmentOptions.map((option) => {
+                                const Icon = option.icon
+                                const isActive = filters.fulfillment === option.key
+                                return (
+                                    <button
+                                        key={option.key}
+                                        type="button"
+                                        aria-pressed={isActive}
+                                        onClick={() => pushFilters({ fulfillment: option.key, page: 1 })}
+                                        className={cn(
+                                            "inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium transition-all",
+                                            isActive
+                                                ? ("activeClass" in option && option.activeClass
+                                                    ? option.activeClass
+                                                    : "bg-foreground text-background shadow-2xs")
+                                                : "bg-muted/40 text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                                        )}
+                                    >
+                                        {Icon && <Icon className="h-3 w-3" />}
+                                        <span>{option.label}</span>
+                                    </button>
+                                )
+                            })}
                         </div>
 
                         {/* Right: Sort Buttons & Product Counter */}
@@ -298,13 +321,14 @@ export function HomeContent({
                                     <button
                                         key={opt.key}
                                         type="button"
+                                        aria-pressed={filters.sort === opt.key}
                                         className={cn(
                                             "h-7 rounded-md px-2 text-xs transition-all",
-                                            sortKey === opt.key
+                                            filters.sort === opt.key
                                                 ? "bg-muted font-semibold text-foreground border border-border/60 shadow-2xs"
                                                 : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
                                         )}
-                                        onClick={() => setSortKey(opt.key)}
+                                        onClick={() => pushFilters({ sort: opt.key, page: 1 })}
                                     >
                                         {opt.label}
                                     </button>
@@ -312,7 +336,7 @@ export function HomeContent({
                             </div>
 
                             <div className="hidden sm:inline-flex items-center pl-2 border-l border-border/50 text-[11px] text-muted-foreground font-mono">
-                                <span>{sortedProducts.length} 件</span>
+                                <span>{t("home.itemCount", { count: total })}</span>
                             </div>
                         </div>
                     </div>
@@ -320,32 +344,31 @@ export function HomeContent({
             </section>
 
             {/* Main Product Grid - Directly visible above the fold */}
-            <section>
-                {sortedProducts.length === 0 ? (
+            <section
+                aria-busy={isPending}
+                className={cn("transition-opacity duration-200", isPending && "opacity-60")}
+            >
+                {total === 0 ? (
                     <div className="relative overflow-hidden rounded-2xl border border-dashed border-border/60 bg-muted/20 px-6 py-16 text-center">
                         <div className="relative mb-3 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-background shadow-xs text-muted-foreground">
                             <Inbox className="h-6 w-6 text-muted-foreground/60" />
                         </div>
                         <p className="font-medium text-sm text-foreground">{t("home.noProducts")}</p>
                         <p className="mt-1 text-xs text-muted-foreground">{t("home.checkBackLater")}</p>
-                        {(selectedCategory || searchTerm || fulfillmentFilter !== 'all') && (
+                        {hasActiveFilters && (
                             <Button
                                 variant="outline"
                                 size="sm"
                                 className="mt-4 h-8 text-xs rounded-lg"
-                                onClick={() => {
-                                    setSelectedCategory(null)
-                                    setSearchTerm("")
-                                    setFulfillmentFilter('all')
-                                }}
+                                onClick={resetFilters}
                             >
-                                {t("common.all")}
+                                {t("home.resetFilters")}
                             </Button>
                         )}
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                        {pageItems.map((product, index) => {
+                        {products.map((product, index) => {
                             const pointDiscountBadge = getProductPointDiscountBadge({
                                 pointDiscountEnabled: product.pointDiscountEnabled,
                                 pointDiscountPercent: product.pointDiscountPercent,
@@ -358,7 +381,6 @@ export function HomeContent({
                                     key={product.id}
                                     href={`/buy/${product.id}`}
                                     prefetch={false}
-                                    aria-label={t("common.viewDetails")}
                                     className={cn(
                                         "group tech-card relative flex h-full flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-2xs transition-all duration-300 hover:border-primary/50 hover:shadow-md animate-in fade-in motion-reduce:animate-none",
                                         isSoldOut && "grayscale"
@@ -394,12 +416,12 @@ export function HomeContent({
                                                 {isManual ? (
                                                     <Badge className="h-5 rounded-md border-0 bg-blue-600/90 px-1.5 text-[10px] font-medium text-white shadow-xs backdrop-blur-xs dark:bg-blue-500/90">
                                                         <PackageOpen className="mr-1 h-3 w-3" />
-                                                        手工交付
+                                                        {t("home.badge.manualDelivery")}
                                                     </Badge>
                                                 ) : (
                                                     <Badge className="h-5 rounded-md border-0 bg-primary/90 px-1.5 text-[10px] font-medium text-primary-foreground shadow-xs backdrop-blur-xs">
                                                         <Zap className="mr-1 h-3 w-3" />
-                                                        秒发
+                                                        {t("home.badge.instantDelivery")}
                                                     </Badge>
                                                 )}
                                                 {product.category && product.category !== "general" && (
@@ -445,7 +467,7 @@ export function HomeContent({
                                         </div>
 
                                         <p className="mb-3 line-clamp-2 text-xs leading-4.5 text-muted-foreground">
-                                            {product.descriptionPlain || product.description || t("buy.noDescription")}
+                                            {product.descriptionPlain || t("buy.noDescription")}
                                         </p>
 
                                         {/* Stripe-style Price & Stock Footer */}
@@ -464,7 +486,7 @@ export function HomeContent({
                                                             <>
                                                                 <KCurrencySymbol className="h-3.5 w-3.5 self-center text-primary" />
                                                                 <span className="whitespace-nowrap text-lg font-bold tracking-tight text-primary tabular-nums">
-                                                                    {product.priceMin} 起
+                                                                    {product.priceMin}{t("home.priceFromSuffix")}
                                                                 </span>
                                                             </>
                                                         ) : (
@@ -487,19 +509,19 @@ export function HomeContent({
                                                         )}
                                                         {pointDiscountBadge && (
                                                             <span className="rounded bg-emerald-500/10 px-1 py-0.5 text-[9px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                                                                抵{pointDiscountBadge.percent}%
+                                                                {t("common.pointDiscountBadge", { percent: pointDiscountBadge.percent })}
                                                             </span>
                                                         )}
                                                     </div>
                                                     <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
-                                                        <span>库存 {product.stockCount >= INFINITE_STOCK ? "充足" : product.stockCount}</span>
+                                                        <span>{t("home.stockShort", { count: product.stockCount >= INFINITE_STOCK ? t("home.stockPlenty") : product.stockCount })}</span>
                                                         <span>·</span>
-                                                        <span>已售 {product.soldCount}</span>
+                                                        <span>{t("home.soldShort", { count: product.soldCount })}</span>
                                                     </div>
                                                 </div>
 
                                                 <div className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border/50 bg-background text-muted-foreground transition-all duration-200 group-hover:border-primary/40 group-hover:bg-primary group-hover:text-primary-foreground group-hover:scale-105 shadow-2xs">
-                                                    <ArrowRight className="h-3.5 w-3.5" />
+                                                    <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
                                                 </div>
                                             </div>
                                         </div>
@@ -512,7 +534,7 @@ export function HomeContent({
             </section>
 
             {/* Pagination */}
-            {sortedProducts.length > 0 && (
+            {total > 0 && (
                 <nav className="mt-8 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
                     <div>
                         {t("search.page", { page: currentPage, totalPages })}
@@ -522,8 +544,8 @@ export function HomeContent({
                             variant="outline"
                             size="sm"
                             className="h-8 rounded-lg px-3 text-xs"
-                            onClick={() => setPage((p) => Math.max(1, p - 1))}
-                            disabled={currentPage <= 1}
+                            onClick={() => pushFilters({ page: Math.max(1, currentPage - 1) })}
+                            disabled={currentPage <= 1 || isPending}
                         >
                             {t("search.prev")}
                         </Button>
@@ -531,13 +553,13 @@ export function HomeContent({
                             variant="outline"
                             size="sm"
                             className="h-8 rounded-lg px-3 text-xs"
-                            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                            disabled={!hasMore}
+                            onClick={() => pushFilters({ page: Math.min(totalPages, currentPage + 1) })}
+                            disabled={!hasMore || isPending}
                         >
                             {t("search.next")}
                         </Button>
                         {hasMore && (
-                            <Button variant="secondary" size="sm" className="h-8 rounded-lg px-3.5 text-xs font-medium" onClick={() => setPage(currentPage + 1)}>
+                            <Button variant="secondary" size="sm" className="h-8 rounded-lg px-3.5 text-xs font-medium" onClick={() => pushFilters({ page: currentPage + 1 })} disabled={isPending}>
                                 {t("common.loadMore")}
                             </Button>
                         )}

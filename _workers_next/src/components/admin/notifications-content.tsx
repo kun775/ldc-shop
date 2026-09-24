@@ -90,7 +90,7 @@ export function NotificationsContent({ settings }: NotificationsContentProps) {
             if (res.success) {
                 toast.success(t('admin.settings.notifications.testSuccess'))
             } else {
-                toast.error(t('admin.settings.notifications.testFailed', { error: res.error }))
+                toast.error(t('admin.settings.notifications.testFailed', { error: res.error ?? '' }))
             }
         } catch (e: any) {
             toast.error(t('common.error'))
@@ -110,7 +110,7 @@ export function NotificationsContent({ settings }: NotificationsContentProps) {
             if (res.success) {
                 toast.success(t('admin.settings.email.testSuccess'))
             } else {
-                toast.error(t('admin.settings.email.testFailed', { error: res.error }))
+                toast.error(t('admin.settings.email.testFailed', { error: res.error ?? '' }))
             }
         } catch (e: any) {
             toast.error(t('common.error'))
@@ -126,7 +126,7 @@ export function NotificationsContent({ settings }: NotificationsContentProps) {
             if (res.success) {
                 toast.success(t('admin.settings.notifications.barkTestSuccess'))
             } else {
-                toast.error(t('admin.settings.notifications.barkTestFailed', { error: res.error }))
+                toast.error(t('admin.settings.notifications.barkTestFailed', { error: res.error ?? '' }))
             }
         } catch {
             toast.error(t('common.error'))

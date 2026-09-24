@@ -1,4 +1,5 @@
 import { SOURCE_REPO, SOURCE_REPO_URL } from "@/lib/version"
+import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 
 export interface ClientUpdateCheckResult {
     hasUpdate: boolean
@@ -24,14 +25,15 @@ function compareVersions(a: string, b: string): number {
 
 export async function checkForUpdatesClient(currentVersion: string): Promise<ClientUpdateCheckResult> {
     try {
-        const releaseResponse = await fetch(
+        const releaseResponse = await fetchWithTimeout(
             `https://api.github.com/repos/${SOURCE_REPO}/releases/latest`,
             {
                 headers: {
                     Accept: "application/vnd.github.v3+json",
                 },
                 cache: "no-store",
-            }
+            },
+            10_000
         )
 
         if (releaseResponse.ok) {
@@ -46,14 +48,15 @@ export async function checkForUpdatesClient(currentVersion: string): Promise<Cli
         }
 
         if (releaseResponse.status === 404) {
-            const tagsResponse = await fetch(
+            const tagsResponse = await fetchWithTimeout(
                 `https://api.github.com/repos/${SOURCE_REPO}/tags`,
                 {
                     headers: {
                         Accept: "application/vnd.github.v3+json",
                     },
                     cache: "no-store",
-                }
+                },
+                10_000
             )
 
             if (tagsResponse.ok) {

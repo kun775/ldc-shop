@@ -202,6 +202,8 @@ export function WishlistSection({
                                                 size="icon"
                                                 variant="ghost"
                                                 className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                                                aria-label={t('common.delete')}
+                                                title={t('common.delete')}
                                                 onClick={() => handleDelete(item.id)}
                                                 disabled={deletingId === item.id}
                                             >

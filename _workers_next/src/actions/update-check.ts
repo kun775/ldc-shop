@@ -2,6 +2,7 @@
 
 import { APP_VERSION, SOURCE_REPO, SOURCE_REPO_URL } from "@/lib/version"
 import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
+import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 
 interface UpdateCheckResult {
     hasUpdate: boolean
@@ -14,7 +15,7 @@ interface UpdateCheckResult {
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
     try {
         // Fetch latest release from GitHub API
-        const response = await fetch(
+        const response = await fetchWithTimeout(
             `https://api.github.com/repos/${SOURCE_REPO}/releases/latest`,
             {
                 headers: {
@@ -23,14 +24,15 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
                 },
                 // Cache for 1 hour
                 next: { revalidate: 3600 }
-            }
+            },
+            10_000
         )
 
         if (!response.ok) {
             // If no releases, try to get the latest tag
             if (response.status === 404) {
                 // Try fetching tags instead
-                const tagsResponse = await fetch(
+                const tagsResponse = await fetchWithTimeout(
                     `https://api.github.com/repos/${SOURCE_REPO}/tags`,
                     {
                         headers: {
@@ -38,7 +40,8 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
                             'User-Agent': 'LDC-Shop-Update-Checker'
                         },
                         next: { revalidate: 3600 }
-                    }
+                    },
+                    10_000
                 )
 
                 if (tagsResponse.ok) {

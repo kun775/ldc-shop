@@ -4,6 +4,7 @@ import { checkAdmin } from "@/actions/admin"
 import { getSetting, setSetting } from "@/lib/db/queries"
 import { ensureRegistryInstanceId, getRegistryBaseUrl, normalizeOrigin } from "@/lib/registry"
 import { revalidatePath } from "next/cache"
+import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 
 interface RegistryResult {
     ok: boolean
@@ -40,11 +41,11 @@ export async function joinRegistry(origin: string): Promise<RegistryResult> {
 
     await ensureRegistryInstanceId()
 
-    const challengeRes = await fetch(`${baseUrl}/challenge`, {
+    const challengeRes = await fetchWithTimeout(`${baseUrl}/challenge`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ url: normalized }),
-    })
+    }, 10_000)
 
     if (!challengeRes.ok) {
         return { ok: false, error: `challenge_failed_${challengeRes.status}` }
@@ -59,11 +60,11 @@ export async function joinRegistry(origin: string): Promise<RegistryResult> {
     await setSetting("registry_challenge_token", token)
     await setSetting("registry_origin", normalized)
 
-    const submitRes = await fetch(`${baseUrl}/submit`, {
+    const submitRes = await fetchWithTimeout(`${baseUrl}/submit`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ url: normalized }),
-    })
+    }, 10_000)
 
     if (!submitRes.ok) {
         const errorText = await submitRes.text()
@@ -95,11 +96,11 @@ export async function leaveRegistry(): Promise<RegistryResult> {
             return { ok: false, error: error?.message || "invalid_origin" }
         }
 
-        const challengeRes = await fetch(`${baseUrl}/challenge`, {
+        const challengeRes = await fetchWithTimeout(`${baseUrl}/challenge`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ url: normalized }),
-        })
+        }, 10_000)
 
         if (!challengeRes.ok) {
             return { ok: false, error: `challenge_failed_${challengeRes.status}` }
@@ -113,11 +114,11 @@ export async function leaveRegistry(): Promise<RegistryResult> {
 
         await setSetting("registry_challenge_token", token)
 
-        const removeRes = await fetch(`${baseUrl}/remove`, {
+        const removeRes = await fetchWithTimeout(`${baseUrl}/remove`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ url: normalized }),
-        })
+        }, 10_000)
 
         if (!removeRes.ok) {
             const errorText = await removeRes.text()

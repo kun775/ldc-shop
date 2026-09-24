@@ -19,11 +19,19 @@ export function StarRatingStatic({
     lg: 'w-5 h-5',
   }
 
+  // 静态评分此前是一排纯装饰 SVG，读屏完全读不到分数。
+  // 这里给整组一个 role="img" + 「分数/满分」的标签，并让星形本身对读屏隐藏，
+  // 避免出现「5 个没有名字的图形」这种噪音。
   return (
-    <div className="flex items-center gap-0.5">
+    <div
+      className="flex items-center gap-0.5"
+      role="img"
+      aria-label={`${Math.max(0, Math.min(rating, maxRating))}/${maxRating}`}
+    >
       {Array.from({ length: maxRating }, (_, i) => (
         <Star
           key={i}
+          aria-hidden="true"
           className={cn(
             sizeClasses[size],
             i < rating

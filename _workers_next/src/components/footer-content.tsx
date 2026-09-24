@@ -2,7 +2,8 @@
 
 import { useI18n } from "@/lib/i18n/context"
 import { Users } from "lucide-react"
-import type { ReactNode } from "react"
+import { Fragment } from "react"
+import { toFooterNodes } from "@/lib/footer-html"
 
 interface FooterContentProps {
     customFooter: string | null
@@ -14,59 +15,32 @@ export function FooterContent({ customFooter, version, visitorCount }: FooterCon
     const { t } = useI18n()
     const footerText = customFooter?.trim() || t('footer.disclaimer')
 
-    const linkify = (text: string) => {
-        const nodes: ReactNode[] = []
-        const urlRegex = /https?:\/\/[^\s]+/g
-        let lastIndex = 0
-        let match: RegExpExecArray | null
-        let linkIndex = 0
-
-        while ((match = urlRegex.exec(text)) !== null) {
-            const [raw] = match
-            const start = match.index
-            if (start > lastIndex) {
-                nodes.push(text.slice(lastIndex, start))
-            }
-
-            let url = raw
-            let trailing = ''
-            while (url.length && /[),.!?]/.test(url[url.length - 1])) {
-                trailing = url[url.length - 1] + trailing
-                url = url.slice(0, -1)
-            }
-
-            if (url) {
-                nodes.push(
-                    <a
-                        key={`footer-link-${linkIndex++}`}
-                        href={url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-muted-foreground/80 hover:text-primary transition-colors duration-300"
-                    >
-                        {url}
-                    </a>
-                )
-            }
-            if (trailing) nodes.push(trailing)
-            lastIndex = start + raw.length
-        }
-
-        if (lastIndex < text.length) {
-            nodes.push(text.slice(lastIndex))
-        }
-
-        return nodes
-    }
+    // 页脚文案来自管理员设置，渲染在任何位置都不能走 innerHTML。
+    // 这里只把解析结果映射成 React 节点（纯文本 + 白名单 http(s) 链接），
+    // 解析与净化规则见 src/lib/footer-html.ts（写入侧复用同一套规则）。
+    const footerNodes = toFooterNodes(footerText)
 
     return (
         <footer className="shrink-0 border-t border-border/40 bg-background/90 py-3 pb-20 backdrop-blur md:py-0 md:pb-0">
             <div className="container flex flex-col items-center justify-between gap-4 md:h-16 md:flex-row">
                 <div className="flex flex-col items-center gap-4 px-4 md:flex-row md:gap-2 md:px-0">
-                    <p
-                        className="text-center text-xs leading-relaxed text-muted-foreground/80 md:text-left footer-html"
-                        dangerouslySetInnerHTML={{ __html: footerText }}
-                    />
+                    <p className="whitespace-pre-line text-center text-xs leading-relaxed text-muted-foreground/80 md:text-left footer-html">
+                        {footerNodes.map((node, index) => (
+                            node.kind === 'link' ? (
+                                <a
+                                    key={`footer-link-${index}`}
+                                    href={node.href}
+                                    target="_blank"
+                                    rel="noreferrer noopener"
+                                    className="text-muted-foreground/80 hover:text-primary transition-colors duration-300"
+                                >
+                                    {node.text}
+                                </a>
+                            ) : (
+                                <Fragment key={`footer-text-${index}`}>{node.text}</Fragment>
+                            )
+                        ))}
+                    </p>
                 </div>
                 <div className="flex items-center gap-4 text-xs text-muted-foreground/50">
                     {typeof visitorCount === "number" && visitorCount > 0 && (

@@ -23,6 +23,14 @@
         "categories": "商品分类",
         "all": "全部",
         "searchPlaceholder": "搜索商品...",
+        "clearSearch": "清空搜索",
+        "tooManyRequests": "操作过于频繁，请稍后再试。",
+        "remove": "移除",
+        "increaseQuantity": "增加数量",
+        "decreaseQuantity": "减少数量",
+        "accountMenu": "账号菜单",
+        "starLabel": "评为 {{count}} 星",
+        "ratingLabel": "评分",
         "logout": "退出登录",
         "admin": "管理",
         "adminTitle": "后台管理",
@@ -33,6 +41,8 @@
         "loggedInAs": "当前登录",
         "dashboard": "控制台",
         "myOrders": "我的订单",
+        "home": "首页",
+        "profile": "个人中心",
         "loading": "加载中...",
         "error": "错误",
         "success": "成功",
@@ -90,7 +100,10 @@
         "errorTitle": "页面加载失败",
         "errorDescription": "页面出现异常，可以重试或返回上一页。",
         "errorIdLabel": "错误编号",
-        "goHome": "返回首页"
+        "goHome": "返回首页",
+        "notFoundTitle": "页面不存在",
+        "notFoundDescription": "你访问的页面不存在，或已经被移动。",
+        "browseProducts": "去逛逛商品"
     },
     "home": {
         "title": "欢迎来到 LDC 商店",
@@ -127,7 +140,23 @@
             "priceDesc": "价格 ↓"
         },
         "priceFrom": "{{price}} 起",
-        "variantCount": "{{count}} 个规格"
+        "priceFromSuffix": " 起",
+        "variantCount": "{{count}} 个规格",
+        "itemCount": "{{count}} 件",
+        "stockShort": "库存 {{count}}",
+        "stockPlenty": "充足",
+        "soldShort": "已售 {{count}}",
+        "resetFilters": "重置筛选",
+        "filter": {
+            "all": "全部",
+            "instant": "秒发",
+            "manual": "手工",
+            "inStock": "仅现货"
+        },
+        "badge": {
+            "instantDelivery": "秒发",
+            "manualDelivery": "手工交付"
+        }
     },
     "buy": {
         "title": "商品详情",
@@ -135,6 +164,18 @@
         "noDescription": "暂无描述",
         "hot": "热门",
         "loginToBuy": "请登录后购买此商品",
+        "assurance": {
+            "manualTitle": "人工专人履约 · 交付附件查验",
+            "manualDesc": "付款后商家专人接单交付。订单详情页支持交付附件下载与进度追踪，售后全天候保障。",
+            "manualPointDelivery": "专人交付",
+            "manualPointWarranty": "平台质保",
+            "manualPointArchive": "永久存底",
+            "autoTitle": "自动秒级发货 · 付款即出密",
+            "autoDesc": "系统全天候自动提取卡密，支付完成后立即在订单页展示，并同步备份至账户与邮箱。",
+            "autoPointRealtime": "7×24h 自动",
+            "autoPointSafe": "资金安全",
+            "autoPointInstant": "即买即用"
+        },
         "outOfStockMessage": "该商品暂时缺货",
         "productNotFound": "商品未找到",
         "outOfStock": "商品已售罄",
@@ -168,7 +209,10 @@
             "proceedPayment": "前往支付",
             "emailLabelConfigured": "邮箱或备注信息 (可选)",
             "emailLabelUnconfigured": "备注信息 (可选)",
-            "emailPlaceholder": "输入邮箱或备注信息"
+            "emailPlaceholder": "输入邮箱或备注信息",
+            "secureCheckout": "安全收银台",
+            "emailUsage": "用于接收卡密 / 交付通知",
+            "pointsDeduction": "积分抵扣 ({{points}} 积分)"
         },
         "warningTitle": "购买提醒",
         "confirmWarning": "我已了解，继续购买",
@@ -220,6 +264,26 @@
     },
     "order": {
         "title": "订单详情",
+        "progress": {
+            "title": "履约流转进度",
+            "statusDelivered": "全部流程已完成",
+            "statusPaidManual": "等待商家人工交付",
+            "statusPaidAuto": "自动秒发交付中",
+            "statusPending": "等待买家完成支付",
+            "stepSubmit": "提交订单",
+            "stepVerify": "支付核验",
+            "stepManual": "人工交付",
+            "stepAuto": "自动秒提",
+            "stepInspect": "交付查验",
+            "descGenerated": "已生成",
+            "descPendingPayment": "待支付",
+            "descPaid": "已支付",
+            "descCompleted": "已完成",
+            "descInProgress": "履约中",
+            "descQueued": "待处理",
+            "descDelivered": "已交付",
+            "descAwaitingInspect": "待查验"
+        },
         "product": "商品",
         "amountPaid": "支付金额",
         "createdAt": "创建时间",
@@ -267,6 +331,8 @@
         "amountPlaceholder": "请输入金额",
         "payButton": "去支付",
         "invalidAmount": "请输入正确的金额",
+        "amountTooLarge": "金额超过允许的上限",
+        "notConfigured": "支付未配置，请联系店主",
         "notice": "将跳转到支付页面完成付款。",
         "adminMenu": "收款码",
         "adminTitle": "收款码",

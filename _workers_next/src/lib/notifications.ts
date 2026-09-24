@@ -4,6 +4,7 @@ import { inArray } from "drizzle-orm"
 import { resolveEffectiveShopLogo } from "@/lib/shop-logo"
 import { parseCheckoutFieldValues, type CheckoutFieldValue } from "@/lib/checkout-fields"
 import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
+import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 
 async function getSettingsUncached(keys: string[]): Promise<Record<string, string>> {
     try {
@@ -142,7 +143,7 @@ export async function sendTelegramMessage(text: string) {
         return { success: true }
     } catch (e: any) {
         console.error('[Notification] Send Error:', e)
-        return { success: false, error: e.message }
+        return { success: false, error: sanitizeClientErrorMessage(e?.message, 'Notification request failed') }
     }
 }
 
@@ -203,7 +204,7 @@ export async function sendBarkMessage(
         return { success: true }
     } catch (e: any) {
         console.error('[Notification] Bark Send Error:', e)
-        return { success: false, error: e.message }
+        return { success: false, error: sanitizeClientErrorMessage(e?.message, 'Notification request failed') }
     }
 }
 

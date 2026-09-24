@@ -16,12 +16,10 @@ export function MobileNav({ isLoggedIn, isAdmin, showNav = true }: MobileNavProp
     const { t } = useI18n()
     const pathname = usePathname()
 
-    const isZh = t('common.myOrders').includes('订单')
-    
     const navItems = [
         {
             href: "/",
-            label: isZh ? "首页" : "Home",
+            label: t('common.home'),
             icon: Home,
             active: pathname === "/"
         },
@@ -39,7 +37,7 @@ export function MobileNav({ isLoggedIn, isAdmin, showNav = true }: MobileNavProp
         }] : []),
         ...(isLoggedIn ? [{
             href: "/profile",
-            label: isZh ? "个人中心" : "Profile",
+            label: t('common.profile'),
             icon: User,
             active: pathname === "/profile"
         }] : [])

@@ -48,6 +48,9 @@ function SheetContent({
   className,
   children,
   side = "right",
+  // 与 ui/dialog.tsx 同样的处理：抽屉多数没有描述文案，显式声明「无描述」
+  // 以消除 Radix 的 “Missing Description” 警告。
+  "aria-describedby": ariaDescribedBy = undefined,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
@@ -57,6 +60,7 @@ function SheetContent({
       <SheetOverlay />
       <SheetPrimitive.Content
         data-slot="sheet-content"
+        aria-describedby={ariaDescribedBy}
         className={cn(
           "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500",
           side === "right" &&

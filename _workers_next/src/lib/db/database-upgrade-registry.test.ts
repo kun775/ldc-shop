@@ -112,6 +112,36 @@ test('point ledger history preservation is registered after product coupon restr
     )
 })
 
+test('review order id uniqueness is registered after point ledger history preservation', () => {
+    // 「一单一评」此前只靠应用层 SELECT 再 INSERT 判重，并发下同一订单会产生多条评价。
+    // 修法是加数据库唯一索引 —— 属于结构变更，必须独立成项，不得塞回 0034 或 ensureIndexes。
+    const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
+    assert.ok(ids.includes('0035_review_order_id_unique'))
+    assert.ok(
+        ids.indexOf('0035_review_order_id_unique') > ids.indexOf('0034_point_ledger_preserve_history'),
+        'the unique index must be owned by a new immutable upgrade item',
+    )
+    const item = DATABASE_UPGRADE_DEFINITIONS.find(
+        (entry: { id: string }) => entry.id === '0035_review_order_id_unique',
+    )
+    assert.equal(item.verifiesStructure, true, '结构修复项必须参与结构校验')
+    assert.ok(item.description.length > 0)
+})
+
+test('rate limit counters are registered as their own upgrade item', () => {
+    const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
+    assert.ok(ids.includes('0036_rate_limit_counters'))
+    assert.ok(
+        ids.indexOf('0036_rate_limit_counters') > ids.indexOf('0035_review_order_id_unique'),
+        'the rate limit table must be owned by a new immutable upgrade item',
+    )
+    const item = DATABASE_UPGRADE_DEFINITIONS.find(
+        (entry: { id: string }) => entry.id === '0036_rate_limit_counters',
+    )
+    assert.equal(item.verifiesStructure, true, '结构修复项必须参与结构校验')
+    assert.ok(item.description.length > 0)
+})
+
 test('registered upgrades start from the schema version before the registry was introduced', () => {
     assert.equal(DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION, 27)
     assert.equal(supportsRegisteredDatabaseUpgrades(null), false)

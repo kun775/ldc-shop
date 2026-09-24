@@ -1,11 +1,14 @@
 'use server'
 
 import { auth } from '@/lib/auth'
-import { createReview, createReviewReply } from '@/lib/db/queries'
+import { createReview, createReviewReply, ensureReviewsTable, reviewExistsForOrder } from '@/lib/db/queries'
 import { db } from '@/lib/db'
 import { orders, reviews } from '@/lib/db/schema'
-import { eq, sql } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { revalidatePath, updateTag } from 'next/cache'
+import { enforceRateLimit } from '@/lib/rate-limit'
+import { isUniqueConstraintError } from '@/lib/db/error-utils'
+import { logServerError } from '@/lib/errors/safe-error'
 
 export async function submitReview(
     productId: string,
@@ -22,6 +25,13 @@ export async function submitReview(
         // Validate rating
         if (rating < 1 || rating > 5) {
             return { success: false, error: 'review.invalidRating' }
+        }
+
+        // 限流放在最前面（读订单之前）：
+        // 被刷时先用 O(1) 的计数器把请求挡掉，不要让它消耗订单查询与后续写入。
+        const rateLimit = await enforceRateLimit('review:submit', session.user.id)
+        if (!rateLimit.allowed) {
+            return { success: false, error: 'common.tooManyRequests' }
         }
 
         const order = await db.query.orders.findFirst({
@@ -55,40 +65,32 @@ export async function submitReview(
             return { success: false, error: 'review.orderNotDelivered' }
         }
 
-        // Ensure reviews table exists
-        await db.run(sql`
-            CREATE TABLE IF NOT EXISTS reviews (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_id TEXT NOT NULL,
-                order_id TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                username TEXT NOT NULL,
-                rating INTEGER NOT NULL,
-                comment TEXT,
-                created_at INTEGER DEFAULT (unixepoch() * 1000)
-            )
-        `)
+        // 收敛原本每次提交都裸跑的 CREATE TABLE：改为 isolate 级一次性的 ensure，
+        // 同时尽力建立 reviews(order_id) 唯一索引（有历史重复行时留给升级项 0035）。
+        await ensureReviewsTable()
 
-        // Check if already reviewed (now table definitely exists)
-        const existingReview = await db.run(sql`
-            SELECT id FROM reviews WHERE order_id = ${orderId} LIMIT 1
-        `)
-        if (existingReview.results && existingReview.results.length > 0) {
-            return { success: false, error: 'review.alreadyReviewed' }
-        }
-        if (existingReview.rows && existingReview.rows.length > 0) {
+        // 廉价预检：命中即返回业务错误，避免依赖异常分支。
+        if (await reviewExistsForOrder(orderId)) {
             return { success: false, error: 'review.alreadyReviewed' }
         }
 
-        // Create review
-        await createReview({
-            productId,
-            orderId,
-            userId: session.user.id || '',
-            username: session.user.username || session.user.name || 'Anonymous',
-            rating,
-            comment: comment || undefined
-        })
+        try {
+            await createReview({
+                productId,
+                orderId,
+                userId: session.user.id || '',
+                username: session.user.username || session.user.name || 'Anonymous',
+                rating,
+                comment: comment || undefined
+            })
+        } catch (error: unknown) {
+            // 预检与插入之间有竞态：并发重复提交会撞上 reviews_order_id_uq。
+            // 这是预期内的结果（等价于 alreadyReviewed），不是异常。
+            if (isUniqueConstraintError(error)) {
+                return { success: false, error: 'review.alreadyReviewed' }
+            }
+            throw error
+        }
 
         revalidatePath(`/buy/${productId}`)
         revalidatePath(`/order/${orderId}`)
@@ -98,7 +100,8 @@ export async function submitReview(
 
         return { success: true }
     } catch (error) {
-        console.error('Failed to submit review:', error)
+        const errorId = logServerError('review:submit', error)
+        console.error('Failed to submit review:', errorId)
         return { success: false, error: 'review.submitError' }
     }
 }
@@ -122,17 +125,14 @@ export async function submitReviewReply(
             return { success: false, error: 'review.replyTooLong' }
         }
 
-        await db.run(sql`
-            CREATE TABLE IF NOT EXISTS review_replies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                review_id INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
-                user_id TEXT NOT NULL,
-                username TEXT NOT NULL,
-                comment TEXT NOT NULL,
-                created_at INTEGER DEFAULT (unixepoch() * 1000)
-            )
-        `)
+        // 回复同样是写入口，复用评价限流桶（同一主体、同一窗口）。
+        const rateLimit = await enforceRateLimit('review:submit', session.user.id)
+        if (!rateLimit.allowed) {
+            return { success: false, error: 'common.tooManyRequests' }
+        }
 
+        // review_replies 的建表由 createReviewReply → ensureReviewRepliesTable() 统一负责，
+        // 这里不再裸跑 CREATE TABLE。
         const review = await db.query.reviews.findFirst({
             where: eq(reviews.id, reviewId),
             columns: {
@@ -159,7 +159,8 @@ export async function submitReviewReply(
 
         return { success: true }
     } catch (error) {
-        console.error('Failed to submit review reply:', error)
+        const errorId = logServerError('review:reply', error)
+        console.error('Failed to submit review reply:', errorId)
         return { success: false, error: 'review.replySubmitError' }
     }
 }

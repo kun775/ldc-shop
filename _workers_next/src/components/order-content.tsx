@@ -233,24 +233,24 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                     {/* 4 阶履约状态步进器 */}
                     <div className="rounded-2xl border border-border/50 bg-muted/20 p-4 space-y-3">
                         <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                            <span>履约流转进度</span>
+                            <span>{t('order.progress.title')}</span>
                             <span className={cn(
                                 "font-medium normal-case tracking-normal",
                                 order.status === 'delivered' ? "text-emerald-600 dark:text-emerald-400" :
                                 order.status === 'paid' ? "text-blue-600 dark:text-blue-400" :
                                 order.status === 'pending' ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
                             )}>
-                                {order.status === 'delivered' ? "全部流程已完成" :
-                                 order.status === 'paid' ? (isManual ? "等待商家人工交付" : "自动秒发交付中") :
-                                 order.status === 'pending' ? "等待买家完成支付" : getStatusText(order.status)}
+                                {order.status === 'delivered' ? t('order.progress.statusDelivered') :
+                                 order.status === 'paid' ? (isManual ? t('order.progress.statusPaidManual') : t('order.progress.statusPaidAuto')) :
+                                 order.status === 'pending' ? t('order.progress.statusPending') : getStatusText(order.status)}
                             </span>
                         </div>
                         <div className="grid grid-cols-4 gap-2 pt-1">
                             {[
-                                { step: 1, label: "提交订单", desc: "已生成" },
-                                { step: 2, label: "支付核验", desc: order.status === 'pending' ? "待支付" : "已支付" },
-                                { step: 3, label: isManual ? "人工交付" : "自动秒提", desc: order.status === 'delivered' ? "已完成" : order.status === 'paid' ? "履约中" : "待处理" },
-                                { step: 4, label: "交付查验", desc: order.status === 'delivered' ? "已交付" : "待查验" }
+                                { step: 1, label: t('order.progress.stepSubmit'), desc: t('order.progress.descGenerated') },
+                                { step: 2, label: t('order.progress.stepVerify'), desc: order.status === 'pending' ? t('order.progress.descPendingPayment') : t('order.progress.descPaid') },
+                                { step: 3, label: isManual ? t('order.progress.stepManual') : t('order.progress.stepAuto'), desc: order.status === 'delivered' ? t('order.progress.descCompleted') : order.status === 'paid' ? t('order.progress.descInProgress') : t('order.progress.descQueued') },
+                                { step: 4, label: t('order.progress.stepInspect'), desc: order.status === 'delivered' ? t('order.progress.descDelivered') : t('order.progress.descAwaitingInspect') }
                             ].map((s) => {
                                 const isDone = currentStep > s.step || (currentStep === 4 && s.step === 4)
                                 const isCurrent = currentStep === s.step && order.status !== 'delivered'

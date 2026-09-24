@@ -67,6 +67,10 @@ export const POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT user_id, event_type, delta, business_key, status FROM user_point_ledger LIMIT 0",
 ]
 
+export const RATE_LIMIT_SCHEMA_DRIFT_PROBES: readonly string[] = [
+    "SELECT bucket, subject, window_start, count, expires_at FROM rate_limit_counters LIMIT 0",
+]
+
 export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     ...BASELINE_SCHEMA_DRIFT_PROBES,
     ...POINT_LEDGER_SCHEMA_DRIFT_PROBES,
@@ -74,6 +78,7 @@ export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     ...DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES,
     ...PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES,
     ...POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES,
+    ...RATE_LIMIT_SCHEMA_DRIFT_PROBES,
 ]
 
 /**

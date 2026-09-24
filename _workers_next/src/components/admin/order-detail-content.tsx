@@ -361,9 +361,10 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
                 className="rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10 text-xs"
                 onClick={handleDelete}
                 disabled={isSubmitting}
+                aria-label={t('admin.orders.delete')}
                 title={t('admin.orders.delete')}
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             )}
           </div>

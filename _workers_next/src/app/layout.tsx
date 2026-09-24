@@ -6,7 +6,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { MobileNavWrapper } from "@/components/mobile-nav-wrapper";
 import { Providers } from "@/components/providers";
 import { cn } from "@/lib/utils";
-import { getSetting } from "@/lib/db/queries";
+import { getAllSettings } from "@/lib/db/queries";
 import { Suspense } from "react";
 import { detectServerLocale } from "@/lib/i18n/server";
 import type { Locale } from "@/lib/i18n/shared";
@@ -46,19 +46,19 @@ export async function generateMetadata(): Promise<Metadata> {
   let shopLogo: string | null = null;
   let logoUpdatedAt: string | null = null;
   try {
-    const [name, desc, noIndexSetting, logo, logoSource, logoUpdatedAtSetting] = await Promise.all([
-      getSetting("shop_name"),
-      getSetting("shop_description"),
-      getSetting("noindex_enabled"),
-      getSetting("shop_logo"),
-      getSetting("shop_logo_source"),
-      getSetting("shop_logo_updated_at"),
-    ]);
-    shopName = name;
-    shopDescription = desc;
-    noIndex = noIndexSetting === 'true';
-    shopLogo = resolveEffectiveShopLogo(logo, logoSource).effectiveLogo || null;
-    logoUpdatedAt = logoUpdatedAtSetting;
+    // 单次读取全部 settings。
+    // 此前这里是 6 次 getSetting（每次一条 SELECT ... WHERE key = ?），
+    // 加上 RootLayoutContent 的 3 次，每个页面渲染根布局都要发 9 条 D1 查询。
+    // getAllSettings 由 React cache() 包裹，同一请求内多处调用只会真正读一次。
+    const allSettings = await getAllSettings();
+    shopName = allSettings.shop_name ?? null;
+    shopDescription = allSettings.shop_description ?? null;
+    noIndex = allSettings.noindex_enabled === 'true';
+    shopLogo = resolveEffectiveShopLogo(
+      allSettings.shop_logo ?? null,
+      allSettings.shop_logo_source ?? null,
+    ).effectiveLogo || null;
+    logoUpdatedAt = allSettings.shop_logo_updated_at ?? null;
   } catch {
     shopName = null;
     shopDescription = null;
@@ -100,15 +100,14 @@ async function RootLayoutContent({
   let currencyUnit: string | null = null;
   let initialLocale: Locale = "en";
   try {
-    const [resolvedThemeColor, resolvedThemeFont, resolvedCurrencyUnit, resolvedLocale] = await Promise.all([
-      getSetting("theme_color"),
-      getSetting("theme_font"),
-      getSetting("currency_unit"),
+    // 与 generateMetadata 共用同一次 getAllSettings()（React cache 去重）。
+    const [allSettings, resolvedLocale] = await Promise.all([
+      getAllSettings(),
       detectServerLocale(),
     ]);
-    themeColor = resolvedThemeColor;
-    themeFont = resolvedThemeFont;
-    currencyUnit = resolvedCurrencyUnit;
+    themeColor = allSettings.theme_color ?? null;
+    themeFont = allSettings.theme_font ?? null;
+    currencyUnit = allSettings.currency_unit ?? null;
     initialLocale = resolvedLocale;
   } catch {
     themeColor = null;
@@ -155,7 +154,7 @@ async function RootLayoutContent({
         <Providers themeColor={themeColor} initialLocale={initialLocale} currencyUnit={currencyUnit}>
           <div className="relative flex min-h-screen flex-col has-[[data-admin-root]]:h-dvh has-[[data-admin-root]]:min-h-0 has-[[data-admin-root]]:overflow-hidden">
             <SiteHeader />
-            <div className="flex-1 pb-16 md:pb-0 has-[[data-admin-root]]:flex has-[[data-admin-root]]:min-h-0 has-[[data-admin-root]]:flex-col has-[[data-admin-root]]:overflow-hidden has-[[data-admin-root]]:pb-0">{children}</div>
+            <div className="flex-1 safe-area-pb-nav has-[[data-admin-root]]:flex has-[[data-admin-root]]:min-h-0 has-[[data-admin-root]]:flex-col has-[[data-admin-root]]:overflow-hidden has-[[data-admin-root]]:pb-0">{children}</div>
             <SiteFooter />
             <MobileNavWrapper />
           </div>

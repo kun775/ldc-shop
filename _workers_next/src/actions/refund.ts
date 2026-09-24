@@ -15,6 +15,7 @@ import {
 import { selectReversibleCouponUsageIds } from "@/lib/coupons/refund-policy"
 import { auth } from "@/lib/auth"
 import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
+import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 
 export async function markOrderRefunded(orderId: string) {
     const session = await auth()
@@ -215,11 +216,11 @@ export async function proxyRefund(orderId: string) {
         money: Number(order.amount).toFixed(2),
     })
 
-    const resp = await fetch('https://credit.linux.do/epay/api.php', {
+    const resp = await fetchWithTimeout('https://credit.linux.do/epay/api.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body
-    })
+    }, 15_000)
 
     const text = await resp.text()
 
