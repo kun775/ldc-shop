@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises"
 const runtime = await import(new URL("./async-once.ts", import.meta.url).href)
 const {
     createAsyncOnceState,
+    createAsyncTtlCache,
     ensureOnce,
     isSchemaVersionSatisfied,
     parseSchemaVersion,
@@ -40,6 +41,42 @@ test("ensureOnce skips rerun after state becomes ready", async () => {
     })
 
     assert.equal(runCount, 1)
+})
+
+test("createAsyncTtlCache reuses successful loads and refreshes on expiration", async () => {
+  let now = 100
+  let calls = 0
+  const cache = createAsyncTtlCache(50, async () => ++calls, () => now)
+  assert.equal(await cache.get(), 1)
+  assert.equal(await cache.get(), 1)
+  now = 150
+  assert.equal(await cache.get(), 2)
+  assert.equal(calls, 2)
+})
+
+test("createAsyncTtlCache invalidation prevents stale in-flight loads from repopulating cache", async () => {
+  let resolveFirst!: (value: number) => void
+  let calls = 0
+  const cache = createAsyncTtlCache(100, () => {
+    calls += 1
+    return calls === 1 ? new Promise<number>((resolve) => { resolveFirst = resolve }) : Promise.resolve(2)
+  })
+  const first = cache.get()
+  cache.invalidate()
+  assert.equal(await cache.get(), 2)
+  resolveFirst(1)
+  assert.equal(await first, 1)
+  assert.equal(await cache.get(), 2)
+})
+
+test("createAsyncTtlCache retries rejected loads", async () => {
+  let calls = 0
+  const cache = createAsyncTtlCache(100, async () => {
+    if (++calls === 1) throw new Error("temporary")
+    return 3
+  })
+  await assert.rejects(cache.get(), /temporary/)
+  assert.equal(await cache.get(), 3)
 })
 
 test("parseSchemaVersion normalizes valid persisted values", () => {

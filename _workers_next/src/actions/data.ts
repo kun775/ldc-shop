@@ -4,7 +4,7 @@ import { db } from "@/lib/db"
 import { sql } from "drizzle-orm"
 import { revalidatePath, updateTag } from "next/cache"
 import { checkAdmin } from "@/actions/admin"
-import { ensureDatabaseInitialized, recalcProductAggregatesForMany } from "@/lib/db/queries"
+import { ensureDatabaseInitialized, invalidateVisitorCountCache, recalcProductAggregatesForMany } from "@/lib/db/queries"
 import { products } from "@/lib/db/schema"
 import { sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 
@@ -222,6 +222,7 @@ export async function importData(formData: FormData) {
         updateTag('home:announcement')
         updateTag('home:product-categories')
         updateTag('home:visitors')
+        invalidateVisitorCountCache()
         return { success: true, count: successCount, errors: errorCount }
     } catch (e: any) {
         return { success: false, error: sanitizeClientErrorMessage(e?.message, 'common.error') }

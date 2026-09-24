@@ -35,6 +35,35 @@ export async function ensureOnce(
     }
 }
 
+// Bounded per-isolate cache for public, non-user-specific data when the
+// deployed incremental/tag cache is unavailable. Failed loads are retried.
+export function createAsyncTtlCache<T>(
+    ttlMs: number,
+    load: () => Promise<T>,
+    now: () => number = Date.now,
+) {
+    let cached: { value: T; expiresAt: number } | null = null
+    let generation = 0
+
+    return {
+        async get(): Promise<T> {
+            if (cached && now() < cached.expiresAt) return cached.value
+            // Do not share an in-flight D1 promise across Cloudflare requests:
+            // I/O created for one request cannot be awaited in another context.
+            const currentGeneration = generation
+            const value = await load()
+            if (generation === currentGeneration) {
+                cached = { value, expiresAt: now() + ttlMs }
+            }
+            return value
+        },
+        invalidate() {
+            generation += 1
+            cached = null
+        },
+    }
+}
+
 export function parseSchemaVersion(value: unknown): number | null {
     const normalized = String(value ?? "").trim()
     if (!normalized) return null

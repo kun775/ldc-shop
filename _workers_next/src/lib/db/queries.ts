@@ -10,7 +10,7 @@ import {
     verifyAuditBaseStructure,
     verifyAuditStructure,
 } from "@/lib/audit/service";
-import { createAsyncOnceState, ensureOnce, parseSchemaVersion } from "@/lib/runtime/async-once";
+import { createAsyncOnceState, createAsyncTtlCache, ensureOnce, parseSchemaVersion } from "@/lib/runtime/async-once";
 import {
     BASELINE_SCHEMA_DRIFT_PROBES,
     DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES,
@@ -2138,8 +2138,19 @@ export async function getAdminOverview(lowStockThreshold = 5) {
 
 // Settings
 export const getSetting = cache(async (key: string): Promise<string | null> => {
-    const all = await getAllSettings();
-    return all[key] ?? null;
+    try {
+        const rows = await db.select({ value: settings.value })
+            .from(settings)
+            .where(eq(settings.key, key))
+            .limit(1);
+        return rows.length ? (rows[0].value || '') : null;
+    } catch (error: unknown) {
+        if (isMissingTable(error)) {
+            await ensureSettingsTable();
+            return null;
+        }
+        throw error;
+    }
 });
 
 export const getAllSettings = cache(async (): Promise<Record<string, string>> => {
@@ -2909,6 +2920,7 @@ async function migrateMalformedGitHubUserIds() {
             targetUserId,
             username: normalizedUsername,
         }))
+        invalidateVisitorCountCache();
     }
 }
 
@@ -2964,6 +2976,7 @@ async function migrateGitHubUsersDedupAndCanonicalize() {
                 targetUserId: canonical.userId,
                 username: normalizedUsername,
             }))
+            invalidateVisitorCountCache();
         }
     }
 }
@@ -3018,6 +3031,7 @@ async function backfillLoginUsersFromOrdersAndReviews() {
     }
 
     await markLoginUsersBackfilled();
+    invalidateVisitorCountCache();
 }
 
 async function persistLoginUser(userId: string, username?: string | null, email?: string | null) {
@@ -3040,6 +3054,7 @@ async function persistLoginUser(userId: string, username?: string | null, email?
             email: email || null,
             lastLoginAt: now,
         });
+        invalidateVisitorCountCache();
         if ((result as any)?.meta?.changes === 1) {
             try {
                 updateTag('home:visitors');
@@ -3138,6 +3153,7 @@ export async function updateLoginUserNickname(userId: string, nickname: string) 
             target: loginUsers.userId,
             set: { nickname, lastLoginAt: new Date() },
         });
+        invalidateVisitorCountCache();
     };
 
     try {
@@ -3170,6 +3186,7 @@ export async function updateLoginUserEmail(userId: string, email: string | null)
                 email: email || null,
                 lastLoginAt: new Date(),
             });
+            invalidateVisitorCountCache();
         }
     };
 
@@ -3287,17 +3304,28 @@ export async function cleanupExpiredCardsIfNeeded(throttleMs: number = 10 * 60 *
     return true;
 }
 
-export async function getVisitorCount(): Promise<number> {
+// Public site-wide total: keep a bounded per-Worker snapshot to avoid scanning
+// every login_users row for each page render (the deployed tag cache is dummy).
+// Each isolate refreshes within 5 minutes; mutations in this isolate invalidate immediately.
+const visitorCountCache = createAsyncTtlCache(5 * 60 * 1000, async () => {
+    await backfillLoginUsersFromOrdersAndReviews();
+    const result = await db.select({ count: sql<number>`count(*)` })
+        .from(loginUsers);
+    return Number(result[0]?.count || 0);
+});
+
+export function invalidateVisitorCountCache() {
+    visitorCountCache.invalidate();
+}
+
+export const getVisitorCount = cache(async (): Promise<number> => {
     try {
-        await backfillLoginUsersFromOrdersAndReviews();
-        const result = await db.select({ count: sql<number>`count(*)` })
-            .from(loginUsers);
-        return result[0]?.count || 0;
-    } catch (error: any) {
+        return await visitorCountCache.get();
+    } catch (error: unknown) {
         if (isMissingTable(error)) return 0;
         throw error;
     }
-}
+});
 
 export async function cancelExpiredOrders(filters: { productId?: string; userId?: string; orderId?: string } = {}) {
     const productId = filters.productId ?? null;
