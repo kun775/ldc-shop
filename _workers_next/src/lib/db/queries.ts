@@ -44,7 +44,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 36;
+const CURRENT_SCHEMA_VERSION = 37;
 const dbInitializationState = createAsyncOnceState();
 const databaseUpgradePreparationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
@@ -283,6 +283,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         '0034_point_ledger_preserve_history': pointLedgerHistory,
         '0035_review_order_id_unique': reviewOrderId,
         '0036_rate_limit_counters': rateLimit,
+        '0037_product_review_aggregates_rebuild': true, // 纯数据修复，没有结构探针。
     };
 }
 
@@ -502,23 +503,54 @@ async function ensureReviewsOrderIdIndex(): Promise<boolean> {
 /**
  * dedupeAndIndexReviewsOrderId 归并同一订单的历史重复评价并建立唯一索引。
  *
- * 升级项 0035 的执行体：先删除 order_id 重复行（保留 id 最小的一条，即最早提交的那条），
- * 再建立唯一索引。两步都幂等，可安全重复执行。
+ * 升级项 0035 的执行体：按保留行回算受影响商品，删除 order_id 重复行
+ * （保留 id 最小的一条，即最早提交的那条），再建立唯一索引。可安全重复执行。
  */
 async function dedupeAndIndexReviewsOrderId() {
-    try {
-        await db.run(sql`
-            DELETE FROM reviews
-            WHERE id NOT IN (
-                SELECT MIN(id) FROM reviews GROUP BY order_id
+    // 在删除前按保留行回算受影响商品，并与删除、建索引一起原子提交。
+    await runAtomicD1Batch([
+        {
+            query: `WITH retained AS (
+                SELECT MIN(id) AS id FROM reviews GROUP BY order_id
+            ), affected AS (
+                SELECT DISTINCT product_id FROM reviews
+                WHERE order_id IN (
+                    SELECT order_id FROM reviews GROUP BY order_id HAVING COUNT(*) > 1
+                )
+            ), aggregates AS (
+                SELECT product_id, AVG(rating) AS rating, COUNT(*) AS review_count
+                FROM reviews
+                WHERE id IN (SELECT id FROM retained) AND product_id IN (SELECT product_id FROM affected)
+                GROUP BY product_id
             )
-        `)
-    } catch (error: unknown) {
-        if (!isSchemaDriftError(error)) throw error
-    }
-    await db.run(sql.raw(
-        `CREATE UNIQUE INDEX IF NOT EXISTS ${REVIEW_ORDER_ID_UNIQUE_INDEX} ON reviews(order_id)`
-    ));
+            UPDATE products
+            SET rating = COALESCE((SELECT rating FROM aggregates WHERE product_id = products.id), 0),
+                review_count = COALESCE((SELECT review_count FROM aggregates WHERE product_id = products.id), 0)
+            WHERE id IN (SELECT product_id FROM affected)`,
+        },
+        {
+            query: `DELETE FROM reviews WHERE id NOT IN (
+                SELECT MIN(id) FROM reviews GROUP BY order_id
+            )`,
+        },
+        {
+            query: `CREATE UNIQUE INDEX IF NOT EXISTS ${REVIEW_ORDER_ID_UNIQUE_INDEX} ON reviews(order_id)`,
+        },
+    ]);
+}
+
+// 升级项 0037：单条 UPDATE 原子地从现存评价回算所有商品（包括零评价商品）。
+async function rebuildProductReviewAggregates() {
+    await db.run(sql`
+        WITH aggregates AS (
+            SELECT product_id, AVG(rating) AS rating, COUNT(*) AS review_count
+            FROM reviews
+            GROUP BY product_id
+        )
+        UPDATE products
+        SET rating = COALESCE((SELECT rating FROM aggregates WHERE product_id = products.id), 0),
+            review_count = COALESCE((SELECT review_count FROM aggregates WHERE product_id = products.id), 0)
+    `);
 }
 
 // ensureRateLimitStructureObjects 创建限流计数表与过期索引（升级项 0036 的执行体）。
@@ -606,6 +638,9 @@ async function runRegisteredDatabaseUpgrades() {
                 // 独立升级项：只创建限流计数表与过期索引。
                 await ensureRateLimitStructureObjects();
             },
+            async '0037_product_review_aggregates_rebuild'() {
+                await rebuildProductReviewAggregates();
+            },
         },
         verifyStructures: verifyDatabaseUpgradeStructures,
     });
@@ -619,7 +654,7 @@ export async function runPendingDatabaseUpgrades() {
     await prepareDatabaseForManualUpgrade();
     const result = await runRegisteredDatabaseUpgrades();
     const status = await getDatabaseUpgradeStatus();
-    if (!result.failed && status.structureHealthy) {
+    if (!result.failed && status.structureHealthy && status.pending === 0 && status.running === 0) {
         await setSetting('schema_version', String(CURRENT_SCHEMA_VERSION));
         markCurrentSchemaReady();
     }
@@ -1663,26 +1698,30 @@ function groupProductsAsVariants<T extends {
         byGroup.set(key, list);
     }
     const result: (T & { variantCount?: number; priceMin?: number; priceMax?: number; totalSold?: number; totalStock?: number; totalLocked?: number; totalReviewCount?: number; avgRating?: number; groupHot?: boolean; groupShared?: boolean; groupManual?: boolean; allVariantIds?: string[] })[] = [];
+    const toNumber = (value: unknown) => {
+        const number = Number(value ?? 0);
+        return Number.isFinite(number) ? number : 0;
+    };
     for (const list of byGroup.values()) {
         const rep = list.slice().sort((a, b) => {
-            const soA = a.sortOrder ?? 0;
-            const soB = b.sortOrder ?? 0;
+            const soA = toNumber(a.sortOrder);
+            const soB = toNumber(b.sortOrder);
             if (soA !== soB) return soA - soB;
             const ca = a.createdAt ? new Date(a.createdAt).getTime() : 0;
             const cb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
             return ca - cb;
         })[0];
-        const prices = list.map((p) => parseFloat(p.price)).filter((n) => Number.isFinite(n));
+        const prices = list.map((p) => Number.parseFloat(String(p.price))).filter((n) => Number.isFinite(n));
         const variantCount = list.length;
         const priceMin = prices.length ? Math.min(...prices) : undefined;
         const priceMax = prices.length ? Math.max(...prices) : undefined;
 
         if (variantCount > 1) {
-            const totalSold = list.reduce((s, p) => s + (p.sold || 0), 0);
-            const totalStock = list.reduce((s, p) => s + (p.stock || 0), 0);
-            const totalLocked = list.reduce((s, p) => s + (p.locked || 0), 0);
-            const totalReviewCount = list.reduce((s, p) => s + (p.reviewCount || 0), 0);
-            const ratingSum = list.reduce((s, p) => s + (p.rating || 0) * (p.reviewCount || 0), 0);
+            const totalSold = list.reduce((s, p) => s + toNumber(p.sold), 0);
+            const totalStock = list.reduce((s, p) => s + toNumber(p.stock), 0);
+            const totalLocked = list.reduce((s, p) => s + toNumber(p.locked), 0);
+            const totalReviewCount = list.reduce((s, p) => s + toNumber(p.reviewCount), 0);
+            const ratingSum = list.reduce((s, p) => s + toNumber(p.rating) * toNumber(p.reviewCount), 0);
             const avgRating = totalReviewCount > 0 ? ratingSum / totalReviewCount : 0;
             const groupHot = list.some((p) => !!p.isHot);
             const groupShared = list.some((p) => !!p.isShared);
@@ -1693,14 +1732,7 @@ function groupProductsAsVariants<T extends {
             result.push({ ...rep });
         }
     }
-    result.sort((a, b) => {
-        const soA = a.sortOrder ?? 0;
-        const soB = b.sortOrder ?? 0;
-        if (soA !== soB) return soA - soB;
-        const ca = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const cb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return ca - cb;
-    });
+    // 保留 SQL 选定的组顺序，避免默认排序覆盖用户指定的排序。
     return result;
 }
 
@@ -2540,101 +2572,225 @@ export async function searchActiveProducts(params: {
     const category = (params.category || '').trim()
     const sort = (params.sort || 'default').trim()
     const fulfillment = (params.fulfillment || 'all').trim()
-    const page = params.page && params.page > 0 ? params.page : 1
-    const pageSize = Math.min(params.pageSize && params.pageSize > 0 ? params.pageSize : 24, 60)
+    const page = params.page && params.page > 0 ? Math.max(1, Math.trunc(params.page)) : 1
+    const pageSize = Math.min(params.pageSize && params.pageSize > 0 ? Math.max(1, Math.trunc(params.pageSize)) : 24, 60)
     const offset = (page - 1) * pageSize
+    const visibilityThreshold = resolveVisibilityThreshold(params.isLoggedIn, params.trustLevel)
+    const categoryFilter = category && category !== 'all'
+        ? sql`AND p.category = ${category}`
+        : sql``
+    const candidateCategoryFilter = category && category !== 'all'
+        ? sql`AND e.category = ${category}`
+        : sql``
+    const candidateFilter = sql`WHERE 1 = 1
+        ${candidateCategoryFilter}
+        ${q
+            ? sql`AND (e.name LIKE ${`%${q}%`} OR COALESCE(e.description_raw, '') LIKE ${`%${q}%`})`
+            : sql``}`
 
-    const whereParts: any[] = [eq(products.isActive, true), visibilityCondition(params.isLoggedIn, params.trustLevel)]
-    if (category && category !== 'all') whereParts.push(eq(products.category, category))
-    if (q) {
-        const like = `%${q}%`
-        whereParts.push(or(
-            sql`${products.name} LIKE ${like}`,
-            sql`COALESCE(${products.description}, '') LIKE ${like}`
-        ))
-    }
-    const whereExpr = and(...whereParts)
+    const groupOrder = (() => {
+        switch (sort) {
+            case 'priceAsc':
+                return sql`g.price_min ASC, g.rep_sort_order ASC, g.rep_created_at ASC, g.group_key ASC`
+            case 'priceDesc':
+                return sql`g.price_max DESC, g.rep_sort_order ASC, g.rep_created_at ASC, g.group_key ASC`
+            case 'stockDesc':
+                return sql`g.stock_count DESC, g.rep_sort_order ASC, g.rep_created_at ASC, g.group_key ASC`
+            case 'soldDesc':
+                return sql`g.total_sold DESC, g.rep_sort_order ASC, g.rep_created_at ASC, g.group_key ASC`
+            case 'hot':
+                return sql`g.group_hot DESC, g.rep_sort_order ASC, g.rep_created_at ASC, g.group_key ASC`
+            default:
+                return sql`g.rep_sort_order ASC, g.rep_created_at ASC, g.group_key ASC`
+        }
+    })()
 
-    const orderByParts: any[] = []
-    switch (sort) {
-        case 'priceAsc':
-            orderByParts.push(asc(products.price))
-            break
-        case 'priceDesc':
-            orderByParts.push(desc(products.price))
-            break
-        case 'stockDesc':
-            orderByParts.push(desc(sql<number>`COALESCE(${products.stockCount}, 0) + COALESCE(${products.lockedCount}, 0)`))
-            break
-        case 'soldDesc':
-            orderByParts.push(desc(sql<number>`COALESCE(${products.soldCount}, 0)`))
-            break
-        case 'hot':
-            orderByParts.push(desc(sql<number>`case when ${products.isHot} = 1 then 1 else 0 end`))
-            orderByParts.push(asc(products.sortOrder), desc(products.createdAt))
-            break
-        default:
-            orderByParts.push(asc(products.sortOrder), desc(products.createdAt))
-            break
-    }
+    const buildGroupedQuery = (selectPageRows: boolean) => sql`
+        WITH eligible AS (
+            SELECT
+                p.id,
+                p.name,
+                p.description AS description_raw,
+                CASE
+                    WHEN p.description IS NULL THEN NULL
+                    WHEN length(p.description) > 1000 THEN substr(p.description, 1, 1000)
+                    ELSE p.description
+                END AS description,
+                p.price,
+                p.compare_at_price,
+                p.image,
+                p.category,
+                p.is_hot,
+                p.is_shared,
+                p.fulfillment_mode,
+                p.purchase_limit,
+                p.point_discount_enabled,
+                COALESCE(p.point_discount_percent, 0) AS point_discount_percent,
+                COALESCE(p.sort_order, 0) AS sort_order,
+                p.created_at,
+                p.variant_group_id,
+                p.variant_label,
+                COALESCE(p.stock_count, 0) AS stock,
+                COALESCE(p.locked_count, 0) AS locked,
+                COALESCE(p.sold_count, 0) AS sold,
+                COALESCE(p.rating, 0) AS rating,
+                COALESCE(p.review_count, 0) AS review_count,
+                COALESCE(NULLIF(TRIM(p.variant_group_id), ''), p.id) AS group_key
+            FROM products p
+            WHERE p.is_active = 1
+              AND COALESCE(p.visibility_level, -1) <= ${visibilityThreshold}
+              ${categoryFilter}
+        ), candidate_groups AS (
+            SELECT e.group_key
+            FROM eligible e
+            ${candidateFilter}
+            GROUP BY e.group_key
+        ), grouped_base AS (
+            SELECT
+                e.group_key,
+                COUNT(*) AS variant_count,
+                MIN(CAST(e.price AS REAL)) AS price_min,
+                MAX(CAST(e.price AS REAL)) AS price_max,
+                SUM(e.sold) AS total_sold,
+                SUM(e.stock) AS total_stock,
+                SUM(e.locked) AS total_locked,
+                SUM(e.review_count) AS total_review_count,
+                CASE WHEN SUM(e.review_count) > 0
+                    THEN SUM(e.rating * e.review_count) * 1.0 / SUM(e.review_count)
+                    ELSE 0
+                END AS avg_rating,
+                MAX(CASE WHEN e.is_hot = 1 THEN 1 ELSE 0 END) AS group_hot,
+                MAX(CASE WHEN e.is_shared = 1 THEN 1 ELSE 0 END) AS group_shared,
+                MAX(CASE WHEN e.fulfillment_mode = 'manual' THEN 1 ELSE 0 END) AS group_manual,
+                MIN(e.sort_order) AS rep_sort_order,
+                MIN(e.fulfillment_mode) AS singleton_fulfillment_mode
+            FROM eligible e
+            INNER JOIN candidate_groups c ON c.group_key = e.group_key
+            GROUP BY e.group_key
+        ), grouped AS (
+            SELECT
+                b.*,
+                COALESCE((
+                    SELECT MIN(COALESCE(e2.created_at, 0))
+                    FROM eligible e2
+                    WHERE e2.group_key = b.group_key
+                      AND e2.sort_order = b.rep_sort_order
+                ), 0) AS rep_created_at,
+                CASE
+                    WHEN b.variant_count > 1 THEN
+                        CASE
+                            WHEN (b.group_shared = 1 AND b.total_stock > 0)
+                              OR b.total_stock >= ${INFINITE_STOCK}
+                                THEN ${INFINITE_STOCK}
+                            ELSE b.total_stock + b.total_locked
+                        END
+                    WHEN b.singleton_fulfillment_mode = 'manual' THEN b.total_stock
+                    WHEN b.group_shared = 1 THEN
+                        CASE WHEN b.total_stock > 0 THEN ${INFINITE_STOCK} ELSE 0 END
+                    WHEN b.total_stock >= ${INFINITE_STOCK} THEN ${INFINITE_STOCK}
+                    ELSE b.total_stock + b.total_locked
+                END AS stock_count
+            FROM grouped_base b
+        ), filtered_groups AS (
+            SELECT g.*
+            FROM grouped g
+            WHERE (
+                ${fulfillment === 'auto' ? sql`g.group_manual = 0` : fulfillment === 'manual' ? sql`g.group_manual = 1` : fulfillment === 'inStock' ? sql`g.stock_count > 0` : sql`1 = 1`}
+            )
+        )
+        ${selectPageRows
+            ? sql` , ranked_groups AS (
+                    SELECT
+                        g.*,
+                        ROW_NUMBER() OVER (ORDER BY ${groupOrder}) AS group_rank
+                    FROM filtered_groups g
+                ), page_groups AS (
+                    SELECT *
+                    FROM ranked_groups
+                    WHERE group_rank > ${offset}
+                      AND group_rank <= ${offset + pageSize}
+                )
+                SELECT
+                    e.id,
+                    e.name,
+                    e.description,
+                    e.price,
+                    e.compare_at_price,
+                    e.image,
+                    e.category,
+                    e.is_hot,
+                    e.is_shared,
+                    e.fulfillment_mode,
+                    e.purchase_limit,
+                    e.point_discount_enabled,
+                    e.point_discount_percent,
+                    e.sort_order,
+                    e.created_at,
+                    e.variant_group_id,
+                    e.variant_label,
+                    e.stock,
+                    e.locked,
+                    e.sold,
+                    e.rating,
+                    e.review_count,
+                    e.group_key,
+                    pg.variant_count,
+                    pg.group_rank
+                FROM page_groups pg
+                INNER JOIN eligible e ON e.group_key = pg.group_key
+                ORDER BY pg.group_rank, e.sort_order, e.created_at, e.id
+            `
+            : sql`SELECT COUNT(*) AS total FROM filtered_groups`}
+    `
 
-    const rows = await withProductColumnFallback(async () => {
-        return await db.select({
-            id: products.id,
-            name: products.name,
-            // 列表页最多展示两行摘要，整篇 Markdown 只在详情页需要。
-            // 这里截断到 1000 字符，避免把长描述原样搬进 RSC payload。
-            description: sql<string | null>`CASE
-                WHEN ${products.description} IS NULL THEN NULL
-                WHEN length(${products.description}) > 1000 THEN substr(${products.description}, 1, 1000)
-                ELSE ${products.description}
-            END`,
-            price: products.price,
-            compareAtPrice: products.compareAtPrice,
-            image: products.image,
-            category: products.category,
-            isHot: products.isHot,
-            isShared: products.isShared,
-            fulfillmentMode: products.fulfillmentMode,
-            purchaseLimit: products.purchaseLimit,
-            pointDiscountEnabled: products.pointDiscountEnabled,
-            pointDiscountPercent: sql<number>`COALESCE(${products.pointDiscountPercent}, 0)`,
-            sortOrder: products.sortOrder,
-            createdAt: products.createdAt,
-            variantGroupId: products.variantGroupId,
-            variantLabel: products.variantLabel,
-            stock: sql<number>`COALESCE(${products.stockCount}, 0)`,
-            locked: sql<number>`COALESCE(${products.lockedCount}, 0)`,
-            sold: sql<number>`COALESCE(${products.soldCount}, 0)`,
-            rating: sql<number>`COALESCE(${products.rating}, 0)`,
-            reviewCount: sql<number>`COALESCE(${products.reviewCount}, 0)`
-        })
-            .from(products)
-            .where(whereExpr)
-            .orderBy(...orderByParts)
+    const result = await withProductColumnFallback(async () => {
+        const [countResult, pageResult] = await Promise.all([
+            db.all(buildGroupedQuery(false)),
+            db.all(buildGroupedQuery(true)),
+        ])
+        return {
+            countRows: Array.isArray(countResult)
+                ? countResult
+                : (countResult as any)?.results || (countResult as any)?.rows || [],
+            pageRows: Array.isArray(pageResult)
+                ? pageResult
+                : (pageResult as any)?.results || (pageResult as any)?.rows || [],
+        }
     })
 
-    // 变体归组只能在 SQL 之外完成：同一变体组的行不保证相邻，且库存/价格/销量
-    // 都要按组聚合，因此「总数」与「分页」只能发生在归组之后。这是当前 schema
-    // 的固有限制（详见 outputs/ldc-shop-code-review-2026-09-24.md §2.1 路线 B）。
+    const rows = result.pageRows.map((row: any) => ({
+        id: String(row.id),
+        name: String(row.name ?? ''),
+        description: row.description == null ? null : String(row.description),
+        price: String(row.price ?? ''),
+        compareAtPrice: row.compare_at_price == null ? null : String(row.compare_at_price),
+        image: row.image == null ? null : String(row.image),
+        category: row.category == null ? null : String(row.category),
+        isHot: row.is_hot === true || row.is_hot === 1,
+        isShared: row.is_shared === true || row.is_shared === 1,
+        fulfillmentMode: row.fulfillment_mode == null ? null : String(row.fulfillment_mode),
+        purchaseLimit: row.purchase_limit == null ? null : Number(row.purchase_limit),
+        pointDiscountEnabled: row.point_discount_enabled === true || row.point_discount_enabled === 1,
+        pointDiscountPercent: Number(row.point_discount_percent ?? 0),
+        sortOrder: row.sort_order == null ? 0 : Number(row.sort_order),
+        createdAt: row.created_at == null ? null : new Date(Number(row.created_at)),
+        variantGroupId: row.variant_group_id == null ? null : String(row.variant_group_id),
+        variantLabel: row.variant_label == null ? null : String(row.variant_label),
+        stock: Number(row.stock ?? 0),
+        locked: Number(row.locked ?? 0),
+        sold: Number(row.sold ?? 0),
+        rating: Number(row.rating ?? 0),
+        reviewCount: Number(row.review_count ?? 0),
+    }))
     const grouped = groupProductsAsVariants(rows)
-    const withStock = grouped.map((item) => ({ ...item, stockCount: resolveProductStockCount(item) }))
-
-    const filtered = fulfillment && fulfillment !== 'all'
-        ? withStock.filter((item) => {
-            if (fulfillment === 'auto') return !isManualFulfillment(item)
-            if (fulfillment === 'manual') return isManualFulfillment(item)
-            if (fulfillment === 'inStock') return item.stockCount > 0
-            return true
-        })
-        : withStock
-
-    const total = filtered.length
-    const items = filtered.slice(offset, offset + pageSize)
+    const items = grouped.map((item) => ({
+        ...item,
+        stockCount: resolveProductStockCount(item),
+    }))
 
     return {
         items,
-        total,
+        total: Number(result.countRows[0]?.total ?? 0),
         page,
         pageSize,
     }

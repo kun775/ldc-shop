@@ -56,6 +56,12 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
         description: '新增 rate_limit_counters 表与过期索引，为下单、收款、评价等写入口提供跨 isolate 的原子计数限流基础。',
         verifiesStructure: true,
     },
+    {
+        id: '0037_product_review_aggregates_rebuild',
+        name: '商品评价汇总全量重算',
+        description: '从现存 reviews 全量重算所有商品的评分与评价数，修复此前 0035 已执行时可能遗留的错误汇总。',
+        verifiesStructure: false,
+    },
 ] as const
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']
@@ -125,6 +131,12 @@ export function buildDatabaseUpgradeStatus(
 
         if (status === 'running' && !staleRunning) {
             // 仍在有效声明窗口内，保持 running，避免并发管理员重复执行。
+        } else if (!definition.verifiesStructure) {
+            // 数据修复没有可用的结构探针，只能以本升级项的执行记录判定完成。
+            if (staleRunning) {
+                status = 'failed'
+                errorMessage = '上次升级执行已中断，可以重新执行。'
+            }
         } else if (itemHealthy) {
             // 真实结构优先于历史记录。兼容升级注册表建立前已完成的结构，
             // 也修复“后续升级漂移导致早期升级被误标失败”的历史状态。
@@ -132,7 +144,7 @@ export function buildDatabaseUpgradeStatus(
             errorId = null
             errorMessage = null
         } else if (record?.status === 'applied') {
-            repairRequired = definition.verifiesStructure
+            repairRequired = true
             status = 'pending'
             errorMessage = '检测到数据库结构不完整，需要重新执行结构修复。'
         } else if (staleRunning) {
@@ -159,7 +171,7 @@ export function buildDatabaseUpgradeStatus(
     const failed = items.filter((item) => item.status === 'failed').length
     const pending = items.filter((item) => item.status === 'pending' || item.status === 'failed').length
     const structureHealthy = DATABASE_UPGRADE_DEFINITIONS.every(
-        (definition) => structureHealth[definition.id],
+        (definition) => !definition.verifiesStructure || structureHealth[definition.id],
     )
 
     return {

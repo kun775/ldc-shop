@@ -19,25 +19,23 @@ import {
   broadcastReads,
   wishlistItems,
   wishlistVotes,
+  coupons,
+  couponProducts,
+  couponUsages,
+  couponUserCounters,
+  orderDeliveryFiles,
+  userPointLedger,
+  databaseMigrations,
 } from "@/lib/db/schema"
-import { and, desc, eq, or, sql } from "drizzle-orm"
-import { ensureDatabaseInitialized, getProducts, normalizeTimestampMs } from "@/lib/db/queries"
+import { and, desc, eq, getTableColumns, getTableName, gt, inArray, lt, notInArray, or, sql } from "drizzle-orm"
+import { integer, primaryKey, sqliteTable, text, type AnySQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core"
+import { ensureDatabaseInitialized } from "@/lib/db/queries"
 import { isAdminIdentity } from "@/lib/admin-auth"
 import { prepareManualStockProductsForSqlBackup } from "@/lib/manual-stock-backup"
 import { logServerError, sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 
 function requireAdminIdentity(user?: { id?: string | null; username?: string | null } | null) {
   if (!isAdminIdentity(user)) throw new Error("Unauthorized")
-}
-
-function isMissingTable(error: any) {
-  const errorString = JSON.stringify(error)
-  return (
-    error?.message?.includes("does not exist") ||
-    error?.cause?.message?.includes("does not exist") ||
-    errorString.includes("42P01") ||
-    (errorString.includes("relation") && errorString.includes("does not exist"))
-  )
 }
 
 function csvEscape(value: any): string {
@@ -47,38 +45,28 @@ function csvEscape(value: any): string {
   return str
 }
 
-function toCsv(headers: string[], rows: Array<Record<string, any>>): string {
-  const lines: string[] = []
-  lines.push(headers.map(csvEscape).join(","))
-  for (const row of rows) {
-    lines.push(headers.map((h) => csvEscape(row[h])).join(","))
-  }
-  return lines.join("\n") + "\n"
-}
-
-function csvResponse(csv: string, filename: string) {
-  return new NextResponse(`\uFEFF${csv}`, {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-    },
-  })
-}
-
 function escapeString(val: string): string {
-  return "'" + val.replace(/'/g, "''") + "'"
+  // 导入器逐行解析 INSERT，SQL 字符串中的换行必须改成单行表达式。
+  return "'" + val.replace(/'/g, "''").replace(/\r/g, "' || char(13) || '").replace(/\n/g, "' || char(10) || '") + "'"
 }
 
 function formatSqlValue(val: any): string {
-  if (val === null || val === undefined) return "NULL"
+  if (val === undefined) throw new Error("Missing column value in export")
+  if (val === null) return "NULL"
   if (typeof val === "boolean") return val ? "1" : "0"
   if (val instanceof Date) {
-    // Check if valid date
-    if (isNaN(val.getTime())) return "NULL"
-    return "'" + val.toISOString().replace("T", " ").replace("Z", "") + "'"
+    if (isNaN(val.getTime())) throw new Error("Invalid date in export")
+    return String(val.getTime())
   }
-  if (typeof val === "number") return String(val)
+  if (typeof val === "number") {
+    if (!Number.isFinite(val)) throw new Error("Invalid number in export")
+    return String(val)
+  }
   if (typeof val === "string") return escapeString(val)
+  if (val instanceof ArrayBuffer || ArrayBuffer.isView(val)) {
+    const bytes = val instanceof ArrayBuffer ? new Uint8Array(val) : new Uint8Array(val.buffer, val.byteOffset, val.byteLength)
+    return `X'${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}'`
+  }
   return escapeString(JSON.stringify(val))
 }
 
@@ -90,132 +78,178 @@ function rowToInsertOrIgnore(table: string, row: Record<string, any>): string {
 }
 
 // ---------------------------------------------------------------------------
-// 全量导出（type=full）的内存边界
-//
-// 此前 type=full 会把**每一张表**一次性 `.all()` 读进内存，再把整份 dump
-// 拼成一个大字符串。Worker 内存上限 128MB：当 cards / orders 达到数万行时，
-// 「全表行对象 + 完整字符串」两份副本很容易直接 OOM，而 OOM 的 Worker 是
-// 被直接杀掉的，管理员只会看到一个无响应的下载。
-//
-// 现在改为:
-//   1. 每张表按页读取（EXPORT_PAGE_SIZE），峰值内存只有一页；
-//   2. 通过 ReadableStream 边生成边下发，不再持有整份 dump；
-//   3. 每张表仍设硬上限（EXPORT_MAX_ROWS），命中时用响应头
-//      `X-Export-Truncated: 1` 明确告知，而不是静默丢数据。
+// 导出按页读取并通过 ReadableStream 边生成边下发，避免把整库加载到内存。
+// 不设置行数上限：全量备份必须包含每一行，不能静默截断。
 // ---------------------------------------------------------------------------
 const EXPORT_PAGE_SIZE = 500
-const EXPORT_MAX_ROWS = 20_000
+
+// 独立 SQL DDL 表的列名及类型在这里显式声明，不从 JS 键名推测 SQL 列名。
+const auditEvents = sqliteTable("audit_events", {
+  id: text("id").primaryKey(),
+  event_name: text("event_name"),
+  category: text("category"),
+  severity: text("severity"),
+  result: text("result"),
+  actor_type: text("actor_type"),
+  actor_user_id: text("actor_user_id"),
+  actor_username: text("actor_username"),
+  target_type: text("target_type"),
+  target_id: text("target_id"),
+  error_id: text("error_id"),
+  error_key: text("error_key"),
+  source: text("source"),
+  ip_hash: text("ip_hash"),
+  user_agent: text("user_agent"),
+  metadata: text("metadata"),
+  created_at: integer("created_at"),
+})
+
+const platformErrorLogs = sqliteTable("platform_error_logs", {
+  id: text("id").primaryKey(),
+  fingerprint: text("fingerprint"),
+  fingerprint_bucket: integer("fingerprint_bucket"),
+  scope: text("scope"),
+  severity: text("severity"),
+  error_code: text("error_code"),
+  message: text("message"),
+  stack: text("stack"),
+  error_chain: text("error_chain"),
+  actor_type: text("actor_type"),
+  actor_user_id: text("actor_user_id"),
+  actor_username: text("actor_username"),
+  request_method: text("request_method"),
+  request_path: text("request_path"),
+  ip_hash: text("ip_hash"),
+  user_agent: text("user_agent"),
+  occurrence_count: integer("occurrence_count"),
+  first_seen_at: integer("first_seen_at"),
+  last_seen_at: integer("last_seen_at"),
+  status: text("status"),
+  handled_at: integer("handled_at"),
+  handled_by: text("handled_by"),
+  handle_note: text("handle_note"),
+  created_at: integer("created_at"),
+  updated_at: integer("updated_at"),
+  error_id: text("error_id"),
+})
+
+const rateLimitCounters = sqliteTable("rate_limit_counters", {
+  bucket: text("bucket").notNull(),
+  subject: text("subject").notNull(),
+  window_start: integer("window_start").notNull(),
+  count: integer("count"),
+  expires_at: integer("expires_at"),
+}, (table) => [primaryKey({ columns: [table.bucket, table.subject, table.window_start] })])
 
 interface ExportTableSpec {
-  name: string
-  /** 读取一页；表不存在时由调用方兜底为空页 */
-  fetchPage: (limit: number, offset: number) => Promise<Array<Record<string, any>>>
+  table: SQLiteTable
+  /** 必须是该表的唯一主键；复合主键按声明顺序排列。 */
+  keys: readonly string[]
+  /** 仅迁移前的限流运行态表可不存在；不存在时必须在导出中显式标记。 */
+  optional?: boolean
 }
 
 const FULL_EXPORT_TABLES: ExportTableSpec[] = [
-  { name: "categories", fetchPage: (limit, offset) => db.select().from(categories).limit(limit).offset(offset) },
-  { name: "products", fetchPage: (limit, offset) => db.select().from(products).limit(limit).offset(offset) },
-  { name: "cards", fetchPage: (limit, offset) => db.select().from(cards).limit(limit).offset(offset) },
-  { name: "orders", fetchPage: (limit, offset) => db.select().from(orders).limit(limit).offset(offset) },
-  { name: "reviews", fetchPage: (limit, offset) => db.select().from(reviews).limit(limit).offset(offset) },
-  { name: "review_replies", fetchPage: (limit, offset) => db.select().from(reviewReplies).limit(limit).offset(offset) },
-  { name: "settings", fetchPage: (limit, offset) => db.select().from(settings).limit(limit).offset(offset) },
-  { name: "login_users", fetchPage: (limit, offset) => db.select().from(loginUsers).limit(limit).offset(offset) },
-  { name: "user_notifications", fetchPage: (limit, offset) => db.select().from(userNotifications).limit(limit).offset(offset) },
-  { name: "user_messages", fetchPage: (limit, offset) => db.select().from(userMessages).limit(limit).offset(offset) },
-  { name: "admin_messages", fetchPage: (limit, offset) => db.select().from(adminMessages).limit(limit).offset(offset) },
-  { name: "broadcast_messages", fetchPage: (limit, offset) => db.select().from(broadcastMessages).limit(limit).offset(offset) },
-  { name: "broadcast_reads", fetchPage: (limit, offset) => db.select().from(broadcastReads).limit(limit).offset(offset) },
-  { name: "wishlist_items", fetchPage: (limit, offset) => db.select().from(wishlistItems).limit(limit).offset(offset) },
-  { name: "wishlist_votes", fetchPage: (limit, offset) => db.select().from(wishlistVotes).limit(limit).offset(offset) },
-  { name: "refund_requests", fetchPage: (limit, offset) => db.select().from(refundRequests).limit(limit).offset(offset) },
-  { name: "daily_checkins_v2", fetchPage: (limit, offset) => db.select().from(dailyCheckins).limit(limit).offset(offset) },
+  { table: categories, keys: ["id"] },
+  { table: products, keys: ["id"] },
+  { table: cards, keys: ["id"] },
+  { table: orders, keys: ["orderId"] },
+  { table: reviews, keys: ["id"] },
+  { table: reviewReplies, keys: ["id"] },
+  { table: settings, keys: ["key"] },
+  { table: loginUsers, keys: ["userId"] },
+  { table: userNotifications, keys: ["id"] },
+  { table: userMessages, keys: ["id"] },
+  { table: adminMessages, keys: ["id"] },
+  { table: broadcastMessages, keys: ["id"] },
+  { table: broadcastReads, keys: ["id"] },
+  { table: wishlistItems, keys: ["id"] },
+  { table: wishlistVotes, keys: ["id"] },
+  { table: refundRequests, keys: ["id"] },
+  { table: dailyCheckins, keys: ["id"] },
+  { table: coupons, keys: ["id"] },
+  { table: couponProducts, keys: ["couponId", "productId"] },
+  { table: couponUsages, keys: ["id"] },
+  { table: couponUserCounters, keys: ["couponId", "userId"] },
+  { table: orderDeliveryFiles, keys: ["id"] },
+  { table: userPointLedger, keys: ["id"] },
+  { table: databaseMigrations, keys: ["id"] },
+  { table: auditEvents, keys: ["id"] },
+  { table: platformErrorLogs, keys: ["id"] },
+  { table: rateLimitCounters, keys: ["bucket", "subject", "window_start"], optional: true },
 ]
 
-/** 缺表按空处理（历史库可能还没建某张表），其余错误照常抛出 */
-async function readExportPage(spec: ExportTableSpec, limit: number, offset: number) {
-  try {
-    return (await spec.fetchPage(limit, offset)) as Array<Record<string, any>>
-  } catch (error) {
-    if (isMissingTable(error)) return []
-    throw error
+type ExportBound = { spec: ExportTableSpec; highWater: unknown[] | null; missing: boolean }
+
+function keyColumns(spec: ExportTableSpec): AnySQLiteColumn[] {
+  const columns = getTableColumns(spec.table)
+  return spec.keys.map((key) => columns[key])
+}
+
+/** 按复合主键做字典序比较，避免并发插删造成 OFFSET 跳页或重复。 */
+function afterKey(columns: AnySQLiteColumn[], values: unknown[]) {
+  return or(...columns.map((column, index) => and(
+    ...columns.slice(0, index).map((previous, i) => eq(previous, values[i] as string)),
+    gt(column, values[index] as string),
+  )))
+}
+
+async function captureExportBounds(): Promise<ExportBound[]> {
+  const bounds: ExportBound[] = []
+  const existing = await db.all(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`) as Array<{ name: string }>
+  const names = new Set(existing.map((row) => row.name))
+  const unknown = existing.filter((row) => !FULL_EXPORT_TABLES.some((spec) => getTableName(spec.table) === row.name))
+  if (unknown.length) throw new Error(`Unrecognized tables in full export: ${unknown.map((row) => row.name).join(", ")}`)
+  for (const spec of FULL_EXPORT_TABLES) {
+    const name = getTableName(spec.table)
+    if (spec.optional && !names.has(name)) {
+      bounds.push({ spec, highWater: null, missing: true })
+      continue
+    }
+    const actualColumns = await db.all(sql.raw(`PRAGMA table_info("${name}")`)) as Array<{ name: string }>
+    const mappedColumns = Object.values(getTableColumns(spec.table)).map((column) => column.name)
+    if (actualColumns.length && (actualColumns.length !== mappedColumns.length || actualColumns.some((column) => !mappedColumns.includes(column.name)))) {
+      throw new Error(`Column mismatch in full export: ${name}`)
+    }
+    const columns = keyColumns(spec)
+    // 空表也校验全部列，防止旧库缺列时返回看似成功的备份。
+    await db.select().from(spec.table).limit(0)
+    const selectedKeys = Object.fromEntries(spec.keys.map((key, index) => [key, columns[index]]))
+    const [last] = await db.select(selectedKeys).from(spec.table).orderBy(...columns.map(desc)).limit(1)
+    bounds.push({ spec, highWater: last ? spec.keys.map((key) => last[key]) : null, missing: false })
+  }
+  return bounds
+}
+
+async function* readExportPages(bound: ExportBound): AsyncIterable<Array<Record<string, any>>> {
+  const { spec, highWater } = bound
+  if (!highWater) return
+  const columns = keyColumns(spec)
+  let cursor: unknown[] | null = null
+  while (true) {
+    const page: Array<Record<string, any>> = await db.select().from(spec.table)
+      .where(and(
+        cursor ? afterKey(columns, cursor) : undefined,
+        // 唯一上界：允许等于高水位，但不读取其后新增的行。
+        or(...columns.map((column, index) => and(
+          ...columns.slice(0, index).map((previous, i) => eq(previous, highWater[i] as string)),
+          lt(column, highWater[index] as string),
+        )), and(...columns.map((column, i) => eq(column, highWater[i] as string)))),
+      ))
+      .orderBy(...columns)
+      .limit(EXPORT_PAGE_SIZE)
+    if (page.length) yield page
+    if (page.length < EXPORT_PAGE_SIZE) break
+    const last = page[page.length - 1]
+    cursor = spec.keys.map((key) => last[key])
   }
 }
 
-/** 把 camelCase 键映射为 SQL 导出用的 snake_case */
-const SQL_COLUMN_MAPPING: Record<string, string> = {
-  userId: 'user_id',
-  productId: 'product_id',
-  orderId: 'order_id',
-  reviewId: 'review_id',
-  itemId: 'item_id',
-  messageId: 'message_id',
-  // Products
-  compareAtPrice: 'compare_at_price',
-  isHot: 'is_hot',
-  isActive: 'is_active',
-  isShared: 'is_shared',
-  sortOrder: 'sort_order',
-  purchaseLimit: 'purchase_limit',
-  purchaseWarning: 'purchase_warning',
-  visibilityLevel: 'visibility_level',
-  manualStockCount: 'manual_stock_count',
-  stockCount: 'stock_count',
-  lockedCount: 'locked_count',
-  soldCount: 'sold_count',
-  reviewCount: 'review_count',
-  variantGroupId: 'variant_group_id',
-  variantLabel: 'variant_label',
-  purchaseQuestions: 'purchase_questions',
-  checkoutFields: 'checkout_fields',
-  fulfillmentMode: 'fulfillment_mode',
-  productImages: 'product_images',
-  createdAt: 'created_at',
-  // Cards
-  cardKey: 'card_key',
-  isUsed: 'is_used',
-  reservedOrderId: 'reserved_order_id',
-  reservedAt: 'reserved_at',
-  expiresAt: 'expires_at',
-  usedAt: 'used_at',
-  // Orders
-  productName: 'product_name',
-  tradeNo: 'trade_no',
-  paidAt: 'paid_at',
-  deliveredAt: 'delivered_at',
-  pointsUsed: 'points_used',
-  manualStockQuantity: 'manual_stock_quantity',
-  checkoutFieldValues: 'checkout_field_values',
-  deliveryNote: 'delivery_note',
-  currentPaymentId: 'current_payment_id',
-  cardIds: 'card_ids',
-  // Reviews
-  // orderId, productId, userId already covered
-  // Settings
-  updatedAt: 'updated_at',
-  // Login Users
-  lastLoginAt: 'last_login_at',
-  lastCheckinAt: 'last_checkin_at',
-  consecutiveDays: 'consecutive_days',
-  isBlocked: 'is_blocked',
-  desktopNotificationsEnabled: 'desktop_notifications_enabled',
-  // Refund Requests
-  adminUsername: 'admin_username',
-  adminNote: 'admin_note',
-  processedAt: 'processed_at',
-  // Notification / message tables
-  titleKey: 'title_key',
-  contentKey: 'content_key',
-  isRead: 'is_read',
-  // Broadcast / admin messages
-  targetType: 'target_type',
-  targetValue: 'target_value',
-}
-
-function toSnakeCaseRow(row: Record<string, any>): Record<string, any> {
+/** Drizzle 的字段元数据是 SQL 列名的唯一来源，不推测 camelCase 转换规则。 */
+function toSqlColumnRow(spec: ExportTableSpec, row: Record<string, any>): Record<string, any> {
   const mapped: Record<string, any> = {}
-  for (const [key, value] of Object.entries(row)) {
-    mapped[SQL_COLUMN_MAPPING[key] || key] = value
+  for (const [key, column] of Object.entries(getTableColumns(spec.table))) {
+    mapped[column.name] = row[key]
   }
   return mapped
 }
@@ -225,7 +259,7 @@ function textStreamResponse(
   chunks: AsyncIterable<string>,
   contentType: string,
   filename: string,
-  truncated: { value: boolean },
+  bounds?: ExportBound[],
 ): NextResponse {
   const encoder = new TextEncoder()
   const iterator = chunks[Symbol.asyncIterator]()
@@ -240,11 +274,16 @@ function textStreamResponse(
         }
         controller.enqueue(encoder.encode(value))
       } catch (error) {
+        logServerError("admin:data-export-stream", error)
         controller.error(error)
       }
     },
     async cancel() {
-      await iterator.return?.()
+      try {
+        await iterator.return?.()
+      } catch (error) {
+        logServerError("admin:data-export-stream", error)
+      }
     },
   })
 
@@ -253,87 +292,155 @@ function textStreamResponse(
     "Content-Disposition": `attachment; filename="${filename}"`,
     "Cache-Control": "no-store",
   }
-  if (truncated.value) headers["X-Export-Truncated"] = "1"
+  const missing = bounds?.filter((bound) => bound.missing).map((bound) => getTableName(bound.spec.table)) ?? []
+  if (missing.length) headers["X-Export-Missing-Optional-Tables"] = missing.join(",")
 
   return new NextResponse(stream, { headers })
 }
 
 /** 流式 JSON：{"table":[...],...}，逐行拼接，不构造整份对象 */
-async function* streamFullJson(truncated: { value: boolean }): AsyncIterable<string> {
+async function* streamFullJson(bounds: ExportBound[]): AsyncIterable<string> {
   yield "{"
   let firstTable = true
 
-  for (const spec of FULL_EXPORT_TABLES) {
-    let offset = 0
-    let page = await readExportPage(spec, EXPORT_PAGE_SIZE, offset)
+  for (const bound of bounds) {
     if (!firstTable) yield ","
     firstTable = false
-    yield `${JSON.stringify(spec.name)}:[`
+    const name = getTableName(bound.spec.table)
+    if (bound.missing) {
+      // null 与存在但为空的 [] 不同，保存为文件后仍能辨认缺失的可选表。
+      yield `${JSON.stringify(name)}:null`
+      continue
+    }
+    yield `${JSON.stringify(name)}:[`
 
     let wroteAny = false
-    while (true) {
+    for await (const page of readExportPages(bound)) {
       for (const row of page) {
         yield wroteAny ? `,${JSON.stringify(row)}` : JSON.stringify(row)
         wroteAny = true
       }
-      if (page.length < EXPORT_PAGE_SIZE) break
-      offset += page.length
-      if (offset >= EXPORT_MAX_ROWS) {
-        truncated.value = true
-        break
-      }
-      page = await readExportPage(spec, EXPORT_PAGE_SIZE, offset)
-      if (!page.length) break
     }
-
     yield "]"
   }
 
   yield "}"
 }
 
-/** 流式 SQL dump：逐条 INSERT OR IGNORE */
-async function* streamFullSql(
-  adjustedProducts: Array<Record<string, any>>,
-  truncated: { value: boolean },
-): AsyncIterable<string> {
-  yield `-- Database Migration Dump (Vercel Postgres -> Cloudflare D1)\n`
+/** 按页读取并流式生成 SQL dump；products 页内按 product_id 聚合预占量后回算库存。 */
+async function* streamFullSql(bounds: ExportBound[]): AsyncIterable<string> {
+  yield `-- Database Migration Dump (Cloudflare D1)\n`
   yield `-- Generated at ${new Date().toISOString()}\n`
-  yield `\n`
-  yield `-- Note: Transaction statements removed for D1 compatibility\n`
+  yield `-- Keyset high-water per table; concurrent updates/deletes and cross-table changes are NOT snapshot-consistent.\n`
+  yield `-- Import only if the completion marker appears at EOF and the download finished successfully.\n`
+  const missing = bounds.filter((bound) => bound.missing).map((bound) => getTableName(bound.spec.table))
+  if (missing.length) yield `-- Missing optional tables: ${missing.join(", ")} (not present in source database).\n`
   yield `\n`
 
-  for (const spec of FULL_EXPORT_TABLES) {
-    // products 需要先按手工库存规则回算，直接使用预先调整好的结果集，
-    // 不再为了这一个用途把整张 orders 表读进内存。
-    if (spec.name === "products") {
-      for (const row of adjustedProducts) {
-        yield `${rowToInsertOrIgnore(spec.name, toSnakeCaseRow(row))}\n`
+  for (const bound of bounds) {
+    const { spec } = bound
+    const name = getTableName(spec.table)
+    for await (const page of readExportPages(bound)) {
+      if (name === "products") {
+        const productIds = page.map((product) => product.id).filter((id): id is string => typeof id === "string" && id.length > 0)
+        const reservationRows = productIds.length
+          ? await db
+              .select({
+                productId: orders.productId,
+                manualStockQuantity: sql<number>`coalesce(sum(${orders.manualStockQuantity}), 0)`,
+              })
+              .from(orders)
+              .where(and(
+                inArray(orders.productId, productIds),
+                sql`${orders.manualStockQuantity} > 0`,
+                or(sql`${orders.status} IS NULL`, notInArray(orders.status, ["cancelled", "failed", "refunded"])),
+              ))
+              .groupBy(orders.productId)
+          : []
+        for (const row of prepareManualStockProductsForSqlBackup(page, reservationRows)) {
+          yield `${rowToInsertOrIgnore(name, toSqlColumnRow(spec, row))}\n`
+        }
+      } else {
+        for (const row of page) {
+          yield `${rowToInsertOrIgnore(name, toSqlColumnRow(spec, row))}\n`
+        }
       }
-      yield `\n`
-      continue
-    }
-
-    let offset = 0
-    let page = await readExportPage(spec, EXPORT_PAGE_SIZE, offset)
-    while (true) {
-      for (const row of page) {
-        yield `${rowToInsertOrIgnore(spec.name, toSnakeCaseRow(row))}\n`
-      }
-      if (page.length < EXPORT_PAGE_SIZE) break
-      offset += page.length
-      if (offset >= EXPORT_MAX_ROWS) {
-        truncated.value = true
-        break
-      }
-      page = await readExportPage(spec, EXPORT_PAGE_SIZE, offset)
-      if (!page.length) break
     }
     yield `\n`
   }
 
   yield `-- End of Dump\n`
-  yield `\n`
+}
+
+async function* streamJsonRows<T>(
+  fetchPage: (limit: number, cursor: unknown[] | null) => Promise<T[]>,
+  keyOf: (row: T) => unknown[],
+  mapRow: (row: T) => Record<string, any>,
+): AsyncIterable<string> {
+  yield "["
+  let first = true
+  let cursor: unknown[] | null = null
+  while (true) {
+    const page = await fetchPage(EXPORT_PAGE_SIZE, cursor)
+    for (const row of page) {
+      yield `${first ? "" : ","}${JSON.stringify(mapRow(row))}`
+      first = false
+    }
+    if (page.length < EXPORT_PAGE_SIZE) break
+    cursor = keyOf(page[page.length - 1])
+  }
+  yield "]"
+}
+
+async function* streamCsvRows<T>(
+  headers: string[],
+  fetchPage: (limit: number, cursor: unknown[] | null) => Promise<T[]>,
+  keyOf: (row: T) => unknown[],
+  mapRow: (row: T) => Record<string, any>,
+): AsyncIterable<string> {
+  yield `\uFEFF${headers.map(csvEscape).join(",")}\n`
+  let cursor: unknown[] | null = null
+  while (true) {
+    const page = await fetchPage(EXPORT_PAGE_SIZE, cursor)
+    for (const row of page) {
+      const mapped = mapRow(row)
+      yield `${headers.map((header) => csvEscape(mapped[header])).join(",")}\n`
+    }
+    if (page.length < EXPORT_PAGE_SIZE) break
+    cursor = keyOf(page[page.length - 1])
+  }
+}
+
+function mapOrderExportRow(order: any, includeSecrets: boolean) {
+  return {
+    orderId: order.orderId,
+    username: order.username,
+    email: includeSecrets ? order.email : null,
+    productId: order.productId,
+    productName: order.productName,
+    amount: order.amount,
+    status: order.status,
+    tradeNo: includeSecrets ? order.tradeNo : null,
+    cardKey: includeSecrets ? order.cardKey : null,
+    cardIds: includeSecrets ? order.cardIds : null,
+    createdAt: order.createdAt,
+    paidAt: order.paidAt,
+    deliveredAt: order.deliveredAt,
+    userId: order.userId,
+  }
+}
+
+function mapReviewExportRow(review: any) {
+  return {
+    id: review.id,
+    productId: review.productId,
+    orderId: review.orderId,
+    userId: review.userId,
+    username: review.username,
+    rating: review.rating,
+    comment: review.comment,
+    createdAt: review.createdAt,
+  }
 }
 
 export async function GET(req: Request) {
@@ -365,199 +472,180 @@ export async function GET(req: Request) {
         ))
       }
       const whereExpr = whereParts.length ? and(...whereParts) : undefined
-
-      const orderRows = await db.query.orders.findMany({
-        where: whereExpr,
-        orderBy: [desc(normalizeTimestampMs(orders.createdAt))],
-        limit: EXPORT_MAX_ROWS,
-      })
-      const mapped = orderRows.map((o: any) => ({
-        orderId: o.orderId,
-        username: o.username,
-        email: includeSecrets ? o.email : null,
-        productId: o.productId,
-        productName: o.productName,
-        amount: o.amount,
-        status: o.status,
-        tradeNo: includeSecrets ? o.tradeNo : null,
-        cardKey: includeSecrets ? o.cardKey : null,
-        cardIds: includeSecrets ? o.cardIds : null,
-        createdAt: o.createdAt,
-        paidAt: o.paidAt,
-        deliveredAt: o.deliveredAt,
-        userId: o.userId,
-      }))
+      const [{ orderId: highWater } = { orderId: null }] = await db.select({ orderId: orders.orderId })
+        .from(orders).where(whereExpr).orderBy(desc(orders.orderId)).limit(1)
+      const fetchPage = (limit: number, cursor: unknown[] | null) => highWater === null
+        ? Promise.resolve([] as Array<typeof orders.$inferSelect>)
+        : db.select().from(orders)
+          .where(and(whereExpr, cursor ? gt(orders.orderId, cursor[0] as string) : undefined, sql`${orders.orderId} <= ${highWater}`))
+          .orderBy(orders.orderId).limit(limit)
+      const keyOf = (order: typeof orders.$inferSelect) => [order.orderId]
+      const headers = [
+        "orderId",
+        "username",
+        "email",
+        "productId",
+        "productName",
+        "amount",
+        "status",
+        "tradeNo",
+        "cardKey",
+        "cardIds",
+        "createdAt",
+        "paidAt",
+        "deliveredAt",
+        "userId",
+      ]
+      const mapRow = (order: any) => mapOrderExportRow(order, includeSecrets)
 
       if (format === "json") {
-        return NextResponse.json(mapped, {
-          headers: {
-            "Content-Disposition": `attachment; filename="orders.json"`,
-          },
-        })
+        return textStreamResponse(
+          streamJsonRows(fetchPage, keyOf, mapRow),
+          "application/json; charset=utf-8",
+          "orders.json",
+        )
       }
 
       if (format === "csv") {
-        const headers = [
-          "orderId",
-          "username",
-          "email",
-          "productId",
-          "productName",
-          "amount",
-          "status",
-          "tradeNo",
-          "cardKey",
-          "cardIds",
-          "createdAt",
-          "paidAt",
-          "deliveredAt",
-          "userId",
-        ]
-        const csv = toCsv(headers, mapped as any)
-        return csvResponse(csv, `orders${includeSecrets ? "-with-secrets" : ""}.csv`)
+        return textStreamResponse(
+          streamCsvRows(headers, fetchPage, keyOf, mapRow),
+          "text/csv; charset=utf-8",
+          `orders${includeSecrets ? "-with-secrets" : ""}.csv`,
+        )
       }
     }
 
     if (type === "products") {
-      const rows = await getProducts()
-      const mapped = rows.map((p: any) => ({
-        id: p.id,
-        name: p.name,
-        description: p.description,
-        price: p.price,
-        category: p.category,
-        image: p.image,
-        isActive: p.isActive ?? true,
-        sortOrder: p.sortOrder ?? 0,
-        purchaseLimit: p.purchaseLimit,
-        visibilityLevel: p.visibilityLevel ?? -1,
-        stock: p.stock,
-        sold: p.sold,
-      }))
+      const [{ id: highWater } = { id: null }] = await db.select({ id: products.id })
+        .from(products).orderBy(desc(products.id)).limit(1)
+      const fetchPage = async (limit: number, cursor: unknown[] | null) => {
+        if (highWater === null) return []
+        const rows = await db.select().from(products)
+          .where(and(cursor ? gt(products.id, cursor[0] as string) : undefined, sql`${products.id} <= ${highWater}`))
+          .orderBy(products.id).limit(limit)
+        return rows.map((product: any) => ({
+          id: product.id,
+          name: product.name,
+          description: product.description,
+          price: product.price,
+          category: product.category,
+          image: product.image,
+          isActive: product.isActive ?? true,
+          sortOrder: product.sortOrder ?? 0,
+          purchaseLimit: product.purchaseLimit,
+          visibilityLevel: product.visibilityLevel ?? -1,
+          stock: product.stockCount,
+          sold: product.soldCount,
+        }))
+      }
+      const headers = [
+        "id",
+        "name",
+        "description",
+        "price",
+        "category",
+        "image",
+        "isActive",
+        "sortOrder",
+        "purchaseLimit",
+        "visibilityLevel",
+        "stock",
+        "sold",
+      ]
 
       if (format === "json") {
-        return NextResponse.json(mapped, {
-          headers: {
-            "Content-Disposition": `attachment; filename="products.json"`,
-          },
-        })
+        return textStreamResponse(
+          streamJsonRows(fetchPage, (row) => [row.id], (row) => row),
+          "application/json; charset=utf-8",
+          "products.json",
+        )
       }
 
       if (format === "csv") {
-        const headers = [
-          "id",
-          "name",
-          "description",
-          "price",
-          "category",
-          "image",
-          "isActive",
-          "sortOrder",
-          "purchaseLimit",
-          "visibilityLevel",
-          "stock",
-          "sold",
-        ]
-        const csv = toCsv(headers, mapped as any)
-        return csvResponse(csv, "products.csv")
+        return textStreamResponse(
+          streamCsvRows(headers, fetchPage, (row) => [row.id], (row) => row),
+          "text/csv; charset=utf-8",
+          "products.csv",
+        )
       }
     }
 
     if (type === "reviews") {
-      const rows = await db.query.reviews.findMany({
-        orderBy: [desc(reviews.createdAt)],
-        limit: EXPORT_MAX_ROWS,
-      })
-      const mapped = rows.map((r: any) => ({
-        id: r.id,
-        productId: r.productId,
-        orderId: r.orderId,
-        userId: r.userId,
-        username: r.username,
-        rating: r.rating,
-        comment: r.comment,
-        createdAt: r.createdAt,
-      }))
+      const [{ id: highWater } = { id: null }] = await db.select({ id: reviews.id })
+        .from(reviews).orderBy(desc(reviews.id)).limit(1)
+      const fetchPage = (limit: number, cursor: unknown[] | null) => highWater === null
+        ? Promise.resolve([] as Array<typeof reviews.$inferSelect>)
+        : db.select().from(reviews)
+          .where(and(cursor ? gt(reviews.id, cursor[0] as number) : undefined, sql`${reviews.id} <= ${highWater}`))
+          .orderBy(reviews.id).limit(limit)
+      const keyOf = (review: typeof reviews.$inferSelect) => [review.id]
+      const headers = [
+        "id",
+        "productId",
+        "orderId",
+        "userId",
+        "username",
+        "rating",
+        "comment",
+        "createdAt",
+      ]
 
       if (format === "json") {
-        return NextResponse.json(mapped, {
-          headers: {
-            "Content-Disposition": `attachment; filename="reviews.json"`,
-          },
-        })
+        return textStreamResponse(
+          streamJsonRows(fetchPage, keyOf, mapReviewExportRow),
+          "application/json; charset=utf-8",
+          "reviews.json",
+        )
       }
 
       if (format === "csv") {
-        const headers = [
-          "id",
-          "productId",
-          "orderId",
-          "userId",
-          "username",
-          "rating",
-          "comment",
-          "createdAt",
-        ]
-        const csv = toCsv(headers, mapped as any)
-        return csvResponse(csv, "reviews.csv")
+        return textStreamResponse(
+          streamCsvRows(headers, fetchPage, keyOf, mapReviewExportRow),
+          "text/csv; charset=utf-8",
+          "reviews.csv",
+        )
       }
     }
 
     if (type === "settings") {
-      const rows = await db.query.settings.findMany({
-        orderBy: [desc(settings.updatedAt)],
-      })
-      const mapped = rows.map((s: any) => ({
-        key: s.key,
-        value: s.value,
-        updatedAt: s.updatedAt,
-      }))
-      return NextResponse.json(mapped, {
-        headers: {
-          "Content-Disposition": `attachment; filename="settings.json"`,
-        },
-      })
+      const [{ key: highWater } = { key: null }] = await db.select({ key: settings.key })
+        .from(settings).orderBy(desc(settings.key)).limit(1)
+      const fetchPage = async (limit: number, cursor: unknown[] | null) => {
+        if (highWater === null) return []
+        const rows = await db.select().from(settings)
+          .where(and(cursor ? gt(settings.key, cursor[0] as string) : undefined, sql`${settings.key} <= ${highWater}`))
+          .orderBy(settings.key).limit(limit)
+        return rows.map((setting: any) => ({
+          key: setting.key,
+          value: setting.value,
+          updatedAt: setting.updatedAt,
+        }))
+      }
+      return textStreamResponse(
+        streamJsonRows(fetchPage, (row) => [row.key], (row) => row),
+        "application/json; charset=utf-8",
+        "settings.json",
+      )
     }
 
     if (type === "full") {
       if (format === "json") {
-        const truncated = { value: false }
-        // 先取第一页：让「认证 / 参数 / 首查失败」仍然返回结构化 JSON 错误，
-        // 而不是已经开始下发 200 之后才中断连接。
-        await readExportPage(FULL_EXPORT_TABLES[0], 1, 0)
+        const bounds = await captureExportBounds()
         return textStreamResponse(
-          streamFullJson(truncated),
+          streamFullJson(bounds),
           "application/json; charset=utf-8",
           "full-dump.json",
-          truncated,
+          bounds,
         )
       }
 
       if (format === "sql") {
-        const truncated = { value: false }
-        // 手工库存回算只需要 products 全表（小）与 orders 的三个窄列，
-        // 不再为了它读取整张 orders。
-        const productRows = (await db.select().from(products).limit(EXPORT_MAX_ROWS)) as Array<Record<string, any>>
-        const manualStockReservations = (await db
-          .select({
-            productId: orders.productId,
-            status: orders.status,
-            manualStockQuantity: orders.manualStockQuantity,
-          })
-          .from(orders)
-          .where(sql`${orders.manualStockQuantity} > 0`)
-          .limit(EXPORT_MAX_ROWS)) as Array<Record<string, any>>
-
-        const adjustedProducts = prepareManualStockProductsForSqlBackup(
-          productRows,
-          manualStockReservations,
-        ) as Array<Record<string, any>>
-
+        const bounds = await captureExportBounds()
         return textStreamResponse(
-          streamFullSql(adjustedProducts, truncated),
+          streamFullSql(bounds),
           "text/plain; charset=utf-8",
           "migration_data.sql",
-          truncated,
+          bounds,
         )
       }
     }

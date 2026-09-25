@@ -31,6 +31,7 @@ import { processOrderFulfillment } from "@/lib/order-processing"
 import { enforceRateLimit } from "@/lib/rate-limit"
 
 const MAX_ORDER_QUANTITY = 10000
+const CARD_UPDATE_BATCH_SIZE = 80
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 function isValidEmail(value: string | null | undefined) {
@@ -531,21 +532,15 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         console.error('[Order] Failed to load card delivery note:', error)
                         return ''
                     })
-                    const cardIds = reservedCards.map(c => c.id)
-                    if (cardIds.length > 0) {
-                        if (product.isShared) {
-                            // For shared products, DO NOT mark as used.
-                            // Just update order status (below)
-                        } else {
-                            // 批量标记已用：此前是对每张卡各发一条 UPDATE，N 张卡 = N 次
-                            // D1 写往返（还要 N 次子请求），大额下单会直接撞上子请求上限。
-                            // 改成单条 WHERE id IN (...)，写入次数从 O(N) 降到 O(1)。
+                    if (!product.isShared) {
+                        // 控制每条 UPDATE 的绑定变量数，避免大额零元订单超过 D1/SQLite 上限。
+                        for (let offset = 0; offset < uniqueCardIds.length; offset += CARD_UPDATE_BATCH_SIZE) {
                             await db.update(cards).set({
                                 isUsed: true,
                                 usedAt: new Date(),
                                 reservedOrderId: null,
                                 reservedAt: null
-                            }).where(inArray(cards.id, cardIds));
+                            }).where(inArray(cards.id, uniqueCardIds.slice(offset, offset + CARD_UPDATE_BATCH_SIZE)));
                         }
                     }
 
@@ -690,22 +685,25 @@ export async function createOrder(productId: string, quantity: number = 1, email
             }
 
             if (uniqueCardIds.length > 0) {
-                try {
-                    if (isZeroPrice && !product.isShared) {
-                        await db.update(cards).set({
-                            isUsed: false,
-                            usedAt: null,
-                            reservedOrderId: null,
-                            reservedAt: null
-                        }).where(inArray(cards.id, uniqueCardIds))
-                    } else {
-                        await db.update(cards).set({
-                            reservedOrderId: null,
-                            reservedAt: null
-                        }).where(inArray(cards.id, uniqueCardIds))
+                for (let offset = 0; offset < uniqueCardIds.length; offset += CARD_UPDATE_BATCH_SIZE) {
+                    const batchIds = uniqueCardIds.slice(offset, offset + CARD_UPDATE_BATCH_SIZE)
+                    try {
+                        if (isZeroPrice && !product.isShared) {
+                            await db.update(cards).set({
+                                isUsed: false,
+                                usedAt: null,
+                                reservedOrderId: null,
+                                reservedAt: null
+                            }).where(inArray(cards.id, batchIds))
+                        } else {
+                            await db.update(cards).set({
+                                reservedOrderId: null,
+                                reservedAt: null
+                            }).where(inArray(cards.id, batchIds))
+                        }
+                    } catch {
+                        // best effort rollback；一批失败仍尝试释放其余卡密
                     }
-                } catch {
-                    // best effort rollback
                 }
             }
 

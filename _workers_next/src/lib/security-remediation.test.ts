@@ -43,7 +43,7 @@ test('cancel cleanup attempts points, coupons, and cards independently', () => {
 
 test('schema metadata includes the point-ledger history upgrade', () => {
     const queries = source('./db/queries.ts')
-    assert.match(queries, /CURRENT_SCHEMA_VERSION = 36/)
+    assert.match(queries, /CURRENT_SCHEMA_VERSION = 37/)
     assert.match(queries, /runAtomicD1Batch\(USER_POINT_LEDGER_REBUILD_STATEMENTS/)
 })
 

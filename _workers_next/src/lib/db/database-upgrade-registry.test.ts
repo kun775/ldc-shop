@@ -142,6 +142,37 @@ test('rate limit counters are registered as their own upgrade item', () => {
     assert.ok(item.description.length > 0)
 })
 
+test('0037 data repair is independent of 0035 and does not use structure health as proof of execution', () => {
+    const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
+    const repairId = '0037_product_review_aggregates_rebuild'
+    assert.ok(ids.indexOf(repairId) > ids.indexOf('0036_rate_limit_counters'))
+    assert.equal(DATABASE_UPGRADE_DEFINITIONS.find((item: { id: string }) => item.id === repairId)?.verifiesStructure, false)
+
+    const previous = allAppliedRecords().filter((record: { id: string }) => record.id !== repairId)
+    const status = buildDatabaseUpgradeStatus(previous, health(), 1_000)
+    assert.equal(status.items.find((item: { id: string }) => item.id === '0035_review_order_id_unique')?.status, 'applied')
+    assert.equal(status.items.find((item: { id: string }) => item.id === repairId)?.status, 'pending')
+    assert.equal(status.pending, 1)
+    assert.equal(status.structureHealthy, true)
+
+    const completed = buildDatabaseUpgradeStatus(allAppliedRecords(), { ...health(), [repairId]: false }, 1_000)
+    assert.equal(completed.items.find((item: { id: string }) => item.id === repairId)?.status, 'applied')
+    assert.equal(completed.structureHealthy, true, '数据项不得污染结构健康度')
+})
+
+test('0037 failed and stale records remain retryable, but applied record does not reopen', () => {
+    const repairId = '0037_product_review_aggregates_rebuild'
+    const record = allAppliedRecords().find((item: { id: string }) => item.id === repairId)
+    assert.ok(record)
+    const failed = buildDatabaseUpgradeStatus([{ ...record, status: 'failed', errorId: 'failure' }], health(), 1_000)
+    assert.equal(failed.items.find((item: { id: string }) => item.id === repairId)?.status, 'failed')
+    const stale = buildDatabaseUpgradeStatus([{ ...record, status: 'running', startedAt: 1_000 }], health(), 1_000 + DATABASE_UPGRADE_RUNNING_TIMEOUT_MS)
+    assert.equal(stale.items.find((item: { id: string }) => item.id === repairId)?.status, 'failed')
+    const applied = buildDatabaseUpgradeStatus([record], { ...health(), [repairId]: false }, 1_000)
+    assert.equal(applied.items.find((item: { id: string }) => item.id === repairId)?.status, 'applied')
+    assert.equal(applied.items.find((item: { id: string }) => item.id === repairId)?.repairRequired, false)
+})
+
 test('registered upgrades start from the schema version before the registry was introduced', () => {
     assert.equal(DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION, 27)
     assert.equal(supportsRegisteredDatabaseUpgrades(null), false)
@@ -179,7 +210,7 @@ test('drift only reopens the upgrade item that owns the missing structure', () =
     }
 })
 
-test('healthy structure overrides missing or failed historical records', () => {
+test('healthy structure overrides missing or failed historical structural records only', () => {
     const failed = {
         ...appliedRecord(0),
         status: 'failed',
@@ -188,12 +219,16 @@ test('healthy structure overrides missing or failed historical records', () => {
     }
     const status = buildDatabaseUpgradeStatus([failed], health(), 1_000)
 
-    assert.equal(status.applied, DATABASE_UPGRADE_DEFINITIONS.length)
-    assert.equal(status.pending, 0)
+    assert.equal(status.applied, DATABASE_UPGRADE_DEFINITIONS.length - 1)
+    assert.equal(status.pending, 1)
     for (const item of status.items) {
-        assert.equal(item.status, 'applied')
-        assert.equal(item.errorId, null)
-        assert.equal(item.errorMessage, null)
+        if (!DATABASE_UPGRADE_DEFINITIONS.find((definition: { id: string }) => definition.id === item.id)?.verifiesStructure) {
+            assert.equal(item.status, 'pending')
+        } else {
+            assert.equal(item.status, 'applied')
+            assert.equal(item.errorId, null)
+            assert.equal(item.errorMessage, null)
+        }
     }
 })
 
@@ -210,6 +245,6 @@ test('stale running upgrade becomes retryable failure', () => {
     const status = buildDatabaseUpgradeStatus([record], structureHealth, checkedAt)
     assert.equal(status.running, 0)
     assert.equal(status.failed, 1)
-    assert.equal(status.pending, 1, 'only the stale item remains retryable')
-    assert.equal(status.applied, DATABASE_UPGRADE_DEFINITIONS.length - 1)
+    assert.equal(status.pending, 2, 'stale structural item and missing data repair remain retryable')
+    assert.equal(status.applied, DATABASE_UPGRADE_DEFINITIONS.length - 2)
 })

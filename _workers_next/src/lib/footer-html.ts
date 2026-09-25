@@ -14,7 +14,23 @@ export type FooterNode =
     | { kind: 'text'; text: string }
     | { kind: 'link'; href: string; text: string }
 
-const ANCHOR_PATTERN = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a\s*>/gi
+const ANCHOR_PATTERN = /<a\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/a\s*>/gi
+const ATTRIBUTE_PATTERN = /\s+([^\s"'=<>`/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/gy
+
+/** 逐个消费属性，避免把 data-href 或 title 值中的 href= 误作链接地址。 */
+function readAnchorHref(attributes: string): string | null {
+    let offset = 0
+    while (offset < attributes.length) {
+        ATTRIBUTE_PATTERN.lastIndex = offset
+        const match = ATTRIBUTE_PATTERN.exec(attributes)
+        if (!match) return null
+        offset = ATTRIBUTE_PATTERN.lastIndex
+        if (match[1].toLowerCase() === 'href') {
+            return match[2] ?? match[3] ?? match[4] ?? null
+        }
+    }
+    return null
+}
 // 只把「真的像标签」的片段去掉：`<` 后面必须紧跟标签名（或 / ? !）。
 // 这样 `a < b & c > d` 这类纯文本不会被误吞，交给转义处理。
 const ANY_TAG_PATTERN = /<(?:!--[\s\S]*?-->|\/?[a-zA-Z][^>]*|\?[^>]*|![^>]*)>/g
@@ -30,6 +46,34 @@ function stripTags(input: string): string {
     return input.replace(ANY_TAG_PATTERN, '')
 }
 
+// 先去标签、再解码实体；解码后的标记只会作为 React 文本节点，不再参与 HTML 解析。
+function decodeHtmlEntities(input: string): string {
+    let decoded = input
+    while (true) {
+        const next = decoded.replace(/&(#(?:[xX][0-9a-fA-F]+|[0-9]+)|amp|lt|gt|quot|apos|nbsp);/g, (entity, name: string) => {
+            if (name[0] === '#') {
+                const codePoint = name[1] === 'x' || name[1] === 'X'
+                    ? parseInt(name.slice(2), 16)
+                    : parseInt(name.slice(1), 10)
+                return codePoint > 0 && codePoint <= 0x10ffff && !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+                    ? String.fromCodePoint(codePoint)
+                    : entity
+            }
+            switch (name) {
+                case 'amp': return '&'
+                case 'lt': return '<'
+                case 'gt': return '>'
+                case 'quot': return '"'
+                case 'apos': return "'"
+                case 'nbsp': return '\u00a0'
+                default: return entity
+            }
+        })
+        if (next === decoded) return decoded
+        decoded = next
+    }
+}
+
 /** 把一段纯文本按裸 URL 切成 text / link 节点 */
 function pushTextNodes(nodes: FooterNode[], text: string) {
     if (!text) return
@@ -38,6 +82,7 @@ function pushTextNodes(nodes: FooterNode[], text: string) {
     let match: RegExpExecArray | null
     BARE_URL_PATTERN.lastIndex = 0
 
+    text = decodeHtmlEntities(text)
     while ((match = BARE_URL_PATTERN.exec(text)) !== null) {
         const raw = match[0]
         let url = raw
@@ -78,8 +123,8 @@ export function toFooterNodes(input: string): FooterNode[] {
 
     while ((match = ANCHOR_PATTERN.exec(source)) !== null) {
         const raw = match[0]
-        const href = (match[1] ?? match[2] ?? match[3] ?? '').trim()
-        const label = stripTags(match[4] ?? '').replace(/\s+/g, ' ').trim()
+        const href = decodeHtmlEntities(readAnchorHref(match[1] ?? '') ?? '').trim()
+        const label = decodeHtmlEntities(stripTags(match[2] ?? '')).replace(/\s+/g, ' ').trim()
 
         if (match.index > lastIndex) {
             pushTextNodes(nodes, stripTags(source.slice(lastIndex, match.index)))
