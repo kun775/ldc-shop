@@ -26,6 +26,11 @@ import {
   orderDeliveryFiles,
   userPointLedger,
   databaseMigrations,
+  cardServiceAllocations,
+  cardServiceStagedCards,
+  cardServiceCards,
+  cardServiceOperations,
+  cardServiceProductConfigs,
 } from "@/lib/db/schema"
 import { and, desc, eq, getTableColumns, getTableName, gt, inArray, lt, notInArray, or, sql } from "drizzle-orm"
 import { integer, primaryKey, sqliteTable, text, type AnySQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core"
@@ -174,6 +179,14 @@ const FULL_EXPORT_TABLES: ExportTableSpec[] = [
   { table: orderDeliveryFiles, keys: ["id"] },
   { table: userPointLedger, keys: ["id"] },
   { table: databaseMigrations, keys: ["id"] },
+  // 远端卡密账本。必须全量导出：`card_service_cards` 是「已交付订单 ↔ 远端卡」
+  // 的唯一凭据链，一旦漏导，恢复后的库再也无法作废或对账这些卡；
+  // 而 `captureExportBounds` 会拒绝任何未登记的表，漏登记会直接让整份备份 500。
+  { table: cardServiceAllocations, keys: ["allocationId"] },
+  { table: cardServiceStagedCards, keys: ["remoteCardId"] },
+  { table: cardServiceCards, keys: ["localCardId"] },
+  { table: cardServiceOperations, keys: ["operationKey"] },
+  { table: cardServiceProductConfigs, keys: ["productId"] },
   { table: auditEvents, keys: ["id"] },
   { table: platformErrorLogs, keys: ["id"] },
   { table: rateLimitCounters, keys: ["bucket", "subject", "window_start"], optional: true },

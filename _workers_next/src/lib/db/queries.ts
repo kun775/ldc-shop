@@ -17,6 +17,7 @@ import {
     POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES,
     PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES,
     RATE_LIMIT_SCHEMA_DRIFT_PROBES,
+    CARD_SERVICE_SCHEMA_DRIFT_PROBES,
     isSchemaDriftError,
 } from "./schema-drift";
 import {
@@ -30,6 +31,10 @@ import { collectErrorText, isDuplicateColumnError, isDuplicateSchemaObjectError 
 import { isManualFulfillment, resolveProductStockCount } from "@/lib/product-stock";
 import { RATE_LIMIT_EXPIRES_INDEX_NAME, resetRateLimitSchemaReady } from "@/lib/rate-limit";
 import { RATE_LIMIT_DDL_STATEMENTS } from "./rate-limit-schema";
+import {
+    CARD_SERVICE_DDL_STATEMENTS,
+    CARD_SERVICE_REQUIRED_INDEX_NAMES,
+} from "./license-service-schema";
 import { executeDatabaseUpgrades, ensureDatabaseMigrationsTable, readDatabaseUpgradeStatus } from "./database-upgrades";
 import { supportsRegisteredDatabaseUpgrades, type DatabaseUpgradeHealth } from "./database-upgrade-registry";
 import { isMissingRelationError } from "./schema-errors";
@@ -44,7 +49,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 37;
+const CURRENT_SCHEMA_VERSION = 38;
 const dbInitializationState = createAsyncOnceState();
 const databaseUpgradePreparationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
@@ -251,6 +256,29 @@ async function verifyRateLimitStructure(): Promise<boolean> {
     }
 }
 
+// verifyCardServiceStructure 校验卡密服务远端账本的表/列与唯一索引。
+// 表与列用 `SELECT ... LIMIT 0` 探测；唯一索引读 sqlite_master 按名判定 ——
+// 缺唯一索引不会让任何查询报错，却会让「同一 external_ref 重复领卡」这类
+// 并发缺陷静默复活，必须显式校验。
+async function verifyCardServiceStructure(): Promise<boolean> {
+    for (const probe of CARD_SERVICE_SCHEMA_DRIFT_PROBES) {
+        try {
+            await db.run(sql.raw(probe))
+        } catch (error: unknown) {
+            if (isSchemaDriftError(error)) return false
+        }
+    }
+
+    try {
+        for (const indexName of CARD_SERVICE_REQUIRED_INDEX_NAMES) {
+            if (!(await indexExists(indexName))) return false
+        }
+        return true
+    } catch (error: unknown) {
+        return !isSchemaDriftError(error)
+    }
+}
+
 async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth> {
     const [
         baseline,
@@ -262,6 +290,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         pointLedgerHistory,
         reviewOrderId,
         rateLimit,
+        cardService,
     ] = await Promise.all([
         verifyBaselineDatabaseStructure(),
         verifyPointLedgerStructure(),
@@ -272,6 +301,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         verifyPointLedgerHistoryStructure(),
         verifyReviewOrderIdStructure(),
         verifyRateLimitStructure(),
+        verifyCardServiceStructure(),
     ]);
     return {
         '0028_database_upgrade_registry': baseline,
@@ -284,6 +314,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         '0035_review_order_id_unique': reviewOrderId,
         '0036_rate_limit_counters': rateLimit,
         '0037_product_review_aggregates_rebuild': true, // 纯数据修复，没有结构探针。
+        '0038_license_service_ledger': cardService,
     };
 }
 
@@ -562,6 +593,19 @@ async function ensureRateLimitStructureObjects() {
     }
 }
 
+// ensureCardServiceStructureObjects 创建卡密服务远端账本的五张表与索引
+// （升级项 0038 的执行体、全新库初始化共用）。
+//
+// 全部语句都是 `CREATE ... IF NOT EXISTS`，因此可安全重复执行；
+// 这里**刻意不写 `settings.schema_version`** —— 版本标记只由
+// runPendingDatabaseUpgrades 在全部升级项通过后统一写入，
+// 避免「建了一半也把版本抬到最新」从而永久跳过建表。
+async function ensureCardServiceStructureObjects() {
+    for (const statement of CARD_SERVICE_DDL_STATEMENTS) {
+        await db.run(sql.raw(statement));
+    }
+}
+
 // ensureStructuralSchema 确保所有表、列与索引等结构对象存在（全部幂等）。
 // 只能从管理员手动升级路径调用，普通页面访问不得触发此函数。
 //
@@ -640,6 +684,12 @@ async function runRegisteredDatabaseUpgrades() {
             },
             async '0037_product_review_aggregates_rebuild'() {
                 await rebuildProductReviewAggregates();
+            },
+            async '0038_license_service_ledger'() {
+                // 独立升级项：只创建卡密服务远端账本五张表与索引。
+                // 与 0030/0036 同一理由 —— 不复用 ensureStructuralSchema，
+                // 避免「只为建几张新表」在 D1 上重跑全部结构 DDL。
+                await ensureCardServiceStructureObjects();
             },
         },
         verifyStructures: verifyDatabaseUpgradeStructures,
@@ -960,6 +1010,7 @@ async function prepareDatabaseForManualUpgrade() {
         await ensureOrderDeliveryFilesTable();
         await ensureCouponTables();
         await ensureManualStockTriggers();
+        await ensureCardServiceStructureObjects();
         await ensureUserPointLedgerSchema({ force: true });
         await ensureDatabaseMigrationsTable();
         await backfillProductAggregates();

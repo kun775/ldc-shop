@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, blob, primaryKey, uniqueIndex, index } from 'drizzle-orm/sqlite-core';
 
 // Products
 export const products = sqliteTable('products', {
@@ -346,4 +346,92 @@ export const wishlistVotes = sqliteTable('wishlist_votes', {
     itemId: integer('item_id').notNull().references(() => wishlistItems.id, { onDelete: 'cascade' }),
     userId: text('user_id').notNull().references(() => loginUsers.userId, { onDelete: 'cascade' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(() => new Date()),
+});
+
+/**
+ * 通用卡密服务（license-key-service）远端库存账本。
+ *
+ * 这里的表**一律不加外键**，与 `src/lib/db/license-service-schema.ts` 的 DDL 常量
+ * 保持一致：本地 `cards`/`orders` 存在管理端删除与过期清理路径，外键会把这些
+ * 路径变成级联删除或约束冲突，而「已售远端卡与映射不可随订单删除而丢失」
+ * 只能由应用层守卫保证。结构定义（DDL）以 `license-service-schema.ts` 为唯一来源，
+ * 本处仅提供 ORM 类型，两边的名字/字段必须逐一对齐。
+ */
+
+// 补货任务台账（Allocate 结果 + Ack 状态 + 本地 expires_at）
+export const cardServiceAllocations = sqliteTable('card_service_allocations', {
+    allocationId: text('allocation_id').primaryKey(),
+    productId: text('product_id').notNull(),
+    programKey: text('program_key').notNull(),
+    externalRef: text('external_ref').notNull(),
+    quantity: integer('quantity').notNull(),
+    state: text('state').notNull(), // allocated | acknowledged | sold | expired | cancelled | abandoned
+    requestKey: text('request_key').notNull(),
+    ackKey: text('ack_key').notNull(),
+    // 中心列表接口不返回 expires_at（N3），超窗调度只能靠本地这份记录。
+    expiresAt: integer('expires_at').notNull(),
+    ackedAt: integer('acked_at'),
+    soldAt: integer('sold_at'),
+    lastErrorCode: text('last_error_code'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+}, (table) => [
+    uniqueIndex('card_service_allocations_external_ref_uq').on(table.externalRef),
+]);
+
+// 已领到但尚未 Ack 的卡密（不可售暂存），Ack 成功后搬入 `cards`
+export const cardServiceStagedCards = sqliteTable('card_service_staged_cards', {
+    remoteCardId: text('remote_card_id').primaryKey(),
+    allocationId: text('allocation_id').notNull(),
+    productId: text('product_id').notNull(),
+    cardKey: text('card_key').notNull(),
+    maskedKey: text('masked_key'),
+    createdAt: integer('created_at').notNull(),
+}, (table) => [
+    index('card_service_staged_cards_allocation_idx').on(table.allocationId),
+]);
+
+// 本地卡 ↔ 远端卡映射（local_card_id 复用 cards.id）
+export const cardServiceCards = sqliteTable('card_service_cards', {
+    localCardId: integer('local_card_id').primaryKey(),
+    remoteCardId: text('remote_card_id').notNull(),
+    allocationId: text('allocation_id').notNull(),
+    productId: text('product_id').notNull(),
+    orderId: text('order_id'),
+    state: text('state').notNull(),
+    soldAt: integer('sold_at'),
+    revokedAt: integer('revoked_at'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+}, (table) => [
+    uniqueIndex('card_service_cards_remote_uq').on(table.remoteCardId),
+    index('card_service_cards_order_idx').on(table.orderId),
+    index('card_service_cards_allocation_idx').on(table.allocationId),
+]);
+
+// 待重试操作账本（Ack / Sell / Revoke 的可重放意图）
+export const cardServiceOperations = sqliteTable('card_service_operations', {
+    operationKey: text('operation_key').primaryKey(),
+    operation: text('operation').notNull(),
+    resourceId: text('resource_id').notNull(),
+    orderId: text('order_id'),
+    state: text('state').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    nextRetryAt: integer('next_retry_at'),
+    requestId: text('request_id'),
+    lastErrorCode: text('last_error_code'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+}, (table) => [
+    index('card_service_operations_state_idx').on(table.state, table.nextRetryAt),
+]);
+
+// 商品 → 供应模式 / Program 映射（服务端管理，无配置行时回落到 local）
+export const cardServiceProductConfigs = sqliteTable('card_service_product_configs', {
+    productId: text('product_id').primaryKey(),
+    supplyMode: text('supply_mode').notNull().default('local'), // local | legacy_get | license_service
+    programKey: text('program_key'),
+    targetStock: integer('target_stock'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
 });

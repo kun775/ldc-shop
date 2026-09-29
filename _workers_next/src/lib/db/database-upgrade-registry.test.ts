@@ -173,6 +173,21 @@ test('0037 failed and stale records remain retryable, but applied record does no
     assert.equal(applied.items.find((item: { id: string }) => item.id === repairId)?.repairRequired, false)
 })
 
+test('通用卡密服务远端账本注册为 0037 之后的独立结构升级项', () => {
+    // 新增五张表属于结构变更，必须独立成项：混进 0036/0037 会让
+    // 「只为建新表」被迫重跑限流或评价汇总，也让漂移归属错位。
+    const ids = DATABASE_UPGRADE_DEFINITIONS.map((item: { id: string }) => item.id)
+    const id = '0038_license_service_ledger'
+    assert.ok(ids.includes(id))
+    assert.ok(
+        ids.indexOf(id) > ids.indexOf('0037_product_review_aggregates_rebuild'),
+        'the license service ledger must be owned by a new immutable upgrade item',
+    )
+    const item = DATABASE_UPGRADE_DEFINITIONS.find((entry: { id: string }) => entry.id === id)
+    assert.equal(item.verifiesStructure, true, '结构升级项必须参与结构校验')
+    assert.ok(item.description.length > 0)
+})
+
 test('registered upgrades start from the schema version before the registry was introduced', () => {
     assert.equal(DATABASE_UPGRADE_BASELINE_SCHEMA_VERSION, 27)
     assert.equal(supportsRegisteredDatabaseUpgrades(null), false)

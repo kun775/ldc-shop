@@ -62,6 +62,12 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
         description: '从现存 reviews 全量重算所有商品的评分与评价数，修复此前 0035 已执行时可能遗留的错误汇总。',
         verifiesStructure: false,
     },
+    {
+        id: '0038_license_service_ledger',
+        name: '通用卡密服务远端库存账本',
+        description: '新增 card_service_allocations / card_service_staged_cards / card_service_cards / card_service_operations / card_service_product_configs 五张表，建立远端补货任务、不可售暂存、本地卡映射、待重试操作与商品供应模式的持久化基础。',
+        verifiesStructure: true,
+    },
 ] as const
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']

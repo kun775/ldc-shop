@@ -5,6 +5,7 @@ const mod = await import(new URL("./schema-drift.ts", import.meta.url).href)
 const {
     AUDIT_SCHEMA_DRIFT_PROBES,
     BASELINE_SCHEMA_DRIFT_PROBES,
+    CARD_SERVICE_SCHEMA_DRIFT_PROBES,
     DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES,
     POINT_LEDGER_SCHEMA_DRIFT_PROBES,
     POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES,
@@ -57,6 +58,18 @@ test("drift probes cover the objects that historically went missing", () => {
         'handle_note',
         'downloaded_at',
         'coupon_usage_restriction',
+        'card_service_allocations',
+        'card_service_staged_cards',
+        'card_service_cards',
+        'card_service_operations',
+        'card_service_product_configs',
+        'external_ref',
+        'program_key',
+        'expires_at',
+        'masked_key',
+        'revoked_at',
+        'next_retry_at',
+        'supply_mode',
     ]) {
         assert.ok(joined.includes(required), `missing drift probe coverage: ${required}`)
     }
@@ -70,6 +83,7 @@ test('upgrade-specific probes do not leak into the 0028 baseline scope', () => {
     const deliveryDownload = DELIVERY_FILE_DOWNLOAD_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
     const productCouponRestriction = PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
     const pointLedgerHistory = POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
+    const cardService = CARD_SERVICE_SCHEMA_DRIFT_PROBES.join(' ').toLowerCase()
 
     assert.ok(baseline.includes('products'))
     assert.ok(baseline.includes('database_migrations'))
@@ -87,6 +101,10 @@ test('upgrade-specific probes do not leak into the 0028 baseline scope', () => {
     assert.ok(productCouponRestriction.includes('coupon_usage_restriction'))
     assert.ok(pointLedgerHistory.includes('user_point_ledger'))
     assert.ok(pointLedgerHistory.includes('business_key'))
+    assert.ok(cardService.includes('card_service_allocations'))
+    assert.ok(cardService.includes('card_service_cards'))
+    assert.ok(cardService.includes('card_service_product_configs'))
+    assert.ok(!baseline.includes('card_service_allocations'), '远端账本不得混进 0028 基线探测')
 })
 
 test("missing table/column errors are recognised as drift", () => {

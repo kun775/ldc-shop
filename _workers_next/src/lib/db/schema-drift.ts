@@ -1,4 +1,5 @@
 import { collectErrorText } from "./error-utils.ts"
+import { CARD_SERVICE_SCHEMA_DRIFT_PROBES } from "./license-service-schema.ts"
 
 /**
  * 数据库结构漂移（schema drift）探测。
@@ -71,6 +72,15 @@ export const RATE_LIMIT_SCHEMA_DRIFT_PROBES: readonly string[] = [
     "SELECT bucket, subject, window_start, count, expires_at FROM rate_limit_counters LIMIT 0",
 ]
 
+/**
+ * 通用卡密服务远端账本（升级项 0038）的探测语句。
+ *
+ * 与限流表不同，这里**从 `license-service-schema.ts` 直接引入**而不是在此处重抄：
+ * 五张表的字段数多且后续阶段还会演进，手抄一份必然在某个字段上走样 ——
+ * 而漂移探测一旦漏列，缺列的历史库就永远探测不出来。
+ */
+export { CARD_SERVICE_SCHEMA_DRIFT_PROBES }
+
 export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     ...BASELINE_SCHEMA_DRIFT_PROBES,
     ...POINT_LEDGER_SCHEMA_DRIFT_PROBES,
@@ -79,6 +89,7 @@ export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     ...PRODUCT_COUPON_RESTRICTION_SCHEMA_DRIFT_PROBES,
     ...POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES,
     ...RATE_LIMIT_SCHEMA_DRIFT_PROBES,
+    ...CARD_SERVICE_SCHEMA_DRIFT_PROBES,
 ]
 
 /**

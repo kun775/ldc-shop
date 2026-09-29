@@ -83,13 +83,42 @@ test('0037 stays on manual registered path regardless of schema version, not on 
     const ensure = functionSource(source, 'export async function ensureDatabaseInitialized()', 'async function ensureProductsColumns()')
     const preparation = functionSource(source, 'async function prepareDatabaseForManualUpgrade()', 'export async function ensureDatabaseInitialized()')
 
-    assert.match(source, /const CURRENT_SCHEMA_VERSION = 37;/)
+    assert.match(source, /const CURRENT_SCHEMA_VERSION = 38;/)
     assert.match(runner, /async '0037_product_review_aggregates_rebuild'\(\)\s*\{\s*await rebuildProductReviewAggregates\(\)/)
     assert.match(manual, /await runRegisteredDatabaseUpgrades\(\)/)
     assert.match(manual, /status\.pending === 0 && status\.running === 0/)
     assert.doesNotMatch(ensure, /rebuildProductReviewAggregates|markCurrentSchemaReady|setSetting\(/)
     assert.doesNotMatch(preparation, /rebuildProductReviewAggregates/)
     assert.doesNotMatch(readSource('./database-upgrades.ts'), /schemaVersion|CURRENT_SCHEMA_VERSION/)
+})
+
+test('0038 owns the card service ledger DDL and never marks the schema ready itself', () => {
+    // 版本标记只能由 runPendingDatabaseUpgrades 在「全部升级项通过」后统一写入。
+    // 建表执行体若顺手 setSetting('schema_version')，会让「建了一半」也变成
+    // 「版本已达标」，此后缺表将永久无法自愈 —— 这正是 0028 基线遗留的坑。
+    const source = readSource('./queries.ts')
+    const runner = functionSource(source, 'async function runRegisteredDatabaseUpgrades()', 'export async function getDatabaseUpgradeStatus()')
+    assert.match(runner, /async '0038_license_service_ledger'\(\) \{/)
+    assert.match(runner, /await ensureCardServiceStructureObjects\(\);/)
+
+    const body = functionSource(source, 'async function ensureCardServiceStructureObjects() {', '// ensureStructuralSchema')
+    assert.match(body, /CARD_SERVICE_DDL_STATEMENTS/)
+    assert.doesNotMatch(body, /setSetting\(|markCurrentSchemaReady|schema_version/)
+
+    // 全新库初始化必须直接建出远端账本，否则新装的实例要等管理员点升级才有表。
+    const preparation = functionSource(source, 'async function prepareDatabaseForManualUpgrade()', 'export async function ensureDatabaseInitialized()')
+    assert.match(preparation, /await ensureCardServiceStructureObjects\(\)/)
+})
+
+test('0038 fails structure verification when a unique index is missing, not only when a table is missing', () => {
+    // 唯一索引无法用 SELECT LIMIT 0 探测；若只探表/列，「缺唯一索引」的历史库
+    // 会被判为结构健康，重复 external_ref 领卡将静默复活。
+    const source = readSource('./queries.ts')
+    const body = functionSource(source, 'async function verifyCardServiceStructure()', 'async function verifyDatabaseUpgradeStructures()')
+    assert.match(body, /CARD_SERVICE_SCHEMA_DRIFT_PROBES/)
+    assert.match(body, /CARD_SERVICE_REQUIRED_INDEX_NAMES/)
+    assert.match(body, /indexExists\(/)
+    assert.match(source, /'0038_license_service_ledger': cardService/)
 })
 
 test('0037 uses actual SQLite to rebuild all products once after historical 0035 was applied', async (t) => {
