@@ -349,6 +349,38 @@ test('the default expiring threshold stays at five minutes', () => {
 // 漂移口径
 // ---------------------------------------------------------------------------
 
+test('overview preserves all six metrics under a restrictive compound SELECT limit', async () => {
+    const ctx = makeContext()
+    await insertAllocation(ctx, { allocationId: 'expired', state: 'expired' })
+    await insertOrder(ctx, { orderId: 'delivered', status: 'delivered' })
+    await insertMapping(ctx, { localCardId: 1, allocationId: 'expired', orderId: 'delivered' })
+    await insertMapping(ctx, { localCardId: 99, state: 'sold' }, { orphan: true })
+    await insertStagedCard(ctx, { allocationId: 'missing' })
+
+    // 本地 SQLite 的默认上限更高；模拟受限平台的复合 SELECT 上限，
+    // 其余查询仍交给真实内存 SQLite 执行，验证六项统计没有被漏算。
+    const database: typeof ctx.database = {
+        ...ctx.database,
+        async query<T>(sql: string, params?: readonly unknown[]) {
+            const terms = 1 + (sql.match(/\b(?:UNION|INTERSECT|EXCEPT)\b/gi)?.length ?? 0)
+            if (terms > 5) throw new Error('too many terms in compound SELECT')
+            return ctx.database.query<T>(sql, params)
+        },
+    }
+
+    const overview = await loadCardServiceOverview(database, { now: NOW })
+    assert.equal(overview.enabled, true)
+    assert.deepEqual(overview.drift, {
+        sellableRemoteCards: 1,
+        soldWithoutDeliveredOrder: 1,
+        deliveredWithoutRemoteSold: 1,
+        expiredWithSellableCards: 1,
+        orphanMappings: 1,
+        stagedWithoutActiveAllocation: 1,
+    })
+    assert.equal(overview.reviewCount, 5)
+})
+
 test('sellableRemoteCards counts acknowledged mappings and is excluded from reviewCount', async () => {
     const ctx = makeContext()
     await insertMapping(ctx, { localCardId: 1, state: 'acknowledged' })

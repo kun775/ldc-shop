@@ -1095,15 +1095,14 @@
             "unavailable": "Failed to read card service status. Check the Worker logs with the error ID.",
             "config": {
                 "title": "Connection",
-                "description": "Sales and restock share one credential; revocation uses a separate key. This only reports whether each is configured.",
+                "description": "Sales, restock, and refund revocation share one API Key. This only reports whether it is configured.",
                 "baseUrl": "Provider URL",
-                "salesKey": "Sales Key",
-                "revokeKey": "Revoke Key",
+                "apiKey": "API Key",
+                "unknown": "Unknown",
                 "present": "Configured",
                 "missing": "Not configured",
                 "notSet": "Not configured",
                 "missingItems": "Missing settings: {{items}}",
-                "revokeKeyMissing": "Revoke Key is not configured: post-refund remote revocations will fail in place and pile up in the review list. Replay catches up once the key is set.",
                 "secretNote": "Secrets live in Worker Secrets only. This page never reads or displays them.",
                 "disabled": "The remote stock ledger has not been created yet (database upgrade 0038 has not run), so the data below is unavailable."
             },

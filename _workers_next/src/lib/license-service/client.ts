@@ -50,7 +50,6 @@ export type LicenseServiceOperation =
 export interface LicenseServiceClientOptions {
     baseUrl: string
     apiKey: string
-    revokeApiKey?: string | null
     fetchImpl?: typeof fetch
     timeoutMs?: number
     maxResponseBytes?: number
@@ -118,8 +117,6 @@ interface RequestOptions {
     body?: unknown
     idempotencyKey?: string
     query?: Record<string, string>
-    /** 使用独立 `cards:revoke` Key；缺失时本地直接失败。 */
-    useRevokeKey?: boolean
 }
 
 interface LicenseServiceResponse {
@@ -241,7 +238,6 @@ export function createLicenseServiceClient(options: LicenseServiceClientOptions)
     const apiKey = (options.apiKey || '').trim()
     if (!apiKey) throw new LicenseServiceError({ code: 'config_error', cause: 'api key is required' })
 
-    const revokeApiKey = (options.revokeApiKey || '').trim() || null
     const fetchImpl = options.fetchImpl ?? (globalThis.fetch as typeof fetch)
     const timeoutMs = options.timeoutMs ?? LICENSE_SERVICE_DEFAULT_TIMEOUT_MS
     const maxResponseBytes = options.maxResponseBytes ?? LICENSE_SERVICE_DEFAULT_MAX_RESPONSE_BYTES
@@ -249,23 +245,11 @@ export function createLicenseServiceClient(options: LicenseServiceClientOptions)
     const now = options.now ?? (() => Date.now())
     const baseUrl = base.baseUrl
 
-    async function request({ operation, method, path, body, idempotencyKey, query, useRevokeKey }: RequestOptions): Promise<LicenseServiceResponse> {
+    async function request({ operation, method, path, body, idempotencyKey, query }: RequestOptions): Promise<LicenseServiceResponse> {
         const headers: Record<string, string> = {
+            Authorization: `Bearer ${apiKey}`,
             Accept: 'application/json',
             'X-Request-ID': requestIdFactory(),
-        }
-
-        if (useRevokeKey) {
-            if (!revokeApiKey) {
-                throw new LicenseServiceError({
-                    code: 'revoke_key_missing',
-                    operation,
-                    cause: 'LICENSE_SERVICE_REVOKE_API_KEY is not configured',
-                })
-            }
-            headers.Authorization = `Bearer ${revokeApiKey}`
-        } else {
-            headers.Authorization = `Bearer ${apiKey}`
         }
 
         if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
@@ -498,9 +482,6 @@ export function createLicenseServiceClient(options: LicenseServiceClientOptions)
                 method: 'POST',
                 path: `/cards/${encodeURIComponent(id)}/revoke`,
                 idempotencyKey: input.idempotencyKey,
-                // 独立 cards:revoke Key：签发在原销售 Client 上，缺配置就地失败，
-                // 绝不退回销售 Key（那只会拿到 403，还会污染审计）。
-                useRevokeKey: true,
                 body: { reason: input.reason },
             })
 

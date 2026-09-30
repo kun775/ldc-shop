@@ -49,7 +49,6 @@ function makeClient(fetchImpl: typeof fetch, overrides: Partial<LicenseServiceCl
     return createLicenseServiceClient({
         baseUrl: 'https://lks.test',
         apiKey: 'cs_live_sales',
-        revokeApiKey: 'cs_live_revoke',
         fetchImpl,
         timeoutMs: 5_000,
         requestIdFactory: () => 'req_fixed',
@@ -152,6 +151,7 @@ test('Ack / Sell / Cancel 的路径与请求体，卡序原样提交', async () 
     })
     assert.equal(calls[2].url, 'https://lks.test/api/v1/allocations/all_1/cancel')
     assert.deepEqual(JSON.parse(String(calls[2].init.body)), { card_ids: ['card_a'], reason: 'local insert failed' })
+    for (const call of calls) assert.equal(headerOf(call, 'Authorization'), 'Bearer cs_live_sales')
 })
 
 test('单查接口拒绝回明文：带 key 的响应直接判契约破坏', async () => {
@@ -222,23 +222,16 @@ test('HTTP 200 但信封不是 ok:true 属于确定性契约破坏，不可重�
     )
 })
 
-test('Revoke 走独立 Key（签在原销售 Client 上），缺失时本地失败且绝不回退销售 Key', async () => {
+test('Revoke 只需共用 API Key，保留路径、幂等键与作废请求体', async () => {
     const { impl, calls } = stubFetch(() => jsonResponse({ ok: true, data: { id: 'card_1', status: 'revoked' } }))
     const client = makeClient(impl)
 
     const revoked = await client.revoke('card_1', { reason: 'refunded', idempotencyKey: 'revoke:card_1:order_1' })
     assert.equal(revoked.status, 'revoked')
     assert.equal(calls[0].url, 'https://lks.test/api/v1/cards/card_1/revoke')
-    assert.equal(headerOf(calls[0], 'Authorization'), 'Bearer cs_live_revoke')
+    assert.equal(headerOf(calls[0], 'Authorization'), 'Bearer cs_live_sales')
+    assert.equal(headerOf(calls[0], 'Idempotency-Key'), 'revoke:card_1:order_1')
     assert.deepEqual(JSON.parse(String(calls[0].init.body)), { reason: 'refunded' })
-
-    const noRevokeKey = stubFetch(() => jsonResponse({ ok: true, data: { id: 'card_1', status: 'revoked' } }))
-    const bare = makeClient(noRevokeKey.impl, { revokeApiKey: null })
-    await assert.rejects(
-        bare.revoke('card_1', { reason: 'refunded', idempotencyKey: 'revoke:card_1:order_1' }),
-        (error: unknown) => isLicenseServiceError(error) && error.code === 'revoke_key_missing' && error.category === 'config',
-    )
-    assert.equal(noRevokeKey.calls.length, 0)
 })
 
 test('列表接口只把有值的查询参数拼进 URL', async () => {

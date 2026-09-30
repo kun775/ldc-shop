@@ -28,7 +28,7 @@
 | N2 | 幂等重放「原样返回首次响应，不追随 Allocation 后续状态」（API.md:158），且 `rebuildAllocation` 不校验当前状态（`allocation_service.go:649-692`） | Allocation 已 `expired` 后同键重放仍返回 `status=allocated` 与重建的明文卡密，而该批卡可能已回到池中被其他受领方取走。**重放结果不得直接进入可售库存**，必须先按 `GET /api/v1/allocations/{id}` 核对真实状态 |
 | N3 | 列表项不含 `expires_at`（`allocation_handler.go:250-259`、`api/openapi.yaml:1693-1722`）；只有 `GET /allocations/{id}`（`CreateAllocationResponse` 必含 `expires_at`）返回该字段 | 「即将超窗」的对账与告警必须逐条查详情，不能只靠列表驱动补货/Ack 调度 |
 | N4 | Revoke 在实现与 OpenAPI 中同时接受 `acknowledged` 与 `sold`（`internal/application/card_revocation.go:40,76`、`internal/adapters/persistence/store.go:140-145`、`openapi.yaml:848`），但 API.md §6.2（:325）正文写「Allocation 状态为 `acknowledged`」 | 退款作废**已交付（`sold`）**卡在实现上可行，第一版的退款策略可保留；文档文字比实现窄，须请服务方对齐，联调以实现/OpenAPI 为准 |
-| N5 | 作废要求「卡属于当前 Client」，SQL 以 `a.client_id = $2` 归属校验（`store.go:143-145`）；而 `docs/AUTHORIZATION.md:67` 建议 `cards:revoke` 签给「销售方退款处理 Client」 | 若该「退款处理 Client」是**另一个** Client，Revoke 必然失败。**作废 Key 必须签发在原销售 Client（`ldc-shop`）上**，以独立 Key + 独立 Scope 与分配 Key 隔离，而不是另建 Client |
+| N5 | 作废要求「卡属于当前 Client」，SQL 以 `a.client_id = $2` 归属校验（`store.go:143-145`）；而 `docs/AUTHORIZATION.md:67` 建议 `cards:revoke` 签给「销售方退款处理 Client」 | 若该「退款处理 Client」是**另一个** Client，Revoke 必然失败。**作废调用必须使用原销售 Client（`ldc-shop`）的 Key**，商城现统一使用一把包含分配、销售、查询及作废权限的 Key，不另建退款 Client |
 
 ## 1. 为什么能接，但不能直连现有 GET 拉卡入口
 
@@ -70,7 +70,7 @@
 
 ### 阶段 A｜服务端契约及准入（双仓库）
 
-1. 在卡密服务的管理员端建立 Tenant、Program、批次、销售 Client；**销售 Key 的 Scope 为 `cards:allocate`、`cards:sell`、`cards:read`**，并限定 `allowed_program_ids` 到该 Program（`docs/API.md:587-596`）。漏 `cards:sell` 会让 Sell 返回 `403`，卡永久停在 `acknowledged`。需作废时，在**同一销售 Client** 上另签一把仅含 `cards:revoke` 的 Key（N5；不要新建 Client，否则 Revoke 因归属校验失败）。核销方使用另外的 Client/Key。管理员操作走该服务 OIDC（`lks_admin_session`），不要把管理员 Session/Cookie 放入商城。
+1. 在卡密服务的管理员端建立 Tenant、Program、批次、销售 Client；**商城 API Key 的 Scope 为 `cards:allocate`、`cards:sell`、`cards:read`、`cards:revoke`**，并限定 `allowed_program_ids` 到该 Program（`docs/API.md:587-596`）。漏 `cards:sell` 会让 Sell 返回 `403`，卡永久停在 `acknowledged`。退款作废使用同一把 Key（N5；不要新建 Client，否则 Revoke 因归属校验失败）。核销方使用另外的 Client/Key。管理员操作走该服务 OIDC（`lks_admin_session`），不要把管理员 Session/Cookie 放入商城。
 2. **（部署前置条件）** 确认服务侧 `TRUSTED_PROXIES` 与真实反代拓扑一致：默认仅信任回环（`127.0.0.1/32,::1/128`），若服务前有网关/容器网络需按实际网段填写，配置非法时服务启动即失败（`config.go:111-114`；`.env.example:36-41`）。商城侧只记录服务返回的 `X-Request-Id` 与错误体，不代服务计算客户端 IP。
 3. 验证商城 Worker 到服务 HTTPS 端点的可达性与鉴权；凭据只放 Worker Secret，Base URL 用受控环境配置/固定域名白名单，不由商品管理员输入任意目标。明确限流、单次批量上限（`quantity ≤ 100` 且受 Program 的 `max_batch_allocation_size` 进一步约束）、密钥轮换、部署和故障通报责任。
 4. **契约差异已清零（第一版 5 项 + 2 项阻断项均已在 `9092c22` 修复，见 §0.1）**，本阶段只需做契约回归：
@@ -82,7 +82,7 @@
 
 ### 阶段 B｜商城数据与凭据（`_workers_next/`）
 
-1. 新增商品级供应模式 `local / legacy_get / license_service` 与 `program_key`（尽量固定在服务端管理的商品映射中）；既有商品默认保持原模式。不要复用 `cards_api_token_*`：当前 Token 在 D1 `settings` 明文保存并进入管理端组件与数据导出。中心 API Key 存 Worker Secret，避免传给浏览器、导出、审计元数据。
+1. 新增商品级供应模式 `local / legacy_get / license_service` 与 `program_key`（尽量固定在服务端管理的商品映射中）；既有商品默认保持原模式。不要复用 `cards_api_token_*`：当前 Token 在 D1 `settings` 明文保存并进入管理端组件与数据导出。中心 API Key 存 Worker Secret `LICENSE_SERVICE_API_KEY`，销售、补货、查询与退款作废共用；不再配置 `LICENSE_SERVICE_REVOKE_API_KEY`。通过 `LICENSE_SERVICE_BASE_URL` 配置服务 HTTPS 根地址，程序自动追加 `/api/v1`。避免传给浏览器、导出、审计元数据。
 2. 新增专用 D1 远端映射/操作账本，例如 `card_service_allocations(allocation_id PK, product_id, program_key, external_ref UNIQUE, quantity, state, request_key, expires_at, last_error_code, timestamps)`、`card_service_cards(remote_card_id UNIQUE, local_card_id UNIQUE, allocation_id, order_id, state, sold_at, revoked_at, timestamps)` 和 `card_service_operations(operation_key PK, operation, resource_id, state, next_retry_at, attempts, request_id, timestamps)`。字段示意非最终 DDL；加入 FK/唯一索引前先评估现有卡清理和订单物理删除。
    - **本地必须单独保存 `expires_at`**：服务侧列表接口不返回该字段（N3），超窗调度只能依靠本地记录。
    - 每张远端卡保留不可复用身份与审计映射，不能用 `card_key` 文本去重（商城现允许重复卡）。远端状态独立于商城 `cards.is_used`；商品/订单 ID 作为外部业务引用。

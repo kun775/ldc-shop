@@ -10,7 +10,6 @@ import {
     LICENSE_SERVICE_DEFAULT_TIMEOUT_MS,
     LICENSE_SERVICE_ENV_API_KEY,
     LICENSE_SERVICE_ENV_BASE_URL,
-    LICENSE_SERVICE_ENV_REVOKE_API_KEY,
     LICENSE_SERVICE_MAX_TIMEOUT_MS,
     LICENSE_SERVICE_MIN_TIMEOUT_MS,
 } from './config.ts'
@@ -65,19 +64,9 @@ test('配置解析：缺 API Key 失败，齐全时给出默认超时与响应�
     assert.deepEqual(ok.config, {
         baseUrl: 'https://lks.example.com',
         apiKey: 'cs_live_sales',
-        revokeApiKey: null,
         timeoutMs: LICENSE_SERVICE_DEFAULT_TIMEOUT_MS,
         maxResponseBytes: LICENSE_SERVICE_DEFAULT_MAX_RESPONSE_BYTES,
     })
-
-    const withRevoke = resolveLicenseServiceConfig({
-        [LICENSE_SERVICE_ENV_BASE_URL]: 'https://lks.example.com',
-        [LICENSE_SERVICE_ENV_API_KEY]: 'cs_live_sales',
-        // 作废 Key 必须签在原销售 Client 上（N5），这里只校验它被单独读取。
-        [LICENSE_SERVICE_ENV_REVOKE_API_KEY]: 'cs_live_revoke',
-    })
-    assert.ok(withRevoke.ok)
-    assert.equal(withRevoke.config.revokeApiKey, 'cs_live_revoke')
 })
 
 test('超时被夹在安全区间内，非法值回落默认', () => {
@@ -110,29 +99,29 @@ test('URL 拼接只在 base 与 /api/v1 之间加一层，路径参数由调用�
 // describeLicenseServiceConfig（运维面板展示用）
 // ---------------------------------------------------------------------------
 
-test('配置齐全时状态为可用，并保留独立的作废 Key 标记', () => {
+test('配置齐全时状态为可用，只需一把 API Key', () => {
     const status = describeLicenseServiceConfig({
         [LICENSE_SERVICE_ENV_BASE_URL]: 'https://lks.example.com/',
         [LICENSE_SERVICE_ENV_API_KEY]: 'cs_live_sales',
-        [LICENSE_SERVICE_ENV_REVOKE_API_KEY]: 'cs_live_revoke',
     })
 
     assert.equal(status.configured, true)
     assert.deepEqual(status.missing, [])
     assert.equal(status.reason, null)
-    assert.equal(status.revokeKeyPresent, true)
+    assert.equal(status.apiKeyPresent, true)
     // Base URL 已规范化（去尾斜杠），且不含 `/api/v1`。
     assert.equal(status.baseUrl, 'https://lks.example.com')
 })
 
-test('销售 Key 可用但缺作废 Key 时仍算可用，只是 revokeKeyPresent 为 false', () => {
+test('空白 API Key 同时导致中心调用不可用与 Key 状态缺失', () => {
     const status = describeLicenseServiceConfig({
         [LICENSE_SERVICE_ENV_BASE_URL]: 'https://lks.example.com',
-        [LICENSE_SERVICE_ENV_API_KEY]: 'cs_live_sales',
+        [LICENSE_SERVICE_ENV_API_KEY]: '   ',
     })
 
-    assert.equal(status.configured, true)
-    assert.equal(status.revokeKeyPresent, false)
+    assert.equal(status.configured, false)
+    assert.equal(status.apiKeyPresent, false)
+    assert.deepEqual(status.missing, ['api_key'])
 })
 
 test('缺失项被逐项列出，且 reason 指向第一个卡点', () => {
@@ -158,6 +147,7 @@ test('非 HTTPS 的 Base URL 归类为 base_url 缺失，不泄露原始取值',
     assert.equal(status.configured, false)
     assert.deepEqual(status.missing, ['base_url'])
     assert.equal(status.reason, 'insecure_base_url')
+    assert.equal(status.apiKeyPresent, true)
     assert.equal(status.baseUrl, null)
 })
 
@@ -165,7 +155,6 @@ test('状态对象任何字段都不回显密钥取值', () => {
     const serialized = JSON.stringify(describeLicenseServiceConfig({
         [LICENSE_SERVICE_ENV_BASE_URL]: 'https://lks.example.com',
         [LICENSE_SERVICE_ENV_API_KEY]: 'cs_live_sales',
-        [LICENSE_SERVICE_ENV_REVOKE_API_KEY]: 'cs_live_revoke',
     }))
 
     assert.equal(serialized.includes('cs_live'), false)

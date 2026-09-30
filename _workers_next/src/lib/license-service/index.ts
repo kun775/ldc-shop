@@ -155,7 +155,7 @@ export {
     partitionDeletableLocalCardIds,
 } from './guards.ts'
 
-/** 是否具备调用中心的最小配置（Base URL + 销售 Key）。 */
+/** 是否具备调用中心的最小配置（Base URL + API Key）。 */
 export function isLicenseServiceConfigured(env: Record<string, string | undefined> = process.env): boolean {
     return resolveLicenseServiceConfig(env).ok
 }
@@ -237,10 +237,9 @@ export function buildOrderSaleDeps(env: Record<string, string | undefined> = pro
 /**
  * 组装退款作废所需的依赖。
  *
- * 作废用的是**独立**的 `cards:revoke` Key（`LICENSE_SERVICE_REVOKE_API_KEY`）。
- * 该 Key 缺失时不会在这里抛错 —— 与销售 Key 同理，纯本地订单的退款不该被一个
- * 配置问题挡住；缺失会在真正调用 `revoke()` 时就地失败为 `revoke_key_missing`，
- * 由 `executeOrderRevokes` 归入 `failed` 并留在运维面板的复核清单里。
+ * 与销售、补货共用 `LICENSE_SERVICE_API_KEY`，该 Key 需包含 `cards:revoke` 权限。
+ * 凭据缺失不会在这里抛错，纯本地订单的退款不应被中心配置问题挡住。
+ * 远端作废失败由 `executeOrderRevokes` 留在运维面板的复核清单里。
  */
 export function buildRevokeDeps(env: Record<string, string | undefined> = process.env): RevokeDeps {
     return {
@@ -348,9 +347,8 @@ export async function reconcileCardService(
 /**
  * 作废待办重放（退款后中心不可达、或单卡失败留痕的那部分）。
  *
- * 与对账一致：中心凭据整体缺失时返回 `null`（功能未启用）。但**销售 Key 配好而
- * 作废 Key 没配**的情况不返回 `null` —— 那是一个需要被看见的配置缺陷，逐卡会
- * 归入 `failed` 并进入运维面板复核清单，而不是静默跳过。
+ * 与对账一致：中心凭据缺失时返回 `null`（功能未启用）。
+ * API Key 缺少作废权限时，远端失败逐卡进入运维面板复核清单。
  */
 export async function replayPendingCardServiceRevokes(
     options: { limit?: number; reason?: string } = {},
@@ -445,5 +443,5 @@ export function planOrderRevokeBatchStatements(input: {
     }))
 }
 
-/** 供运维面板/健康检查展示的稳定错误码集合，避免各处硬编码字符串。 */
+/** 配置错误码集合；保留旧版 revoke_key_missing，以识别账本中的历史失败。 */
 export const LICENSE_SERVICE_CONFIG_ERROR_CODES = ['config_error', 'revoke_key_missing'] as const satisfies readonly LicenseServiceErrorCode[]

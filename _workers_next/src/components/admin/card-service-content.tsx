@@ -244,32 +244,27 @@ export function CardServiceContent({
                     <Badge
                         variant="outline"
                         className={cn('gap-1.5',
-                            configStatus?.configured
-                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                                : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300')}
+                            !configStatus
+                                ? 'text-muted-foreground'
+                                : configStatus.configured
+                                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                                    : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300')}
                     >
                         {configStatus?.configured ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
-                        {configStatus?.configured ? t('admin.cardService.config.present') : t('admin.cardService.config.missing')}
+                        {!configStatus ? t('admin.cardService.config.unknown') : configStatus.configured ? t('admin.cardService.config.present') : t('admin.cardService.config.missing')}
                     </Badge>
                 </div>
                 <p className="text-xs leading-5 text-muted-foreground">{t('admin.cardService.config.description')}</p>
 
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3 sm:grid-cols-2">
                     <div className="rounded-md border border-border/50 px-3 py-2">
                         <div className="text-[11px] text-muted-foreground">{t('admin.cardService.config.baseUrl')}</div>
-                        <div className="mt-0.5 break-all font-mono text-xs text-foreground">{configStatus?.baseUrl ?? t('admin.cardService.config.notSet')}</div>
+                        <div className="mt-0.5 break-all font-mono text-xs text-foreground">{!configStatus ? t('admin.cardService.config.unknown') : configStatus.baseUrl ?? t('admin.cardService.config.notSet')}</div>
                     </div>
                     <div className="rounded-md border border-border/50 px-3 py-2">
-                        <div className="text-[11px] text-muted-foreground">{t('admin.cardService.config.salesKey')}</div>
+                        <div className="text-[11px] text-muted-foreground">{t('admin.cardService.config.apiKey')}</div>
                         <div className="mt-0.5 text-xs font-medium text-foreground">
-                            {configStatus?.configured ? t('admin.cardService.config.present') : t('admin.cardService.config.missing')}
-                        </div>
-                    </div>
-                    <div className="rounded-md border border-border/50 px-3 py-2">
-                        <div className="text-[11px] text-muted-foreground">{t('admin.cardService.config.revokeKey')}</div>
-                        <div className={cn('mt-0.5 text-xs font-medium',
-                            configStatus?.revokeKeyPresent ? 'text-foreground' : 'text-red-600 dark:text-red-300')}>
-                            {configStatus?.revokeKeyPresent ? t('admin.cardService.config.present') : t('admin.cardService.config.missing')}
+                            {!configStatus ? t('admin.cardService.config.unknown') : configStatus.apiKeyPresent ? t('admin.cardService.config.present') : t('admin.cardService.config.missing')}
                         </div>
                     </div>
                 </div>
@@ -277,12 +272,6 @@ export function CardServiceContent({
                 {configStatus && configStatus.missing.length > 0 ? (
                     <p className="text-xs text-red-600 dark:text-red-300">
                         {t('admin.cardService.config.missingItems', { items: configStatus.missing.join(', ') })}
-                    </p>
-                ) : null}
-                {configStatus && !configStatus.revokeKeyPresent ? (
-                    <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300">
-                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                        {t('admin.cardService.config.revokeKeyMissing')}
                     </p>
                 ) : null}
                 <p className="text-[11px] text-muted-foreground">{t('admin.cardService.config.secretNote')}</p>
@@ -335,7 +324,7 @@ export function CardServiceContent({
                 </div>
                 <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
                     {driftRows.length === 0 ? (
-                        <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('admin.cardService.config.disabled')}</div>
+                        <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t(overview ? 'admin.cardService.config.disabled' : 'admin.cardService.unavailable')}</div>
                     ) : driftRows.map((row) => {
                         const alert = row.mustBeZero && row.count > 0
                         return (

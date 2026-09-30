@@ -14,7 +14,6 @@ export const LICENSE_SERVICE_API_PATH = '/api/v1'
 
 export const LICENSE_SERVICE_ENV_BASE_URL = 'LICENSE_SERVICE_BASE_URL'
 export const LICENSE_SERVICE_ENV_API_KEY = 'LICENSE_SERVICE_API_KEY'
-export const LICENSE_SERVICE_ENV_REVOKE_API_KEY = 'LICENSE_SERVICE_REVOKE_API_KEY'
 
 export const LICENSE_SERVICE_DEFAULT_TIMEOUT_MS = 10_000
 export const LICENSE_SERVICE_MIN_TIMEOUT_MS = 1_000
@@ -25,8 +24,6 @@ export interface LicenseServiceConfig {
     /** 形如 `https://lks.example.com`，已去除尾部斜杠，且不含 `/api/v1`。 */
     baseUrl: string
     apiKey: string
-    /** 独立 `cards:revoke` Key；缺失时 `revoke()` 直接失败，不会退回销售 Key。 */
-    revokeApiKey: string | null
     timeoutMs: number
     maxResponseBytes: number
 }
@@ -109,14 +106,11 @@ export function resolveLicenseServiceConfig(
     const apiKey = (env[LICENSE_SERVICE_ENV_API_KEY] || '').trim()
     if (!apiKey) return { ok: false, reason: 'missing_api_key' }
 
-    const revokeApiKey = (env[LICENSE_SERVICE_ENV_REVOKE_API_KEY] || '').trim()
-
     return {
         ok: true,
         config: {
             baseUrl: base.baseUrl,
             apiKey,
-            revokeApiKey: revokeApiKey || null,
             timeoutMs: normalizeTimeout(options.timeoutMs, LICENSE_SERVICE_DEFAULT_TIMEOUT_MS),
             maxResponseBytes: options.maxResponseBytes && options.maxResponseBytes > 0
                 ? Math.trunc(options.maxResponseBytes)
@@ -135,20 +129,14 @@ export function buildLicenseServiceUrl(baseUrl: string, path: string) {
 export type LicenseServiceMissingSetting = 'base_url' | 'api_key'
 
 export interface LicenseServiceConfigStatus {
-    /** 销售路径是否可用（Base URL + 销售 Key 齐备）。 */
+    /** 中心调用是否可用（Base URL + API Key 齐备）。 */
     configured: boolean
     /** 缺失或不合法的必填项。 */
     missing: LicenseServiceMissingSetting[]
     /** 不满足时的具体原因；configured 为 true 时为 `null`。 */
     reason: LicenseServiceConfigFailure | null
-    /**
-     * 是否具备自动化作废能力（独立 `cards:revoke` Key）。
-     *
-     * 缺失不影响销售与补货，但退款后的远端作废会就地失败为 `revoke_key_missing`
-     * 并堆在复核清单里 —— 面板要把这一项单独标出来，否则运维只能看到一个
-     * 不断增长的失败数却找不到原因。
-     */
-    revokeKeyPresent: boolean
+    /** API Key 是否已填写；权限由服务端在请求时校验。 */
+    apiKeyPresent: boolean
     /** 规范化后的 Base URL（公开信息，不含凭据）。未配置为 `null`。 */
     baseUrl: string | null
 }
@@ -164,7 +152,6 @@ export function describeLicenseServiceConfig(
 ): LicenseServiceConfigStatus {
     const base = normalizeLicenseServiceBaseUrl(env[LICENSE_SERVICE_ENV_BASE_URL])
     const apiKey = (env[LICENSE_SERVICE_ENV_API_KEY] || '').trim()
-    const revokeKeyPresent = Boolean((env[LICENSE_SERVICE_ENV_REVOKE_API_KEY] || '').trim())
 
     const missing: LicenseServiceMissingSetting[] = []
     if (!base.ok) missing.push('base_url')
@@ -178,7 +165,7 @@ export function describeLicenseServiceConfig(
         configured: base.ok && Boolean(apiKey),
         missing,
         reason,
-        revokeKeyPresent,
+        apiKeyPresent: Boolean(apiKey),
         baseUrl: base.ok ? base.baseUrl : null,
     }
 }

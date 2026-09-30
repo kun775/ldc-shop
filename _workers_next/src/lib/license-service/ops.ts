@@ -265,39 +265,32 @@ function resolveNow(options: { now?: number }): number {
 // ---------------------------------------------------------------------------
 
 /**
- * 一次往返拿全漂移口径。
- *
- * 用 `UNION ALL` 而不是六条独立查询：管理端一次渲染只发一条 SQL，
- * 而且各口径天然处在同一个读快照上，不会出现「三条查完、状态已变」的拼接数字。
+ * 用一条 SELECT 的六个计数子查询读取漂移口径，保留同一读快照。
+ * 避免 UNION ALL 拼接触发 D1 的复合 SELECT 项数限制。
  */
 const DRIFT_SQL = `
-SELECT 'sellableRemoteCards' AS metric, COUNT(*) AS total
-    FROM ${CARD_SERVICE_CARDS_TABLE} WHERE state = 'acknowledged'
-UNION ALL
-SELECT 'soldWithoutDeliveredOrder', COUNT(*)
-    FROM ${CARD_SERVICE_CARDS_TABLE} m
-    LEFT JOIN ${LOCAL_ORDERS_TABLE} o ON o.order_id = m.order_id
-    WHERE m.state = 'sold' AND (o.order_id IS NULL OR o.status <> 'delivered')
-UNION ALL
-SELECT 'deliveredWithoutRemoteSold', COUNT(*)
-    FROM ${CARD_SERVICE_CARDS_TABLE} m
-    JOIN ${LOCAL_ORDERS_TABLE} o ON o.order_id = m.order_id
-    WHERE o.status = 'delivered' AND m.state NOT IN ('sold', 'revoked')
-UNION ALL
-SELECT 'expiredWithSellableCards', COUNT(*)
-    FROM ${CARD_SERVICE_CARDS_TABLE} m
-    JOIN ${CARD_SERVICE_ALLOCATIONS_TABLE} a ON a.allocation_id = m.allocation_id
-    WHERE a.state IN ('expired', 'cancelled') AND m.state = 'acknowledged'
-UNION ALL
-SELECT 'orphanMappings', COUNT(*)
-    FROM ${CARD_SERVICE_CARDS_TABLE} m
-    LEFT JOIN ${LOCAL_CARDS_TABLE} c ON c.id = m.local_card_id
-    WHERE c.id IS NULL
-UNION ALL
-SELECT 'stagedWithoutActiveAllocation', COUNT(*)
-    FROM ${CARD_SERVICE_STAGED_CARDS_TABLE} s
-    LEFT JOIN ${CARD_SERVICE_ALLOCATIONS_TABLE} a ON a.allocation_id = s.allocation_id
-    WHERE a.allocation_id IS NULL OR a.state <> 'allocated'
+SELECT
+    (SELECT COUNT(*) FROM ${CARD_SERVICE_CARDS_TABLE} WHERE state = 'acknowledged') AS sellableRemoteCards,
+    (SELECT COUNT(*)
+        FROM ${CARD_SERVICE_CARDS_TABLE} m
+        LEFT JOIN ${LOCAL_ORDERS_TABLE} o ON o.order_id = m.order_id
+        WHERE m.state = 'sold' AND (o.order_id IS NULL OR o.status <> 'delivered')) AS soldWithoutDeliveredOrder,
+    (SELECT COUNT(*)
+        FROM ${CARD_SERVICE_CARDS_TABLE} m
+        JOIN ${LOCAL_ORDERS_TABLE} o ON o.order_id = m.order_id
+        WHERE o.status = 'delivered' AND m.state NOT IN ('sold', 'revoked')) AS deliveredWithoutRemoteSold,
+    (SELECT COUNT(*)
+        FROM ${CARD_SERVICE_CARDS_TABLE} m
+        JOIN ${CARD_SERVICE_ALLOCATIONS_TABLE} a ON a.allocation_id = m.allocation_id
+        WHERE a.state IN ('expired', 'cancelled') AND m.state = 'acknowledged') AS expiredWithSellableCards,
+    (SELECT COUNT(*)
+        FROM ${CARD_SERVICE_CARDS_TABLE} m
+        LEFT JOIN ${LOCAL_CARDS_TABLE} c ON c.id = m.local_card_id
+        WHERE c.id IS NULL) AS orphanMappings,
+    (SELECT COUNT(*)
+        FROM ${CARD_SERVICE_STAGED_CARDS_TABLE} s
+        LEFT JOIN ${CARD_SERVICE_ALLOCATIONS_TABLE} a ON a.allocation_id = s.allocation_id
+        WHERE a.allocation_id IS NULL OR a.state <> 'allocated') AS stagedWithoutActiveAllocation
 `
 
 const EXPIRING_SELECT = `
@@ -382,9 +375,9 @@ export async function loadCardServiceOverview(
         overview.expiring = expiring.map((row) => mapExpiringRow(row, nowMs))
         overview.overdue = overview.expiring.filter((row) => row.remainingMs <= 0)
 
-        for (const row of driftRows) {
-            const metric = toStringOrEmpty(row.metric) as keyof CardServiceDrift
-            if (metric in overview.drift) overview.drift[metric] = toInteger(row.total)
+        const drift = driftRows[0]
+        for (const metric of Object.keys(overview.drift) as Array<keyof CardServiceDrift>) {
+            overview.drift[metric] = toInteger(drift?.[metric])
         }
 
         overview.reviewCount = countReviewItems(overview)
