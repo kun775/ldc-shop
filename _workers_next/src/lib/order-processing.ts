@@ -14,6 +14,19 @@ import {
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { getProductCardDeliveryNote } from "@/lib/card-delivery-note"
 import { consumeCouponReservations } from "@/lib/coupons/reservation"
+import {
+    OrderSaleError,
+    buildDeliverOrderStatements,
+    buildOrderSaleDeps,
+    executeOrderRemoteSales,
+    isLicenseServiceConfigured,
+    listPendingSellOperations,
+    loadOrderRemoteSalePlan,
+    mapOrderSaleFailure,
+    mapOrderSalePlanFailure,
+    type OrderRemoteSaleGroup,
+} from "@/lib/license-service"
+import { createD1CardServiceDatabase } from "@/lib/license-service/database"
 import { updateTag } from "next/cache"
 import { after } from "next/server"
 import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
@@ -27,6 +40,20 @@ type FulfillmentResult = {
     success: true
     status: "processed" | "already_processed" | "processing"
     orderStatus?: string | null
+}
+
+/**
+ * 自动化发卡订单的交付结论。
+ *
+ * `delivered = false` 表示明文**尚未**对用户开放（订单被回落到 `paid`，等待
+ * 回调重试或对账补偿），调用方不得发送卡密邮件，也不能把订单说成交付完成。
+ * 阶段 D 的「Sell 未确认不交付」就体现在这个字段上。
+ */
+export interface AutomatedDeliveryOutcome {
+    orderStatus: "delivered" | "paid" | "processing"
+    delivered: boolean
+    cardKeys: string
+    deliveryNote: string
 }
 
 function isValidEmail(value: string | null | undefined) {
@@ -297,74 +324,171 @@ async function reserveCardsForFulfillment(order: typeof orders.$inferSelect) {
     return selected.slice(0, quantity)
 }
 
+/**
+ * 交付批次：**订单、本地卡、远端映射、操作台账一次性写入**。
+ *
+ * 语句由 `buildDeliverOrderStatements` 构造，顺序本身就是安全边界：
+ * ① 订单行带全部前置条件（claim 仍属于本线程、卡仍在预留、映射可售），
+ * 不满足就 0 行受影响；② 之后的每条语句都以「本批次刚把订单写成 delivered」
+ * 为前置条件。D1 的 batch 整批原子，因此不存在「卡已用而订单未交付」的中间态。
+ *
+ * `remoteGroups` 为空时不引用任何 `card_service_*` 表 —— 升级项 `0038`
+ * 未执行时纯本地交付必须照常工作。
+ */
 async function finalizeCardDelivery(
     order: typeof orders.$inferSelect,
     claimId: string,
     tradeNo: string,
     selectedCards: Array<{ id: number; cardKey: string }>,
     deliveryNote: string,
+    remoteGroups: ReadonlyArray<{ allocationId: string; localCardIds: number[] }>,
 ) {
     const joinedKeys = selectedCards.map((card) => card.cardKey).join("\n")
     const selectedIds = selectedCards.map((card) => card.id)
-    const cardIdsValue = selectedIds.join(",")
-    const nowMs = Date.now()
-    const placeholders = sql.join(selectedIds.map((id) => sql`${id}`), sql`, `)
+    const database = createD1CardServiceDatabase()
 
-    const consumed: any = await db.run(sql`
-        UPDATE cards
-        SET is_used = 1,
-            used_at = ${nowMs},
-            reserved_order_id = NULL,
-            reserved_at = NULL
-        WHERE id IN (${placeholders})
-          AND reserved_order_id = ${order.orderId}
-          AND (is_used = 0 OR is_used IS NULL)
-        RETURNING id
-    `)
-    const consumedRows = consumed?.results || consumed?.rows || []
-    if (consumedRows.length !== selectedCards.length) {
-        throw new Error(`Order ${order.orderId} lost reserved cards before delivery`)
-    }
+    const results = await database.write(buildDeliverOrderStatements({
+        orderId: order.orderId,
+        claimId,
+        tradeNo,
+        cardKey: joinedKeys,
+        localCardIds: selectedIds,
+        deliveryNote: deliveryNote || null,
+        nowMs: Date.now(),
+        remoteGroups,
+    }))
 
-    await consumeCouponReservations(order.orderId)
-
-    const finalized = await db.update(orders)
-        .set({
-            status: "delivered",
-            paidAt: new Date(nowMs),
-            deliveredAt: new Date(nowMs),
-            tradeNo,
-            cardKey: joinedKeys,
-            cardIds: cardIdsValue,
-            deliveryNote: deliveryNote || null,
-            currentPaymentId: null,
-            fulfillmentClaimId: null,
-            fulfillmentClaimedAt: null,
-        })
-        .where(and(
-            eq(orders.orderId, order.orderId),
-            eq(orders.status, FULFILLMENT_CLAIM_STATUS),
-            eq(orders.fulfillmentClaimId, claimId),
-        ))
-        .returning({ status: orders.status })
-
-    if (!finalized.length) {
+    if (!results[0]?.changes) {
         throw new Error(`Order ${order.orderId} lost fulfillment claim before delivery`)
+    }
+    if (results[1]?.changes !== selectedIds.length) {
+        throw new Error(`Order ${order.orderId} lost reserved cards before delivery`)
     }
 
     return joinedKeys
 }
 
+/**
+ * 阶段 D 的核心闸门：**远端卡必须在本地交付之前全部售出**。
+ *
+ * 返回需要标记 `sold` 的批次；空数组表示纯本地订单，走既有路径（连中心配置
+ * 都不需要）。任何不可交付的情形都抛 `OrderSaleError`：调用方会把订单回落到
+ * `paid`，由支付回调重试或对账重放推进 —— 绝不「先交付再补 Sell」。
+ */
+async function sellRemoteCardsForOrder(
+    order: typeof orders.$inferSelect,
+    selectedCards: Array<{ id: number; cardKey: string }>,
+): Promise<OrderRemoteSaleGroup[]> {
+    const database = createD1CardServiceDatabase()
+    const plan = await loadOrderRemoteSalePlan(database, {
+        orderId: order.orderId,
+        localCardIds: selectedCards.map((card) => card.id),
+    })
+
+    if (plan.kind === "none") return []
+
+    if (plan.kind === "blocked") {
+        console.error(
+            `[Fulfill] Order ${order.orderId} remote sale blocked: reason=${plan.reason} allocation=${plan.allocationId || "n/a"} detail=${plan.detail}`,
+        )
+        throw mapOrderSalePlanFailure(plan)
+    }
+
+    // 只有在确认订单确实含远端卡之后才要求中心配置：否则纯本地订单会被一个
+    // 与它无关的配置缺失挡住。
+    if (!isLicenseServiceConfigured()) {
+        throw new OrderSaleError({
+            reason: "config_error",
+            errorCode: "config_error",
+            retryable: false,
+            detail: "LICENSE_SERVICE_BASE_URL / LICENSE_SERVICE_API_KEY is not configured",
+        })
+    }
+
+    const outcome = await executeOrderRemoteSales(buildOrderSaleDeps(), {
+        orderId: order.orderId,
+        groups: plan.groups,
+    })
+
+    if (outcome.status !== "confirmed") {
+        console.error(
+            `[Fulfill] Order ${order.orderId} remote sell not confirmed: status=${outcome.status}`
+            + ` reason=${outcome.status === "deferred" ? "deferred" : outcome.reason}`
+            + ` code=${outcome.status === "deferred" ? outcome.error.code : outcome.errorCode}`,
+        )
+        throw mapOrderSaleFailure(outcome)
+    }
+
+    return plan.groups
+}
+
+/**
+ * 自动化发卡（普通商品）的交付核心：预留 → 远端 Sell → 原子交付。
+ *
+ * 付费回调与零元订单共用这一条路径，因此「Sell 先于展示」只有一个实现点，
+ * 不会出现某条分支绕过远端 Sell 的情况。
+ */
+async function deliverAutomatedCardOrder(
+    order: typeof orders.$inferSelect,
+    claimId: string,
+    tradeNo: string,
+): Promise<AutomatedDeliveryOutcome> {
+    const quantity = Math.max(1, Number(order.quantity || 1))
+    const selectedCards = await reserveCardsForFulfillment(order)
+
+    if (selectedCards.length < quantity) {
+        // 已收款但卡不足：退回预留、订单留在 `paid` 等待补货/人工，绝不能交付部分卡。
+        await db.update(cards)
+            .set({ reservedOrderId: null, reservedAt: null })
+            .where(and(
+                eq(cards.reservedOrderId, order.orderId),
+                or(eq(cards.isUsed, false), isNull(cards.isUsed)),
+            ))
+        await finalizePaidOrder(order.orderId, claimId, tradeNo)
+        return { orderStatus: "paid", delivered: false, cardKeys: "", deliveryNote: "" }
+    }
+
+    const deliveryNote = await getProductCardDeliveryNote(order.productId).catch((error) => {
+        console.error("[Order] Failed to load card delivery note:", error)
+        return ""
+    })
+
+    const soldGroups = await sellRemoteCardsForOrder(order, selectedCards)
+
+    // 券核销放在交付批次之前：批次必须是「一次成功」的最后一步，不能在其中夹带
+    // 跨模块调用。`consumeCouponReservations` 自身幂等，重放安全。
+    await consumeCouponReservations(order.orderId)
+
+    const joinedKeys = await finalizeCardDelivery(
+        order,
+        claimId,
+        tradeNo,
+        selectedCards,
+        deliveryNote,
+        soldGroups.map((group) => ({ allocationId: group.allocationId, localCardIds: group.localCardIds })),
+    )
+
+    return { orderStatus: "delivered", delivered: true, cardKeys: joinedKeys, deliveryNote }
+}
+
+/**
+ * 释放失败时的履约声明。
+ *
+ * `asPaid` 用于「支付已确认、只是交付没做完」的场景（阶段 D 的 Sell 未确认、
+ * 卡不足等）：此时必须回落到 `paid` 而不是 `pending`，否则订单会被
+ * `cancelExpiredOrders` 当成未支付订单取消，而已收款的订单是不能被取消的。
+ */
 async function restoreClaimAfterFailure(
     order: typeof orders.$inferSelect,
     claimId: string,
+    asPaid?: { paidAt: Date; tradeNo: string },
 ) {
     try {
         await db.update(orders)
             .set({
-                status: order.status || "pending",
-                paidAt: order.paidAt,
-                tradeNo: order.tradeNo,
+                status: asPaid ? "paid" : (order.status || "pending"),
+                paidAt: asPaid ? asPaid.paidAt : order.paidAt,
+                tradeNo: asPaid ? asPaid.tradeNo : order.tradeNo,
                 currentPaymentId: order.currentPaymentId,
                 fulfillmentClaimId: order.fulfillmentClaimId,
                 fulfillmentClaimedAt: order.fulfillmentClaimedAt,
@@ -435,6 +559,9 @@ export async function processOrderFulfillment(
         throw new Error(`Order ${orderId} is not claimable from status ${latest.status || "unknown"}`)
     }
 
+    // 支付已确认、交付未完成时的回落目标（见 restoreClaimAfterFailure）。
+    let paidFallback: { paidAt: Date; tradeNo: string } | null = null
+
     try {
         if (isPaymentOrder(existing.productId)) {
             await finalizePaidOrder(orderId, claimId, tradeNo)
@@ -491,35 +618,144 @@ export async function processOrderFulfillment(
             return { success: true, status: "processed", orderStatus: "delivered" }
         }
 
-        const selectedCards = await reserveCardsForFulfillment(existing)
-        const quantity = Math.max(1, Number(existing.quantity || 1))
-        if (selectedCards.length < quantity) {
-            await db.update(cards)
-                .set({ reservedOrderId: null, reservedAt: null })
-                .where(and(
-                    eq(cards.reservedOrderId, orderId),
-                    or(eq(cards.isUsed, false), isNull(cards.isUsed)),
-                ))
-            await finalizePaidOrder(orderId, claimId, tradeNo)
+        // 自动化发卡：远端 Sell 未确认前一律不得交付，失败时订单回落到 `paid`
+        //（而不是 `pending`），由回调重试或对账重放推进。
+        paidFallback = { paidAt: now, tradeNo }
+        const delivery = await deliverAutomatedCardOrder(existing, claimId, tradeNo)
+
+        if (!delivery.delivered) {
+            console.warn(`[Fulfill] Order ${orderId} is paid but not delivered; waiting for stock or compensation`)
             scheduleAdminNotification(existing, tradeNo, productName)
             await refreshProductAggregates(existing.productId)
             return { success: true, status: "processed", orderStatus: "paid" }
         }
 
-        const deliveryNote = await getProductCardDeliveryNote(existing.productId).catch((error) => {
-            console.error("[Order] Failed to load card delivery note:", error)
-            return ""
-        })
-        const joinedKeys = await finalizeCardDelivery(existing, claimId, tradeNo, selectedCards, deliveryNote)
         await notifyUserDelivered(existing, productName)
         scheduleAdminNotification(existing, tradeNo, productName)
-        scheduleDeliveryEmail(existing, productName, joinedKeys, deliveryNote)
+        scheduleDeliveryEmail(existing, productName, delivery.cardKeys, delivery.deliveryNote)
         await refreshProductAggregates(existing.productId)
         await autoReplenishByApi(existing.productId, `order:${orderId}`)
         console.log(`[Fulfill] Order ${orderId} delivered successfully`)
         return { success: true, status: "processed", orderStatus: "delivered" }
     } catch (error) {
-        await restoreClaimAfterFailure(existing, claimId)
+        await restoreClaimAfterFailure(existing, claimId, paidFallback ?? undefined)
         throw error
     }
+}
+
+/**
+ * 零元订单（积分/券全额抵扣）的交付入口 —— 阶段 D 第 5 条。
+ *
+ * 零元订单由 `checkout.ts` 直接落成 `paid`（不经过支付回调），因此不能走
+ * `processOrderFulfillment` 的 `pending` 认领分支；但它**必须**与付费订单
+ * 共用同一条「Sell → 原子交付」核心，否则零元订单会绕开远端 Sell 直接发卡。
+ *
+ * 认领条件收紧为「已支付且 `card_key` 为空」；调用方必须先排除手动履约商品
+ *（手动履约订单同样是 `paid`，但不需要自动化发卡）。
+ *
+ * 与 `processOrderFulfillment` 的关键差别：**交付未完成不抛错**，返回
+ * `delivered: false` 并把订单留在 `paid`。原因是抛错会让下单流程走回滚分支，
+ * 而零元订单的积分/券已经扣掉，删单重建就等于重复扣减 —— 方案要求所有补偿
+ * 都依据原订单号推进，所以订单必须留下来。
+ */
+export async function completePaidOrderDelivery(orderId: string): Promise<AutomatedDeliveryOutcome> {
+    await ensureDatabaseInitialized()
+
+    const existing = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
+    if (!existing) throw new Error(`Order ${orderId} not found`)
+
+    if (existing.status === "delivered") {
+        return { orderStatus: "delivered", delivered: true, cardKeys: existing.cardKey || "", deliveryNote: existing.deliveryNote || "" }
+    }
+    if (existing.status === FULFILLMENT_CLAIM_STATUS || existing.status === "pending") {
+        // 别的路径正在处理，或订单尚未被标记为已支付：不做任何事。
+        return { orderStatus: "processing", delivered: false, cardKeys: "", deliveryNote: "" }
+    }
+    if (existing.status !== "paid" || existing.cardKey) {
+        return { orderStatus: "processing", delivered: false, cardKeys: "", deliveryNote: "" }
+    }
+
+    const now = new Date()
+    const claimId = randomUUID()
+    const staleBefore = new Date(now.getTime() - FULFILLMENT_CLAIM_TTL_MS)
+    const claimable = and(
+        eq(orders.orderId, orderId),
+        isNull(orders.cardKey),
+        or(
+            eq(orders.status, "paid"),
+            and(
+                eq(orders.status, FULFILLMENT_CLAIM_STATUS),
+                or(isNull(orders.fulfillmentClaimedAt), lt(orders.fulfillmentClaimedAt, staleBefore)),
+            ),
+        ),
+    )
+
+    const claimed = await db.update(orders)
+        .set({
+            status: FULFILLMENT_CLAIM_STATUS,
+            currentPaymentId: null,
+            fulfillmentClaimId: claimId,
+            fulfillmentClaimedAt: now,
+        })
+        .where(claimable)
+        .returning({ orderId: orders.orderId })
+
+    if (!claimed.length) {
+        // 另一个请求持有声明（10 分钟租约）或订单已交付：交给调用方稍后重试。
+        return { orderStatus: "processing", delivered: false, cardKeys: "", deliveryNote: "" }
+    }
+
+    const tradeNo = existing.tradeNo || "POINTS_REDEMPTION"
+    try {
+        const delivery = await deliverAutomatedCardOrder(existing, claimId, tradeNo)
+        if (delivery.delivered) {
+            await notifyUserDelivered(existing)
+            scheduleDeliveryEmail(existing, existing.productName || "Product", delivery.cardKeys, delivery.deliveryNote)
+            console.log(`[Fulfill] Zero-price order ${orderId} delivered successfully`)
+        }
+        return delivery
+    } catch (error) {
+        // 交付未完成：回落到 `paid` 并保留原订单，由对账/重试入口继续推进。
+        const saleError = error instanceof OrderSaleError ? error : null
+        console.error(
+            `[Fulfill] Zero-price order ${orderId} delivery deferred:`
+            + ` reason=${saleError?.reason ?? "unexpected"}`
+            + ` retryable=${saleError ? saleError.retryable : "unknown"}`
+            + ` code=${saleError?.errorCode ?? "n/a"}`,
+        )
+        await restoreClaimAfterFailure(existing, claimId, { paidAt: existing.paidAt ?? now, tradeNo })
+        return { orderStatus: "paid", delivered: false, cardKeys: "", deliveryNote: "" }
+    }
+}
+
+/**
+ * 补偿入口：把「已支付但未交付」的远端订单按原样重放到交付核心。
+ *
+ * 触发源是操作台账里的 `sell` 待办（`pending`/`failed`），因此不会误碰手动履约
+ * 订单，也不需要扫描全部订单。定时任务（阶段 E）调用它；同一次运行里每个订单
+ * 只处理一次，重放用的幂等键与原订单号绑定，重复执行不会多卖一张卡。
+ */
+export async function retryPendingCardServiceDeliveries(
+    options: { limit?: number } = {},
+): Promise<{ attempted: number; delivered: number; deferred: number }> {
+    await ensureDatabaseInitialized()
+
+    const database = createD1CardServiceDatabase()
+    const pending = await listPendingSellOperations(database, { limit: options.limit ?? 20 })
+    const orderIds = Array.from(new Set(pending.map((row) => row.orderId).filter((id): id is string => !!id)))
+
+    let delivered = 0
+    let deferred = 0
+    for (const orderId of orderIds) {
+        try {
+            const outcome = await completePaidOrderDelivery(orderId)
+            if (outcome.delivered) delivered += 1
+            else deferred += 1
+        } catch (error) {
+            deferred += 1
+            console.error(`[Fulfill] Retry delivery failed for order ${orderId}:`, error)
+        }
+    }
+
+    return { attempted: orderIds.length, delivered, deferred }
 }

@@ -31,6 +31,7 @@ import {
     type RestockOptions,
     type RestockResult,
 } from './restock.ts'
+import type { OrderSaleDeps } from './delivery.ts'
 
 export type { ReplenishOptions, ReplenishSummary } from './replenish.ts'
 export type { ReconcileSummary, ReconcileOutcome } from './reconcile.ts'
@@ -39,12 +40,32 @@ export type { LicenseServiceClient } from './client.ts'
 export type { LicenseServiceConfig } from './config.ts'
 export type { LicenseServiceErrorCategory, LicenseServiceErrorCode } from './errors.ts'
 export type { CardServiceSupplyMode } from '../db/license-service-schema.ts'
+export type {
+    OrderRemoteSalePlan,
+    OrderRemoteSaleGroup,
+    OrderSaleBlockReason,
+    OrderSaleDeps,
+    OrderSaleExecution,
+} from './delivery.ts'
 
 export { LICENSE_SERVICE_CONFIG_FAILURE_MESSAGES } from './config.ts'
 export { LicenseServiceError, isLicenseServiceError } from './errors.ts'
 export { createLicenseServiceClient } from './client.ts'
 export { loadCardServiceProductConfig, saveCardServiceProductConfig, listCardServiceProgramProducts } from './product-config.ts'
 export { CARD_SERVICE_DEFAULT_TARGET_STOCK, CARD_SERVICE_REPLENISH_BATCH_LIMIT } from './replenish.ts'
+export {
+    OrderSaleError,
+    buildDeliverOrderStatements,
+    buildSellDeferStatements,
+    buildSellFailStatements,
+    buildSellIntentStatements,
+    executeOrderRemoteSales,
+    listOrderRemoteCardRows,
+    listPendingSellOperations,
+    loadOrderRemoteSalePlan,
+    mapOrderSaleFailure,
+    mapOrderSalePlanFailure,
+} from './delivery.ts'
 
 /** 是否具备调用中心的最小配置（Base URL + 销售 Key）。 */
 export function isLicenseServiceConfigured(env: Record<string, string | undefined> = process.env): boolean {
@@ -68,6 +89,20 @@ export function getLicenseServiceClient(env: Record<string, string | undefined> 
 
 /** 组装补货/对账所需的依赖。 */
 export function buildCardServiceDeps(env: Record<string, string | undefined> = process.env): RestockDeps {
+    return {
+        client: getLicenseServiceClient(env),
+        database: createD1CardServiceDatabase(),
+    }
+}
+
+/**
+ * 组装「交付前 Sell」所需的依赖。
+ *
+ * 与补货共用同一套凭据与 D1 端口。凭据缺失时 `getLicenseServiceClient` 抛
+ * `config_error`；履约路径必须在确认订单确实含远端卡**之后**才调用它，
+ * 否则纯本地订单会被一个无关的配置问题挡住。
+ */
+export function buildOrderSaleDeps(env: Record<string, string | undefined> = process.env): OrderSaleDeps {
     return {
         client: getLicenseServiceClient(env),
         database: createD1CardServiceDatabase(),

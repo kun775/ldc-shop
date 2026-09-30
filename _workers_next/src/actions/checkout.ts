@@ -5,7 +5,7 @@ import { db } from "@/lib/db"
 import { products, cards, orders, loginUsers } from "@/lib/db/schema"
 import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded, createUserNotification, ensureDatabaseInitialized, getLoginUserEmail, recalcProductAggregates } from "@/lib/db/queries"
 import { generateOrderId, generateSign } from "@/lib/crypto"
-import { eq, sql, and, or, isNull, lt, gt, inArray } from "drizzle-orm"
+import { eq, sql, and, or, isNull, lt, gt, inArray, ne } from "drizzle-orm"
 import { cookies } from "next/headers"
 import { revalidatePath, updateTag } from "next/cache"
 import { after } from "next/server"
@@ -27,7 +27,7 @@ import { parseCheckoutFieldConfigs, validateCheckoutFieldValues } from "@/lib/ch
 import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
 import { createOrderAccessToken, ORDER_ACCESS_COOKIE, ORDER_ACCESS_TTL_SECONDS } from "@/lib/order-access"
 import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
-import { processOrderFulfillment } from "@/lib/order-processing"
+import { processOrderFulfillment, completePaidOrderDelivery, type AutomatedDeliveryOutcome } from "@/lib/order-processing"
 import { enforceRateLimit } from "@/lib/rate-limit"
 
 const MAX_ORDER_QUANTITY = 10000
@@ -303,6 +303,16 @@ export async function createOrder(productId: string, quantity: number = 1, email
     // Fail before any database write if the server cannot issue the guest capability.
     const orderAccessToken = createOrderAccessToken(orderId)
 
+    // 零元自动订单的交付结论：`null` 表示还没走到交付（手动履约 / 非零元）。
+    // 提到这一层是为了让审计元数据与最终返回都能如实反映「已交付还是待发放」。
+    //
+    // 注意：真正赋值发生在 `reserveAndCreate` 内层闭包里，顶层控制流分析只看得见
+    // 初始值 `null`，直接对该变量做可选链取值会被收窄成 `null`
+    // （属性访问落在 `never` 上而报 TS2339）。因此一律通过下面这个显式声明返回
+    // 类型的读取器取值，与作用域层级无关。
+    let zeroPriceDelivery: AutomatedDeliveryOutcome | null = null
+    const readZeroPriceDelivery = (): AutomatedDeliveryOutcome | null => zeroPriceDelivery
+
     const reserveAndCreate = async () => {
         const { queryOrderStatus } = await import("@/lib/epay")
 
@@ -483,6 +493,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
     const createOrderRecord = async (reservedCards: any[], joinedKeys: string, isZeroPrice: boolean, pointsToUse: number, user: any, canonicalUsername: any, contactInfo: any, product: any, orderId: string, qty: number, checkoutFieldValuesJson: string | null) => {
         let orderInserted = false
+        // 共享商品的交付备注（它不经交付核心，邮件仍由本函数发出）。
         let automaticDeliveryNote = ""
         const normalizedUsername = canonicalUsername || user?.username || user?.name || null
         const uniqueCardIds = Array.from(new Set(reservedCards.map(c => c.id).filter((id: any) => id !== null && id !== undefined)));
@@ -527,23 +538,13 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         createdAt: new Date()
                     });
                     orderInserted = true
-                } else {
+                } else if (product.isShared) {
+                    // 共享商品不占库存、也不存在远端映射（它只借用一张可用卡作为
+                    // 交付引用），因此保持既有行为：直接落成 `delivered`。
                     automaticDeliveryNote = await getProductCardDeliveryNote(product.id).catch((error) => {
                         console.error('[Order] Failed to load card delivery note:', error)
                         return ''
                     })
-                    if (!product.isShared) {
-                        // 控制每条 UPDATE 的绑定变量数，避免大额零元订单超过 D1/SQLite 上限。
-                        for (let offset = 0; offset < uniqueCardIds.length; offset += CARD_UPDATE_BATCH_SIZE) {
-                            await db.update(cards).set({
-                                isUsed: true,
-                                usedAt: new Date(),
-                                reservedOrderId: null,
-                                reservedAt: null
-                            }).where(inArray(cards.id, uniqueCardIds.slice(offset, offset + CARD_UPDATE_BATCH_SIZE)));
-                        }
-                    }
-
                     await db.insert(orders).values({
                         orderId,
                         productId: product.id,
@@ -558,6 +559,34 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         deliveryNote: automaticDeliveryNote || null,
                         paidAt: new Date(),
                         deliveredAt: new Date(),
+                        tradeNo: 'POINTS_REDEMPTION',
+                        pointsUsed: pointsToUse,
+                        quantity: qty,
+                        manualStockQuantity: 0,
+                        checkoutFieldValues: checkoutFieldValuesJson,
+                        fulfillmentMode,
+                        createdAt: new Date()
+                    });
+                    orderInserted = true
+                } else {
+                    // 阶段 D：零元自动订单**不再**在这里直接消耗卡密并落成 `delivered`。
+                    // 先写一条「已支付、未交付」的持久订单（`card_key` 为空，用户
+                    // 看不到明文），随后由 `completePaidOrderDelivery` 走与付费订单
+                    // 完全相同的 Sell → 原子交付路径。交付未完成时订单仍在，
+                    // 补偿一律依据原订单号，不删单、不重建、不重复扣积分或券。
+                    await db.insert(orders).values({
+                        orderId,
+                        productId: product.id,
+                        productName: product.name,
+                        ...orderSnapshotFields,
+                        email: resolvedContactInfo,
+                        userId: user?.id || null,
+                        username: normalizedUsername,
+                        status: 'paid',
+                        cardKey: null,
+                        cardIds: cardIdsValue,
+                        deliveryNote: null,
+                        paidAt: new Date(),
                         tradeNo: 'POINTS_REDEMPTION',
                         pointsUsed: pointsToUse,
                         quantity: qty,
@@ -620,13 +649,24 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     }
                 }
 
-                if (user?.id) {
+                if (!manualFulfillment && !product.isShared) {
+                    // 与付费回调共用同一条交付核心：远端 Sell 未确认就不会有明文。
+                    zeroPriceDelivery = await completePaidOrderDelivery(orderId)
+                }
+
+                // 共享商品由本函数直接交付（不经交付核心），通知与邮件也由本函数发出；
+                // 非共享的自动订单若已交付，通知/邮件由交付核心统一发出，避免重复。
+                const sharedAutoDelivered = !manualFulfillment && product.isShared
+                const pendingDelivery = !manualFulfillment && !sharedAutoDelivered && !readZeroPriceDelivery()?.delivered
+
+                if (user?.id && (manualFulfillment || sharedAutoDelivered || pendingDelivery)) {
+                    const paidOnly = manualFulfillment || pendingDelivery
                     try {
                         await createUserNotification({
                             userId: user.id,
-                            type: manualFulfillment ? 'order_paid' : 'order_delivered',
-                            titleKey: manualFulfillment ? 'profile.notifications.orderPaidManualTitle' : 'profile.notifications.orderDeliveredTitle',
-                            contentKey: manualFulfillment ? 'profile.notifications.orderPaidManualBody' : 'profile.notifications.orderDeliveredBody',
+                            type: paidOnly ? 'order_paid' : 'order_delivered',
+                            titleKey: paidOnly ? 'profile.notifications.orderPaidManualTitle' : 'profile.notifications.orderDeliveredTitle',
+                            contentKey: paidOnly ? 'profile.notifications.orderPaidManualBody' : 'profile.notifications.orderDeliveredBody',
                             data: {
                                 params: {
                                     orderId,
@@ -640,7 +680,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     }
                 }
 
-                if (!manualFulfillment && !product.isShared && !!cardIdsValue) {
+                if (!manualFulfillment && readZeroPriceDelivery()?.delivered && !product.isShared && !!cardIdsValue) {
                     await autoReplenishByApi(product.id, `order:${orderId}:zero_price`)
                 }
 
@@ -662,33 +702,42 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         console.error('[Notification] Points payment notify failed:', err);
                     }
 
-                    // Send email with card keys (only for automatic fulfillment)
-                    const orderEmail = resolvedDeliveryEmail;
-                    if (orderEmail && !manualFulfillment) {
-                        await sendOrderEmail({
-                            to: orderEmail,
-                            orderId,
-                            productName: product.name,
-                            cardKeys: joinedKeys,
-                            deliveryNote: automaticDeliveryNote,
-                        }).catch(err => console.error('[Email] Points payment email failed:', err));
+                    // 非共享自动订单的卡密邮件由交付核心在确认交付后发出（阶段 D），
+                    // 这里只负责共享商品 —— 否则「已支付、待发放」的订单会收到一封
+                    // 没有卡密的邮件。
+                    if (sharedAutoDelivered) {
+                        const orderEmail = resolvedDeliveryEmail;
+                        if (orderEmail) {
+                            await sendOrderEmail({
+                                to: orderEmail,
+                                orderId,
+                                productName: product.name,
+                                cardKeys: joinedKeys,
+                                deliveryNote: automaticDeliveryNote,
+                            }).catch(err => console.error('[Email] Points payment email failed:', err));
+                        }
                     }
                 })
             }
         } catch (error) {
             if (orderInserted) {
                 try {
-                    await db.delete(orders).where(eq(orders.orderId, orderId))
+                    // 已交付的订单不能被回滚删除：删除会丢掉远端已售卡的本地锚点，
+                    // 而补偿必须依据原订单号。回滚只针对尚未交付的订单行。
+                    await db.delete(orders).where(and(
+                        eq(orders.orderId, orderId),
+                        ne(orders.status, 'delivered')
+                    ))
                 } catch {
                     // best effort rollback
                 }
             }
 
-            if (uniqueCardIds.length > 0) {
+            if (uniqueCardIds.length > 0 && !readZeroPriceDelivery()?.delivered) {
                 for (let offset = 0; offset < uniqueCardIds.length; offset += CARD_UPDATE_BATCH_SIZE) {
                     const batchIds = uniqueCardIds.slice(offset, offset + CARD_UPDATE_BATCH_SIZE)
                     try {
-                        if (isZeroPrice && !product.isShared) {
+                        if (isZeroPrice && !product.isShared && !readZeroPriceDelivery()?.delivered) {
                             await db.update(cards).set({
                                 isUsed: false,
                                 usedAt: null,
@@ -823,7 +872,9 @@ export async function createOrder(productId: string, quantity: number = 1, email
             productName: product.name,
             amountCents: finalAmountCents,
             quantity,
-            status: isZeroPrice ? (manualFulfillment ? 'paid' : 'delivered') : 'pending',
+            status: isZeroPrice
+                ? (manualFulfillment || !readZeroPriceDelivery()?.delivered ? 'paid' : 'delivered')
+                : 'pending',
             fulfillmentMode,
             points: pointsToUse,
             couponCount: couponReservationLines.length,

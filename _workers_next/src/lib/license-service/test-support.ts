@@ -42,7 +42,14 @@ interface SqliteModule {
 const nodeRequire = createRequire(import.meta.url)
 const { DatabaseSync } = nodeRequire('node:sqlite') as SqliteModule
 
-/** 与 `src/lib/db/queries.ts` 中 `cards` / `products` 的建表语句保持一致的关键列。 */
+/**
+ * 与 `src/lib/db/queries.ts` 中 `cards` / `orders` / `products` 的建表语句保持
+ * 一致的关键列。
+ *
+ * `orders` 只在阶段 D（交付前 Sell 的原子批次会同时写订单行与 `cards`）里需要，
+ * 但既然交付批次把三者放进同一个事务，测试就必须同时提供三者，否则验证不到
+ * 「claim 丢失时整批落空」这条不变式。
+ */
 const CORE_TABLE_STATEMENTS: readonly string[] = [
     `CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY)`,
     `CREATE TABLE IF NOT EXISTS cards (
@@ -54,6 +61,31 @@ const CORE_TABLE_STATEMENTS: readonly string[] = [
         reserved_at INTEGER,
         expires_at INTEGER,
         used_at INTEGER,
+        created_at INTEGER DEFAULT (unixepoch() * 1000)
+    )`,
+    `CREATE TABLE IF NOT EXISTS orders (
+        order_id TEXT PRIMARY KEY,
+        product_id TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        email TEXT,
+        status TEXT DEFAULT 'pending',
+        trade_no TEXT,
+        card_key TEXT,
+        card_ids TEXT,
+        paid_at INTEGER,
+        delivered_at INTEGER,
+        user_id TEXT,
+        username TEXT,
+        points_used INTEGER DEFAULT 0,
+        quantity INTEGER DEFAULT 1 NOT NULL,
+        manual_stock_quantity INTEGER DEFAULT 0 NOT NULL,
+        current_payment_id TEXT,
+        checkout_field_values TEXT,
+        fulfillment_mode TEXT DEFAULT 'auto',
+        delivery_note TEXT,
+        fulfillment_claim_id TEXT,
+        fulfillment_claimed_at INTEGER,
         created_at INTEGER DEFAULT (unixepoch() * 1000)
     )`,
 ]
