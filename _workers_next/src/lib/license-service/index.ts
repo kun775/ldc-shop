@@ -26,6 +26,15 @@ import {
 } from './replenish.ts'
 import { reconcileCardServiceState, type ReconcileSummary } from './reconcile.ts'
 import {
+    listCardServiceProductStatus,
+    listCardServiceReviewQueue,
+    loadCardServiceOverview,
+    type CardServiceOverview,
+    type CardServiceOverviewOptions,
+    type CardServiceProductStatus,
+    type CardServiceReviewQueue,
+} from './ops.ts'
+import {
     executeOrderRevokes,
     loadOrderRevokePlan,
     loadRevokePlanForRemoteCards,
@@ -64,8 +73,36 @@ export type {
     RevokeDeps,
     RevokeOutcome,
 } from './revoke.ts'
+export type {
+    CardServiceAllocationCounts,
+    CardServiceCardCounts,
+    CardServiceDrift,
+    CardServiceOperationSummary,
+    CardServiceOperationTally,
+    CardServiceOverview,
+    CardServiceOverviewOptions,
+    CardServiceProductStatus,
+    CardServiceReviewQueue,
+    ExpiringAllocationRow,
+    OrphanMappingRow,
+    PendingOperationDetail,
+} from './ops.ts'
+export type { LicenseServiceConfigStatus, LicenseServiceMissingSetting } from './config.ts'
 
 export { LICENSE_SERVICE_CONFIG_FAILURE_MESSAGES } from './config.ts'
+export { describeLicenseServiceConfig } from './config.ts'
+export {
+    CARD_SERVICE_EXPIRING_SOON_DEFAULT_MS,
+    CARD_SERVICE_REVIEW_DEFAULT_LIMIT,
+    emptyCardServiceAllocationCounts,
+    emptyCardServiceCardCounts,
+    emptyCardServiceDrift,
+    emptyCardServiceOperationSummary,
+    emptyCardServiceOverview,
+    listCardServiceProductStatus,
+    listCardServiceReviewQueue,
+    loadCardServiceOverview,
+} from './ops.ts'
 export { LicenseServiceError, isLicenseServiceError } from './errors.ts'
 export { createLicenseServiceClient } from './client.ts'
 export { loadCardServiceProductConfig, saveCardServiceProductConfig, listCardServiceProgramProducts } from './product-config.ts'
@@ -154,6 +191,31 @@ export function buildRevokeDeps(env: Record<string, string | undefined> = proces
         client: getLicenseServiceClient(env),
         database: createD1CardServiceDatabase(),
     }
+}
+
+/**
+ * 运维总览 / 复核清单 / 商品维度状态。
+ *
+ * 这三个入口**只读本地账本、不联网**，所以不需要凭据、也不检查
+ * `isLicenseServiceConfigured` —— 面板恰恰要在「凭据没配好」时把账本与
+ * 配置状态一起展示出来。未执行 0038 时返回 `enabled: false` 的空快照。
+ */
+export async function getCardServiceOverview(
+    options: CardServiceOverviewOptions = {},
+): Promise<CardServiceOverview> {
+    return loadCardServiceOverview(createD1CardServiceDatabase(), options)
+}
+
+export async function getCardServiceReviewQueue(
+    options: { now?: number; limit?: number } = {},
+): Promise<CardServiceReviewQueue> {
+    return listCardServiceReviewQueue(createD1CardServiceDatabase(), options)
+}
+
+export async function getCardServiceProductStatus(
+    options: { limit?: number } = {},
+): Promise<CardServiceProductStatus[]> {
+    return listCardServiceProductStatus(createD1CardServiceDatabase(), options)
 }
 
 /**

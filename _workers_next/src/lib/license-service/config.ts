@@ -130,3 +130,55 @@ export function buildLicenseServiceUrl(baseUrl: string, path: string) {
     const suffix = path.startsWith('/') ? path : `/${path}`
     return `${baseUrl}${LICENSE_SERVICE_API_PATH}${suffix}`
 }
+
+/** 运维面板要展示的必填项（**只有名称，绝不含取值**）。 */
+export type LicenseServiceMissingSetting = 'base_url' | 'api_key'
+
+export interface LicenseServiceConfigStatus {
+    /** 销售路径是否可用（Base URL + 销售 Key 齐备）。 */
+    configured: boolean
+    /** 缺失或不合法的必填项。 */
+    missing: LicenseServiceMissingSetting[]
+    /** 不满足时的具体原因；configured 为 true 时为 `null`。 */
+    reason: LicenseServiceConfigFailure | null
+    /**
+     * 是否具备自动化作废能力（独立 `cards:revoke` Key）。
+     *
+     * 缺失不影响销售与补货，但退款后的远端作废会就地失败为 `revoke_key_missing`
+     * 并堆在复核清单里 —— 面板要把这一项单独标出来，否则运维只能看到一个
+     * 不断增长的失败数却找不到原因。
+     */
+    revokeKeyPresent: boolean
+    /** 规范化后的 Base URL（公开信息，不含凭据）。未配置为 `null`。 */
+    baseUrl: string | null
+}
+
+/**
+ * 汇总配置状态供运维面板展示。
+ *
+ * 刻意与 `resolveLicenseServiceConfig` 分开：后者的契约是「不可用就失败」，
+ * 而面板需要的是「哪里没配、差在哪一步」，并且**任何情况下都不能回显密钥**。
+ */
+export function describeLicenseServiceConfig(
+    env: Record<string, string | undefined> = process.env,
+): LicenseServiceConfigStatus {
+    const base = normalizeLicenseServiceBaseUrl(env[LICENSE_SERVICE_ENV_BASE_URL])
+    const apiKey = (env[LICENSE_SERVICE_ENV_API_KEY] || '').trim()
+    const revokeKeyPresent = Boolean((env[LICENSE_SERVICE_ENV_REVOKE_API_KEY] || '').trim())
+
+    const missing: LicenseServiceMissingSetting[] = []
+    if (!base.ok) missing.push('base_url')
+    if (!apiKey) missing.push('api_key')
+
+    const reason: LicenseServiceConfigFailure | null = !base.ok
+        ? base.reason
+        : (!apiKey ? 'missing_api_key' : null)
+
+    return {
+        configured: base.ok && Boolean(apiKey),
+        missing,
+        reason,
+        revokeKeyPresent,
+        baseUrl: base.ok ? base.baseUrl : null,
+    }
+}
