@@ -14,8 +14,10 @@
 import { createLicenseServiceClient, type LicenseServiceClient } from './client.ts'
 import {
     LICENSE_SERVICE_CONFIG_FAILURE_MESSAGES,
+    describeLicenseServiceConfig,
     resolveLicenseServiceConfig,
     type LicenseServiceConfig,
+    type LicenseServiceConfigStatus,
 } from './config.ts'
 import { createD1CardServiceDatabase } from './database.ts'
 import { LicenseServiceError, type LicenseServiceErrorCode } from './errors.ts'
@@ -224,6 +226,36 @@ export async function getCardServiceProductStatus(
     options: { limit?: number } = {},
 ): Promise<CardServiceProductStatus[]> {
     return listCardServiceProductStatus(createD1CardServiceDatabase(), options)
+}
+
+/** 运维面板整页所需的四份数据。 */
+export interface CardServiceSnapshot {
+    overview: CardServiceOverview
+    review: CardServiceReviewQueue
+    products: CardServiceProductStatus[]
+    configStatus: LicenseServiceConfigStatus
+}
+
+/**
+ * 组装运维面板的整页快照。
+ *
+ * 刻意放在这里、而不是 `actions/card-service.ts`：带 `'use server'` 的文件里
+ * **每个导出都会变成浏览器可直接调用的 RPC 端点**，把不带鉴权的读取函数放进去
+ * 等于凭空开一个后门。服务端页面与动作各自加上自己的鉴权后调用它。
+ */
+export async function loadCardServiceSnapshot(): Promise<CardServiceSnapshot> {
+    const [overview, review, products] = await Promise.all([
+        getCardServiceOverview(),
+        getCardServiceReviewQueue(),
+        getCardServiceProductStatus(),
+    ])
+
+    return {
+        overview,
+        review,
+        products,
+        configStatus: describeLicenseServiceConfig(),
+    }
 }
 
 /**
