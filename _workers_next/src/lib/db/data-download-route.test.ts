@@ -11,6 +11,21 @@ import * as schema from './schema.ts'
 import { prepareManualStockProductsForSqlBackup } from '../manual-stock-backup.ts'
 import { AUDIT_EVENTS_CREATE_TABLE_STATEMENT, PLATFORM_ERROR_LOGS_CREATE_TABLE_STATEMENT, PLATFORM_ERROR_LOGS_ERROR_ID_COLUMN_DEFINITION, AUDIT_EVENTS_REQUIRED_COLUMNS, PLATFORM_ERROR_LOGS_CURRENT_REQUIRED_COLUMNS } from './audit-schema.ts'
 import { RATE_LIMIT_CREATE_TABLE_STATEMENT } from './rate-limit-schema.ts'
+import {
+    CARD_SERVICE_ALLOCATIONS_TABLE,
+    CARD_SERVICE_CARDS_TABLE,
+    CARD_SERVICE_OPERATIONS_TABLE,
+    CARD_SERVICE_PRODUCT_CONFIG_TABLE,
+    CARD_SERVICE_STAGED_CARDS_TABLE,
+} from './license-service-schema.ts'
+
+const CARD_SERVICE_TABLE_NAMES = [
+    CARD_SERVICE_ALLOCATIONS_TABLE,
+    CARD_SERVICE_STAGED_CARDS_TABLE,
+    CARD_SERVICE_CARDS_TABLE,
+    CARD_SERVICE_OPERATIONS_TABLE,
+    CARD_SERVICE_PRODUCT_CONFIG_TABLE,
+]
 
 const routeUrl = new URL('../../app/admin/data/download/route.ts', import.meta.url)
 const routeRequire = createRequire(routeUrl)
@@ -22,9 +37,10 @@ const tables = Object.values(schema)
 const independentTables = ['audit_events', 'platform_error_logs', 'rate_limit_counters']
 const expectedTables = [...tables.map(getTableName), ...independentTables].sort()
 
-function setup(options: { withoutRateLimit?: boolean } = {}) {
+function setup(options: { withoutRateLimit?: boolean; withoutCardService?: boolean } = {}) {
     const sqlite = new DatabaseSync(':memory:')
     for (const table of tables) {
+        if (options.withoutCardService && CARD_SERVICE_TABLE_NAMES.includes(getTableName(table))) continue
         const columns = Object.values(getTableColumns(table))
             .map((column) => `"${column.name}" ${column.getSQLType()}`)
         sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${columns.join(', ')})`)
@@ -231,6 +247,34 @@ test('可选限流表缺失显式标注；审计表缺失或空表缺列在 200 
     const extraTable = setup()
     extraTable.sqlite.exec('CREATE TABLE future_business_records (id TEXT PRIMARY KEY)')
     assert.equal((await extraTable.request('json')).status, 500)
+})
+
+test('远端账本未执行 0038 时备份不得失败，但必须显式标注缺失；有表时导出真实内容', async () => {
+    // 0038 需要管理员手动执行，在它执行之前既有库上没有这些表。
+    // 若把它们当必需表，备份功能会在「部署完成 → 点升级」之间整段不可用。
+    const absent = setup({ withoutCardService: true })
+    const absentJson = await absent.request('json')
+    assert.equal(absentJson.status, 200)
+    const missing = (absentJson.headers.get('X-Export-Missing-Optional-Tables') || '').split(',')
+    for (const name of CARD_SERVICE_TABLE_NAMES) {
+        assert.ok(missing.includes(name), `${name} must be flagged as missing`)
+    }
+    const absentBody = await absentJson.json()
+    for (const name of CARD_SERVICE_TABLE_NAMES) {
+        assert.equal(absentBody[name], null, `${name} must be null, not silently absent`)
+    }
+    const absentSql = await absent.request('sql')
+    assert.equal(absentSql.status, 200)
+    assert.match(await absentSql.text(), /-- Missing optional tables: .*card_service_cards/)
+
+    const present = setup()
+    const presentJson = await present.request('json')
+    assert.equal(presentJson.status, 200)
+    assert.equal(presentJson.headers.get('X-Export-Missing-Optional-Tables'), null)
+    const presentBody = await presentJson.json()
+    for (const name of CARD_SERVICE_TABLE_NAMES) {
+        assert.deepEqual(presentBody[name], [], `${name} must export real rows once 0038 ran`)
+    }
 })
 
 test('缺表在发出 200 前失败，流中断后无结束标志且读取抛错', async () => {

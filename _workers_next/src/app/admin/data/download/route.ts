@@ -150,7 +150,11 @@ interface ExportTableSpec {
   table: SQLiteTable
   /** 必须是该表的唯一主键；复合主键按声明顺序排列。 */
   keys: readonly string[]
-  /** 仅迁移前的限流运行态表可不存在；不存在时必须在导出中显式标记。 */
+  /**
+   * 由「新独立升级项」新增、尚未在所有库上执行完毕的表可不存在。
+   * 不存在时必须在导出中显式标记（`null` + X-Export-Missing-Optional-Tables），
+   * 而不是让整份备份失败 —— 备份能力绝不能依赖运维是否已经点过升级。
+   */
   optional?: boolean
 }
 
@@ -179,14 +183,16 @@ const FULL_EXPORT_TABLES: ExportTableSpec[] = [
   { table: orderDeliveryFiles, keys: ["id"] },
   { table: userPointLedger, keys: ["id"] },
   { table: databaseMigrations, keys: ["id"] },
-  // 远端卡密账本。必须全量导出：`card_service_cards` 是「已交付订单 ↔ 远端卡」
-  // 的唯一凭据链，一旦漏导，恢复后的库再也无法作废或对账这些卡；
-  // 而 `captureExportBounds` 会拒绝任何未登记的表，漏登记会直接让整份备份 500。
-  { table: cardServiceAllocations, keys: ["allocationId"] },
-  { table: cardServiceStagedCards, keys: ["remoteCardId"] },
-  { table: cardServiceCards, keys: ["localCardId"] },
-  { table: cardServiceOperations, keys: ["operationKey"] },
-  { table: cardServiceProductConfigs, keys: ["productId"] },
+  // 远端卡密账本（升级项 0038）。必须全量导出：`card_service_cards` 是
+  // 「已交付订单 ↔ 远端卡」的唯一凭据链，一旦漏导，恢复后的库再也无法作废或
+  // 对账这些卡；而 `captureExportBounds` 会拒绝任何未登记的表，漏登记会直接让
+  // 整份备份 500。标 optional 的原因与限流表一致：0038 需要管理员手动执行，
+  // 在它执行之前这些表在既有库上并不存在，备份不能因此失败。
+  { table: cardServiceAllocations, keys: ["allocationId"], optional: true },
+  { table: cardServiceStagedCards, keys: ["remoteCardId"], optional: true },
+  { table: cardServiceCards, keys: ["localCardId"], optional: true },
+  { table: cardServiceOperations, keys: ["operationKey"], optional: true },
+  { table: cardServiceProductConfigs, keys: ["productId"], optional: true },
   { table: auditEvents, keys: ["id"] },
   { table: platformErrorLogs, keys: ["id"] },
   { table: rateLimitCounters, keys: ["bucket", "subject", "window_start"], optional: true },
