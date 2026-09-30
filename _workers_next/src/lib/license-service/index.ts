@@ -20,6 +20,12 @@ import {
     type LicenseServiceConfigStatus,
 } from './config.ts'
 import { createD1CardServiceDatabase } from './database.ts'
+import type { CardServiceDatabase } from './db-port.ts'
+import { resolveAffectedProductIds } from './affected-products.ts'
+// 前台库存聚合（`products.stock_count`）的**唯一**回写入口。本层是全模块唯一
+// 允许依赖它、也是唯一能依赖它的地方：子模块必须保持「纯端口」，才能被
+// `node --test` 直接加载。
+import { recalcProductAggregatesForMany } from '@/lib/db/queries'
 import { LicenseServiceError, type LicenseServiceErrorCode } from './errors.ts'
 import {
     replenishLowStockProducts,
@@ -37,6 +43,7 @@ import {
     type CardServiceReviewQueue,
 } from './ops.ts'
 import {
+    buildRefundRevokeStatements,
     executeOrderRevokes,
     failRevokesWithoutClient,
     loadOrderRevokePlan,
@@ -142,13 +149,52 @@ export {
 } from './revoke.ts'
 export {
     listProtectedLocalCardIds,
+    orderHasPendingCardServiceOperations,
     orderHasRemoteMappings,
+    orderHasUnsettledCardServiceLedger,
     partitionDeletableLocalCardIds,
 } from './guards.ts'
 
 /** 是否具备调用中心的最小配置（Base URL + 销售 Key）。 */
 export function isLicenseServiceConfigured(env: Record<string, string | undefined> = process.env): boolean {
     return resolveLicenseServiceConfig(env).ok
+}
+
+/**
+ * 重算前台库存聚合（`products.stock_count` / `locked_count` / `sold_count`）。
+ *
+ * 这一步**必须**在每个会改动本地卡池的入口之后执行：`stock_count` 是由
+ * `recalcProductAggregates*` 算出来的一列派生值，没有任何触发器会跟着
+ * `cards` 的变化自动更新。少了它就会出现「补货成功但商品页一直缺货」以及
+ * 「退款作废把卡收回来、前台仍按旧库存继续卖」这两类不一致。
+ *
+ * 失败只记日志：聚合是派生值，重算失败不会让卡池或账本变错，下一轮会再算一次；
+ * 反过来让补货/退款因为一次统计查询失败而回滚，代价大得多。
+ */
+async function recalcStorefrontStock(productIds: readonly string[]): Promise<void> {
+    const ids = Array.from(
+        new Set(productIds.map((id) => (typeof id === 'string' ? id.trim() : '')).filter(Boolean)),
+    )
+    if (!ids.length) return
+    try {
+        await recalcProductAggregatesForMany(ids)
+    } catch (error) {
+        console.error('[CardService] storefront stock recalc failed', ids, error)
+    }
+}
+
+/** 退款作废之后重算：卡池变化只体现在这些卡所属的商品上。 */
+async function recalcStockForRevokedCards(
+    database: CardServiceDatabase,
+    orderId: string,
+    cards: readonly OrderRevokeCard[],
+): Promise<void> {
+    const productIds = await resolveAffectedProductIds(database, {
+        orderId,
+        localCardIds: cards.map((card) => card.localCardId),
+        remoteCardIds: cards.map((card) => card.remoteCardId),
+    })
+    await recalcStorefrontStock(productIds)
 }
 
 function requireLicenseServiceConfig(env: Record<string, string | undefined>): LicenseServiceConfig {
@@ -269,7 +315,11 @@ export async function restockProductCard(
     options: Omit<RestockOptions, 'productId'> = {},
     env: Record<string, string | undefined> = process.env,
 ): Promise<RestockResult> {
-    return restockProductCards(buildCardServiceDeps(env), { productId, ...options })
+    const result = await restockProductCards(buildCardServiceDeps(env), { productId, ...options })
+    // `restocked` 的语义就是「卡已经搬进 `cards`」，因此必须重算前台库存。
+    // 其余状态（skipped / deferred / expired / failed）都不改变本地卡池。
+    if (result.status === 'restocked') await recalcStorefrontStock([productId])
+    return result
 }
 
 /** 低水位补货扫描。未配置中心凭据时返回 `null`，由调用方决定是否记录。 */
@@ -278,7 +328,9 @@ export async function replenishCardStock(
     env: Record<string, string | undefined> = process.env,
 ): Promise<ReplenishSummary | null> {
     if (!isLicenseServiceConfigured(env)) return null
-    return replenishLowStockProducts(buildCardServiceDeps(env), options)
+    const summary = await replenishLowStockProducts(buildCardServiceDeps(env), options)
+    await recalcStorefrontStock(summary.changedProductIds)
+    return summary
 }
 
 /** 待办重放与超窗清理。未配置中心凭据时返回 `null`。 */
@@ -287,7 +339,10 @@ export async function reconcileCardService(
     env: Record<string, string | undefined> = process.env,
 ): Promise<ReconcileSummary | null> {
     if (!isLicenseServiceConfigured(env)) return null
-    return reconcileCardServiceState(buildCardServiceDeps(env), options)
+    const summary = await reconcileCardServiceState(buildCardServiceDeps(env), options)
+    // 重放 Ack 会把卡搬进 `cards`；不重算就会出现「对账补齐了、商品页还是 0」。
+    await recalcStorefrontStock(summary.changedProductIds)
+    return summary
 }
 
 /**
@@ -300,9 +355,19 @@ export async function reconcileCardService(
 export async function replayPendingCardServiceRevokes(
     options: { limit?: number; reason?: string } = {},
     env: Record<string, string | undefined> = process.env,
-): Promise<(RevokeOutcome & { attempted: number; review: number }) | null> {
+): Promise<(RevokeOutcome & { attempted: number; review: number; orderIds: string[] }) | null> {
     if (!isLicenseServiceConfigured(env)) return null
-    return revokePendingCardServiceOperations(buildRevokeDeps(env), options)
+    const deps = buildRevokeDeps(env)
+    const outcome = await revokePendingCardServiceOperations(deps, options)
+
+    // 重放同样会改本地卡：作废会隔离（`is_used = 1`），保留会放回可售池。
+    const productIds = new Set<string>()
+    for (const orderId of outcome.orderIds) {
+        for (const id of await resolveAffectedProductIds(deps.database, { orderId })) productIds.add(id)
+    }
+    await recalcStorefrontStock(Array.from(productIds))
+
+    return outcome
 }
 
 /**
@@ -336,17 +401,20 @@ export async function executeOrderRevokePlan(
 ): Promise<RevokeOutcome> {
     const database = createD1CardServiceDatabase()
     const resolved = resolveLicenseServiceConfig(env)
-    if (!resolved.ok) {
-        return failRevokesWithoutClient(database, {
+    const outcome = resolved.ok
+        ? await executeOrderRevokes(
+            { client: createLicenseServiceClient(resolved.config), database },
+            input,
+        )
+        // 缺凭据也要落账（意图 + 隔离），因此同样改了本地卡池 → 同样要重算。
+        : await failRevokesWithoutClient(database, {
             orderId: input.orderId,
             cards: input.cards,
             errorCode: 'config_error',
         })
-    }
-    return executeOrderRevokes(
-        { client: createLicenseServiceClient(resolved.config), database },
-        input,
-    )
+
+    await recalcStockForRevokedCards(database, input.orderId, input.cards)
+    return outcome
 }
 
 /** 待办重放时的计划重建（按远端 card_id），供运维面板「重试作废」使用。 */
@@ -355,6 +423,26 @@ export async function reloadRevokePlan(
     env: Record<string, string | undefined> = process.env,
 ): Promise<OrderRevokePlan> {
     return loadRevokePlanForRemoteCards(buildRevokeDeps(env).database, input)
+}
+
+/**
+ * 退款原子批次里要一并提交的作废语句（意图 + 本地卡隔离）。
+ *
+ * 暴露成纯函数而不是让退款动作直接依赖 `revoke.ts`：退款侧只需要「一批语句」，
+ * 不该知道操作台账长什么样，也不该自己写 `CardServiceStatement → AtomicD1Statement`
+ * 的转换（两处各自转换，迟早有一处漏掉 `params`）。
+ *
+ * 提交顺序仍是唯一的硬约束：**先本地结算、后远端作废**。这里只产生「本地那一半」。
+ */
+export function planOrderRevokeBatchStatements(input: {
+    orderId: string
+    cards: readonly OrderRevokeCard[]
+    nowMs: number
+}): Array<{ query: string; bindings?: readonly unknown[] }> {
+    return buildRefundRevokeStatements(input).map((statement) => ({
+        query: statement.sql,
+        ...(statement.params ? { bindings: statement.params } : {}),
+    }))
 }
 
 /** 供运维面板/健康检查展示的稳定错误码集合，避免各处硬编码字符串。 */

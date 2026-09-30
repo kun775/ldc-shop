@@ -18,7 +18,7 @@
  *     先处理远端卡。删除是管理端显式动作，拒绝比静默留下孤儿映射更安全。
  */
 
-import { CARD_SERVICE_CARDS_TABLE } from '../db/license-service-schema.ts'
+import { CARD_SERVICE_CARDS_TABLE, CARD_SERVICE_OPERATIONS_TABLE } from '../db/license-service-schema.ts'
 import { isMissingTableError, type CardServiceDatabase } from './db-port.ts'
 
 function placeholders(count: number): string {
@@ -102,4 +102,56 @@ export async function orderHasRemoteMappings(
         if (isMissingTableError(error)) return false
         throw error
     }
+}
+
+/**
+ * 这笔订单是否还有**未了结的中心待办**（`sell` / `revoke` 的 `pending` / `failed`）。
+ *
+ * 为什么必须与 `orderHasRemoteMappings` 一起查 —— 两者覆盖的时间窗不同：
+ *
+ *   - **Sell 之前**：意图行已经落进 `card_service_operations`，但
+ *     `card_service_cards` 里那几行还是 `acknowledged`，且 `sold` 这步未必
+ *     已经被本地确认。此时「映射查询」查得到行，但**真正说明「中心可能已经
+ *     把卡卖掉了」的是这条 `sell` 待办**。
+ *   - **退款之后**：订单上的 `card_key` / `card_ids` 已被清空，映射也可能在
+ *     清理中消失，只剩 `revoke` 待办是「中心那边还留着一张已售出的卡」的
+ *     唯一痕迹。
+ *
+ * 任一窗口里删掉订单，退款与对账都会失去追溯起点。`done` / `abandoned` 是终态，
+ * 不拦（否则历史订单永远删不掉）。
+ */
+export async function orderHasPendingCardServiceOperations(
+    database: CardServiceDatabase,
+    orderId: string,
+): Promise<boolean> {
+    const id = (orderId || '').trim()
+    if (!id) return false
+
+    try {
+        // 取值与 `restock.ts` 的 `CARD_SERVICE_OPERATION_STATES` 一致：
+        // `pending` / `failed` 都还会被定时任务重放，`done` / `abandoned` 不会。
+        const rows = await database.query<{ hit?: unknown }>(
+            `SELECT 1 AS hit FROM ${CARD_SERVICE_OPERATIONS_TABLE}
+              WHERE order_id = ? AND state IN ('pending', 'failed') LIMIT 1`,
+            [id],
+        )
+        return rows.length > 0
+    } catch (error) {
+        if (isMissingTableError(error)) return false
+        throw error
+    }
+}
+
+/**
+ * 订单删除的**总闸门**：只要还留有远端映射、或还有未了结的中心待办，就不许删。
+ *
+ * 两路取「或」而不是取「与」：任何一路命中都意味着这笔订单背后还有中心的账没结。
+ * 单独查映射会漏掉 Sell 未确认的窗口，单独查待办会漏掉已确认的映射。
+ */
+export async function orderHasUnsettledCardServiceLedger(
+    database: CardServiceDatabase,
+    orderId: string,
+): Promise<boolean> {
+    if (await orderHasRemoteMappings(database, orderId)) return true
+    return orderHasPendingCardServiceOperations(database, orderId)
 }

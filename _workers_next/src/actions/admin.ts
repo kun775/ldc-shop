@@ -366,6 +366,23 @@ export async function deleteCard(cardId: number) {
         throw new Error("Cannot delete reserved card")
     }
 
+    // 与批量删除（`deleteCards`）共用同一条守卫：中心在 Ack 之后**没有**归还可售
+    // 的接口，映射一旦被物理删除，那张卡就再也无法被作废、退款时也无法追溯 ——
+    // 只能由管理员改用停售/隔离处理。0038 未执行时查询自动放行。
+    // 判定失败时宁可少删：不能因为查不到就当成「没有映射」。
+    let protectedByRemoteMapping = false
+    try {
+        const partitioned = await partitionDeletableLocalCardIds(createD1CardServiceDatabase(), [cardId])
+        protectedByRemoteMapping = partitioned.protectedIds.length > 0
+    } catch (error) {
+        console.error(`[LicenseService] deleteCard guard failed for card ${cardId}:`, error)
+        protectedByRemoteMapping = true
+    }
+    if (protectedByRemoteMapping) {
+        console.warn(`[LicenseService] deleteCard skipped ${cardId}: still holds a remote card mapping`)
+        throw new Error("admin.cards.remoteMapped")
+    }
+
     await db.delete(cards).where(eq(cards.id, cardId))
     try {
         await recalcProductAggregates(card.productId)

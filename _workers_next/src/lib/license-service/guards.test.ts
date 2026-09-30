@@ -11,7 +11,9 @@ import test from 'node:test'
 
 import {
     listProtectedLocalCardIds,
+    orderHasPendingCardServiceOperations,
     orderHasRemoteMappings,
+    orderHasUnsettledCardServiceLedger,
     partitionDeletableLocalCardIds,
 } from './guards.ts'
 import { createSqliteCardServiceDatabase, type SqliteTestContext } from './test-support.ts'
@@ -142,4 +144,69 @@ test('空订单号直接返回 false，不发出无意义查询', async () => {
     const ctx = createSqliteCardServiceDatabase()
     assert.equal(await orderHasRemoteMappings(ctx.database, ''), false)
     assert.equal(await orderHasRemoteMappings(ctx.database, '   '), false)
+})
+
+// ---------------------------------------------------------------------------
+// orderHasPendingCardServiceOperations / orderHasUnsettledCardServiceLedger
+// ---------------------------------------------------------------------------
+
+function seedOperation(ctx: SqliteTestContext, orderId: string, state: string, operation = 'sell') {
+    ctx.exec(`INSERT INTO card_service_operations
+        (operation_key, operation, resource_id, order_id, state, attempts, created_at, updated_at)
+        VALUES ('${operation}:card_${orderId}:${operation}', '${operation}', 'card_${orderId}', '${orderId}', '${state}', 0, 0, 0)`)
+}
+
+test('待重放的中心待办（sell / revoke 的 pending / failed）会拦住订单删除', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedOperation(ctx, 'ORDER-P', 'pending')
+    seedOperation(ctx, 'ORDER-F', 'failed')
+    seedOperation(ctx, 'ORDER-R', 'pending', 'revoke')
+
+    assert.equal(await orderHasPendingCardServiceOperations(ctx.database, 'ORDER-P'), true)
+    assert.equal(await orderHasPendingCardServiceOperations(ctx.database, 'ORDER-F'), true)
+    assert.equal(await orderHasPendingCardServiceOperations(ctx.database, 'ORDER-R'), true)
+})
+
+test('终态待办（done / abandoned）不再拦删除，否则历史订单永远删不掉', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedOperation(ctx, 'ORDER-D', 'done')
+    seedOperation(ctx, 'ORDER-A', 'abandoned')
+
+    assert.equal(await orderHasPendingCardServiceOperations(ctx.database, 'ORDER-D'), false)
+    assert.equal(await orderHasPendingCardServiceOperations(ctx.database, 'ORDER-A'), false)
+})
+
+test('空订单号与缺表都直接放行，不抛出', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    assert.equal(await orderHasPendingCardServiceOperations(ctx.database, '  '), false)
+    assert.equal(await orderHasPendingCardServiceOperations(missingTableDatabase, 'ORDER-1'), false)
+    assert.equal(await orderHasUnsettledCardServiceLedger(missingTableDatabase, 'ORDER-1'), false)
+})
+
+test('总闸门两路取或：只有待办、没有映射，同样拦下', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    // Sell 意图已经落账，但映射行还在 acknowledged / 尚未写入 —— 这正是
+    // 「中心可能已经卖掉、本地还没确认」的窗口，只查映射会漏掉。
+    seedOperation(ctx, 'ORDER-SELL', 'pending')
+
+    assert.equal(await orderHasRemoteMappings(ctx.database, 'ORDER-SELL'), false)
+    assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'ORDER-SELL'), true)
+})
+
+test('总闸门两路取或：只有映射、没有待办，同样拦下', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 1)
+    seedMapping(ctx, { localCardId: 1, remoteCardId: 'card_a1', orderId: 'ORDER-MAP' })
+
+    assert.equal(await orderHasPendingCardServiceOperations(ctx.database, 'ORDER-MAP'), false)
+    assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'ORDER-MAP'), true)
+})
+
+test('两路都没有时订单可以正常删除', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedOperation(ctx, 'ORDER-CLEAN', 'done')
+    seedCard(ctx, 2)
+    seedMapping(ctx, { localCardId: 2, remoteCardId: 'card_a2', orderId: 'ORDER-OTHER' })
+
+    assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'ORDER-CLEAN'), false)
 })

@@ -91,12 +91,23 @@ export async function saveCardServiceProgramAction(input: {
             targetStock = parsed
         }
 
-        await saveCardServiceProductConfig(createD1CardServiceDatabase(), {
+        // 准入闸门放在服务端**唯一**的写入口（`saveCardServiceProductConfig`）里：
+        // 商品必须存在、不能是共享商品、切离中心供应时不能还有未结清的远端卡。
+        // 前端禁用按钮只是提示，不是校验。
+        const saved = await saveCardServiceProductConfig(createD1CardServiceDatabase(), {
             productId,
             supplyMode,
             programKey: programKey || null,
             targetStock,
         })
+        if (!saved.ok) {
+            const errorKey = saved.reason === 'product_not_found'
+                ? 'admin.cardService.errorProductNotFound'
+                : saved.reason === 'shared_product'
+                    ? 'admin.cardService.errorSharedProduct'
+                    : 'admin.cardService.errorUnsettledRemoteCards'
+            return { ok: false, errorKey, errorId: logServerError('admin.cardService.saveProgram', new Error(saved.reason)) }
+        }
 
         await recordAuditEvent({
             eventName: 'cardService.program.saved',

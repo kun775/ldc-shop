@@ -9,6 +9,7 @@ import {
     createUserNotification,
     ensureDatabaseInitialized,
     getLoginUserEmail,
+    pickSharedDeliveryCard,
     recalcProductAggregates,
 } from "@/lib/db/queries"
 import { pullOneCardFromApi } from "@/lib/card-api"
@@ -30,7 +31,6 @@ import { createD1CardServiceDatabase } from "@/lib/license-service/database"
 import { updateTag } from "next/cache"
 import { after } from "next/server"
 import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
-import { SHARED_CARD_CANDIDATE_WINDOW } from "@/lib/constants"
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const FULFILLMENT_CLAIM_STATUS = "processing"
@@ -586,20 +586,13 @@ export async function processOrderFulfillment(
         }
 
         if (product?.isShared) {
-            // 共享商品随机取一张可用卡作为交付引用。原实现 `ORDER BY RANDOM()`
-            // 会先把该商品全部可用卡扫出来再排序，库存越大越慢；这里改成
-            // 「先按 id 取有界候选窗口，再在窗口内随机」，代价与库存解耦。
-            const availableCard = await db.all(sql`
-                SELECT id, card_key FROM (
-                    SELECT id, card_key FROM cards
-                    WHERE product_id = ${existing.productId}
-                      AND (is_used = 0 OR is_used IS NULL)
-                    ORDER BY id
-                    LIMIT ${SHARED_CARD_CANDIDATE_WINDOW}
-                ) ORDER BY RANDOM() LIMIT 1
-            `) as Array<{ id: unknown; card_key?: string | null }>
+            // 共享商品取一张可用卡作为交付引用。取卡口径收敛在
+            // `pickSharedDeliveryCard`：它排除了**有远端映射的卡** —— 那些卡归通用
+            // 卡密服务中心管理，而共享交付发明文**绕过 Sell**，取到就等于造出一张
+            // 中心永远显示「未售出」的卡（账目对不上、退款也无从作废）。
+            const pickedCard = await pickSharedDeliveryCard(existing.productId)
 
-            if (!availableCard.length) {
+            if (!pickedCard) {
                 await finalizePaidOrder(orderId, claimId, tradeNo)
                 scheduleAdminNotification(existing, tradeNo, productName)
                 await refreshProductAggregates(existing.productId)
@@ -610,7 +603,7 @@ export async function processOrderFulfillment(
                 console.error("[Order] Failed to load card delivery note:", error)
                 return ""
             })
-            const joinedKeys = await finalizeSharedDelivery(existing, claimId, tradeNo, availableCard[0].card_key ?? "", deliveryNote)
+            const joinedKeys = await finalizeSharedDelivery(existing, claimId, tradeNo, pickedCard.cardKey, deliveryNote)
             await notifyUserDelivered(existing, productName)
             scheduleAdminNotification(existing, tradeNo, productName)
             scheduleDeliveryEmail(existing, productName, joinedKeys, deliveryNote)
@@ -657,6 +650,10 @@ export async function processOrderFulfillment(
  * `delivered: false` 并把订单留在 `paid`。原因是抛错会让下单流程走回滚分支，
  * 而零元订单的积分/券已经扣掉，删单重建就等于重复扣减 —— 方案要求所有补偿
  * 都依据原订单号推进，所以订单必须留下来。
+ *
+ * 声明租约（`fulfillment_claimed_at` + 10 分钟）在这里是**可回收**的：租约一过
+ * 就允许重新认领。零元订单没有支付回调这条重放路径，如果 `processing` 是不可
+ * 逆的终态，一次进程被杀就能让订单永久卡住（既不会交付、也不会过期取消）。
  */
 export async function completePaidOrderDelivery(orderId: string): Promise<AutomatedDeliveryOutcome> {
     await ensureDatabaseInitialized()
@@ -667,9 +664,26 @@ export async function completePaidOrderDelivery(orderId: string): Promise<Automa
     if (existing.status === "delivered") {
         return { orderStatus: "delivered", delivered: true, cardKeys: existing.cardKey || "", deliveryNote: existing.deliveryNote || "" }
     }
-    if (existing.status === FULFILLMENT_CLAIM_STATUS || existing.status === "pending") {
-        // 别的路径正在处理，或订单尚未被标记为已支付：不做任何事。
+    if (existing.status === "pending") {
+        // 订单尚未被标记为已支付：不做任何事。
         return { orderStatus: "processing", delivered: false, cardKeys: "", deliveryNote: "" }
+    }
+    if (existing.status === FULFILLMENT_CLAIM_STATUS) {
+        // 声明租约**尚未过期**才让开 —— 那是别的请求正在交付。
+        //
+        // 租约过期则必须继续往下抢（下方 `claimable` 与这里同一口径）。少了
+        // 这一步，进程在交付中途被杀留下的 `processing` 会让订单**永久卡死**：
+        // 它既不会被重新认领，也不会被 `cancelExpiredOrders` 取消（那不是
+        // `pending`）。零元订单是重灾区 —— 它没有支付回调这条重放路径，
+        // 只有本函数能把它救回来。
+        const claimedAt = existing.fulfillmentClaimedAt
+        const claimedAtMs = claimedAt instanceof Date ? claimedAt.getTime() : Number(claimedAt ?? 0)
+        const leaseUntilMs = Number.isFinite(claimedAtMs) && claimedAtMs > 0
+            ? claimedAtMs + FULFILLMENT_CLAIM_TTL_MS
+            : 0
+        if (leaseUntilMs > Date.now()) {
+            return { orderStatus: "processing", delivered: false, cardKeys: "", deliveryNote: "" }
+        }
     }
     if (existing.status !== "paid" || existing.cardKey) {
         return { orderStatus: "processing", delivered: false, cardKeys: "", deliveryNote: "" }

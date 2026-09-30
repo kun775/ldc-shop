@@ -27,15 +27,26 @@ export interface ReplenishSummary {
     deferred: number
     expired: number
     failed: number
+    /**
+     * 本轮**真正把新卡搬进本地卡池**的商品（去重）。
+     *
+     * 单独带出来是因为 `products.stock_count` 只在 `recalcProductAggregates*`
+     * 里回写：装配层拿到这批 ID 才能重算前台库存，否则「补货成功但商品页
+     * 还是缺货」。
+     */
+    changedProductIds: string[]
 }
 
 export function emptyReplenishSummary(): ReplenishSummary {
-    return { products: 0, restocked: 0, skipped: 0, deferred: 0, expired: 0, failed: 0 }
+    return { products: 0, restocked: 0, skipped: 0, deferred: 0, expired: 0, failed: 0, changedProductIds: [] }
 }
 
-function tally(summary: ReplenishSummary, result: RestockResult) {
+function tally(summary: ReplenishSummary, result: RestockResult, productId: string) {
     switch (result.status) {
-        case 'restocked': summary.restocked += 1; break
+        case 'restocked':
+            summary.restocked += 1
+            if (!summary.changedProductIds.includes(productId)) summary.changedProductIds.push(productId)
+            break
         case 'skipped': summary.skipped += 1; break
         case 'deferred': summary.deferred += 1; break
         case 'expired': summary.expired += 1; break
@@ -109,7 +120,7 @@ export async function replenishLowStockProducts(
                 quantity: 1,
                 reason,
             })
-            tally(summary, result)
+            tally(summary, result, product.productId)
 
             // 一旦不是「补到一张」，本轮就该停：继续循环只会在同一个故障上
             // 连续失败（例如库存不足、Key 失效），既无意义也会淹掉日志。

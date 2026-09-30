@@ -252,6 +252,7 @@ test('待办重放：先核对远程真实状态再决定动作，台账缺失�
         acknowledged: 1,
         requiresReview: 1,
         skipped: 1,
+        changedProductIds: [PRODUCT_ID],
     })
     assert.equal(countOf(ctx, 'cards'), 1)
 
@@ -273,7 +274,12 @@ test('过期分配清理会先查远程状态：时钟误判时不会把确认�
 
     const summary = await abandonStaleAllocations(deps)
 
-    assert.deepEqual(summary, { ...emptyReconcileSummary(), checked: 1, acknowledged: 1 })
+    assert.deepEqual(summary, {
+        ...emptyReconcileSummary(),
+        checked: 1,
+        acknowledged: 1,
+        changedProductIds: [PRODUCT_ID],
+    })
     assert.equal(ctx.get(`SELECT state FROM ${CARD_SERVICE_ALLOCATIONS_TABLE} WHERE allocation_id = 'alloc_stale_ok'`)?.state, 'acknowledged')
     assert.equal(ctx.get(`SELECT state FROM ${CARD_SERVICE_ALLOCATIONS_TABLE} WHERE allocation_id = 'alloc_fresh'`)?.state, 'allocated')
     assert.equal(countOf(ctx, CARD_SERVICE_CARDS_TABLE), 1)
@@ -294,7 +300,13 @@ test('对账入口把待办推进与过期清理合并计数', async () => {
 
     const summary = await reconcileCardServiceState(deps)
 
-    assert.deepEqual(summary, { ...emptyReconcileSummary(), checked: 2, acknowledged: 1, expired: 1 })
+    assert.deepEqual(summary, {
+        ...emptyReconcileSummary(),
+        checked: 2,
+        acknowledged: 1,
+        expired: 1,
+        changedProductIds: [PRODUCT_ID],
+    })
     assert.equal(countOf(ctx, 'cards'), 1)
     assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 0)
 })

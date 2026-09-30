@@ -908,7 +908,8 @@
             "apiPullSuccess": "已从 API 拉取 1 条卡密",
             "apiPullFailed": "API 拉取失败",
             "apiAutoPulled": "配置已保存，并已自动拉取 1 条卡密",
-            "apiAutoPullFailed": "配置已保存，但自动拉取失败"
+            "apiAutoPullFailed": "配置已保存，但自动拉取失败",
+            "remoteMapped": "该卡密仍由卡密中心管理（已领取/已售出），不能删除；请改用作废或停售处理"
         },
         "productForm": {
             "addTitle": "添加商品",
@@ -1192,6 +1193,7 @@
                 "skipped_not_configured": "该商品未接入卡密中心",
                 "skipped_supply_mode_not_license_service": "该商品当前不使用卡密中心供应",
                 "skipped_program_key_missing": "该商品未配置 Program",
+                "skipped_shared_product": "共享卡商品不能接入卡密中心（共享交付会绕过售出确认）",
                 "deferred": "补货在途，稍后由定时任务重放",
                 "expired": "分配已超窗，本地副本已作废，需换新任务再领",
                 "failed": "补货失败，请查看复核清单"
@@ -1201,6 +1203,9 @@
             "errorProgramKey": "Program 只能包含字母、数字、点、下划线和连字符",
             "errorProgramKeyRequired": "走卡密中心时必须填写 Program",
             "errorTargetStock": "目标库存必须是不超过 10000 的非负整数",
+            "errorProductNotFound": "商品不存在",
+            "errorSharedProduct": "共享卡商品不能接入卡密中心：它的交付方式会把卡密明文直接发给用户，绕过售出确认",
+            "errorUnsettledRemoteCards": "该商品还有未结清的远端卡（已领取或已售出），请先完成对账或作废再切换供应模式",
             "errorOrderId": "缺少订单号",
             "errorRevokeTarget": "缺少作废目标",
             "retryDeliveryPending": "履约仍未完成，请稍后在复核清单重试",

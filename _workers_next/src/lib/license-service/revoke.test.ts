@@ -6,16 +6,24 @@
  *   - 仅 `acknowledged` 的卡**不能**直接作废（那是本店库存），必须先查中心
  *     真实状态，只有中心确实已售/已作废才动手。
  *
+ * ⚠️ 判「中心是否已售出」只能看**分配状态**（`allocation_status` /
+ * `GET /allocations/{id}`）。卡状态接口的 `status` 是运行态
+ * （`active`/`revoked`/`disabled`/`expired`/`exhausted`），**永不返回 `sold`** ——
+ * 拿它比 `'sold'` 是恒假条件，会把该作废的卡留成库存。
+ *
  * 另外验证「中心超时不得说成已完成」：429/503 后待办必须仍是 `pending`
  * 且带 `next_retry_at`，能被重放入口原键再走一遍。
  */
 
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import { LicenseServiceError } from './errors.ts'
 import {
+    buildRefundRevokeStatements,
     buildRevokeIntentStatements,
+    buildRevokeRetainStatements,
     executeOrderRevokes,
     failRevokesWithoutClient,
     listPendingRevokeOperations,
@@ -25,7 +33,12 @@ import {
     type OrderRevokePlan,
     type RevokeDeps,
 } from './revoke.ts'
-import { createFakeLicenseServiceClient, createSqliteCardServiceDatabase, type SqliteTestContext } from './test-support.ts'
+import {
+    createFakeLicenseServiceClient,
+    createSqliteCardServiceDatabase,
+    makeAllocationDetail,
+    type SqliteTestContext,
+} from './test-support.ts'
 
 const PRODUCT_ID = 'prod_001'
 const ORDER_ID = 'ORDER-0001'
@@ -62,13 +75,19 @@ function seedMapping(
                 ${options.orderId ? `'${options.orderId}'` : 'NULL'}, '${options.state ?? 'acknowledged'}', 0, 0)`)
 }
 
-function makeCardStatus(cardId: string, status: string) {
+/**
+ * 卡状态响应。
+ *
+ * ⚠️ `status` 是**卡运行态**（`active`/`revoked`/`disabled`/`expired`/`exhausted`），
+ * **永远不是 `sold`**；「是否已售出」只能看 `allocation_status`。
+ */
+function makeCardStatus(cardId: string, status: string, allocationStatus: string | null = null) {
     return {
         cardId,
         programId: 'prog_1',
         maskedKey: 'CS-****',
         status,
-        allocationStatus: null,
+        allocationStatus,
         usageLimit: null,
         usageHeld: null,
         usageCommitted: null,
@@ -79,6 +98,10 @@ function makeCardStatus(cardId: string, status: string) {
 
 function mapped(ctx: SqliteTestContext, remoteCardId: string) {
     return ctx.get('SELECT state, order_id, revoked_at FROM card_service_cards WHERE remote_card_id = ?', [remoteCardId])
+}
+
+function card(ctx: SqliteTestContext, id: number) {
+    return ctx.get('SELECT is_used, used_at, reserved_order_id, reserved_at FROM cards WHERE id = ?', [id])
 }
 
 function operation(ctx: SqliteTestContext, remoteCardId: string) {
@@ -280,14 +303,15 @@ test('已出售的卡：调用 revoke 后映射转 revoked、台账转 done', as
     assert.equal(operation(ctx, 'card_a1')?.state, 'done')
 })
 
-test('未交付且中心仍可用 → 不作废，保留为本店库存', async () => {
+test('未交付且分配仍在我们手上 → 不作废，保留为本店库存', async () => {
     const ctx = createSqliteCardServiceDatabase()
     seedCard(ctx, 7)
     seedAllocation(ctx)
     seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
 
     const client = createFakeLicenseServiceClient({
-        getCardStatus: async (cardId) => makeCardStatus(cardId, 'acknowledged'),
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'active', 'acknowledged'),
+        getAllocation: async () => { throw new Error('allocation must not be probed when allocation_status is present') },
         revoke: async () => { throw new Error('revoke must not be called') },
     })
     const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
@@ -298,18 +322,86 @@ test('未交付且中心仍可用 → 不作废，保留为本店库存', async 
     assert.deepEqual(outcome, { requested: 1, revoked: 0, retained: 1, deferred: 0, failed: 0 })
     assert.equal(client.callCount('revoke'), 0)
     assert.equal(client.callCount('getCardStatus'), 1)
+    assert.equal(client.callCount('getAllocation'), 0)
     assert.equal(mapped(ctx, 'card_a1')?.state, 'acknowledged')
     assert.equal(operation(ctx, 'card_a1')?.state, 'done')
 })
 
-test('未交付但中心其实已售出（交付响应丢失）→ 必须作废', async () => {
+test('回归：卡状态取值域里没有 sold —— 只有分配状态 sold 才算「中心已售出」', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+
+    // 故意造一个取值域外的卡状态 'sold'：只要分配状态还是 acknowledged，
+    // 就**必须**保留 —— 旧实现拿卡状态比 'sold' 是恒假条件，这张卡会被误作废。
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'sold', 'acknowledged'),
+        revoke: async () => { throw new Error('revoke must not be called') },
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.deepEqual(outcome, { requested: 1, revoked: 0, retained: 1, deferred: 0, failed: 0 })
+    assert.equal(mapped(ctx, 'card_a1')?.state, 'acknowledged')
+})
+
+test('卡状态响应不带 allocation_status → 回退单查分配', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'active', null),
+        getAllocation: async (id) => makeAllocationDetail({ allocationId: id, status: 'sold' }),
+        revoke: async (cardId) => ({ cardId, status: 'revoked' }),
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.equal(outcome.revoked, 1)
+    assert.equal(client.callCount('getCardStatus'), 1)
+    assert.equal(client.callCount('getAllocation'), 1)
+    assert.equal(mapped(ctx, 'card_a1')?.state, 'revoked')
+})
+
+test('回退单查分配也拿不到（429）→ deferred，绝不当成「未售出」放行', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'active', null),
+        getAllocation: async () => {
+            throw new LicenseServiceError({ code: 'rate_limited', httpStatus: 429, retryable: true })
+        },
+        revoke: async () => { throw new Error('revoke must not be called') },
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000, sleep: async () => {} }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.deepEqual(outcome, { requested: 1, revoked: 0, retained: 0, deferred: 1, failed: 0 })
+    assert.equal(client.callCount('revoke'), 0)
+    assert.equal(mapped(ctx, 'card_a1')?.state, 'acknowledged')
+    assert.equal(operation(ctx, 'card_a1')?.state, 'pending')
+})
+
+test('未交付但分配其实已售出（交付响应丢失）→ 必须作废', async () => {
     const ctx = createSqliteCardServiceDatabase()
     seedCard(ctx, 7)
     seedAllocation(ctx)
     seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
 
     const client = createFakeLicenseServiceClient({
-        getCardStatus: async (cardId) => makeCardStatus(cardId, 'sold'),
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'active', 'sold'),
         revoke: async (cardId) => ({ cardId, status: 'revoked' }),
     })
     const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
@@ -322,14 +414,14 @@ test('未交付但中心其实已售出（交付响应丢失）→ 必须作废'
     assert.equal(mapped(ctx, 'card_a1')?.state, 'revoked')
 })
 
-test('未交付但中心已作废 → 幂等补记本地终态，不再调 revoke', async () => {
+test('未交付但卡已作废 → 幂等补记本地终态，不再调 revoke', async () => {
     const ctx = createSqliteCardServiceDatabase()
     seedCard(ctx, 7)
     seedAllocation(ctx)
     seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
 
     const client = createFakeLicenseServiceClient({
-        getCardStatus: async (cardId) => makeCardStatus(cardId, 'revoked'),
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'revoked', 'sold'),
     })
     const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
 
@@ -388,7 +480,7 @@ test('403 → failed，映射保持原状等待人工核查，且不重试', asy
     assert.equal(operation(ctx, 'card_a1')?.state, 'failed')
 })
 
-test('409 + 单查已 revoked → 判为已作废；409 只调一次 revoke、一次单查', async () => {
+test('409 + 单查卡已 revoked → 判为已作废；409 只调一次 revoke、一次单查', async () => {
     const ctx = createSqliteCardServiceDatabase()
     seedCard(ctx, 7, { isUsed: true })
     seedAllocation(ctx, { state: 'sold' })
@@ -398,7 +490,7 @@ test('409 + 单查已 revoked → 判为已作废；409 只调一次 revoke、�
         revoke: async () => {
             throw new LicenseServiceError({ code: 'allocation_conflict', httpStatus: 409 })
         },
-        getCardStatus: async (cardId) => makeCardStatus(cardId, 'revoked'),
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'revoked', 'sold'),
     })
     const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000, sleep: async () => {} }
 
@@ -408,10 +500,12 @@ test('409 + 单查已 revoked → 判为已作废；409 只调一次 revoke、�
     assert.equal(outcome.revoked, 1)
     assert.equal(client.callCount('revoke'), 1)
     assert.equal(client.callCount('getCardStatus'), 1)
+    // 409 分支只关心「卡是否已 revoked」，不该再打一次分配查询。
+    assert.equal(client.callCount('getAllocation'), 0)
     assert.equal(mapped(ctx, 'card_a1')?.state, 'revoked')
 })
 
-test('409 + 单查仍是 sold（状态未知冲突）→ failed 交人工，不重试', async () => {
+test('409 + 单查卡并未 revoked → failed 交人工，不重试', async () => {
     const ctx = createSqliteCardServiceDatabase()
     seedCard(ctx, 7, { isUsed: true })
     seedAllocation(ctx, { state: 'sold' })
@@ -421,7 +515,7 @@ test('409 + 单查仍是 sold（状态未知冲突）→ failed 交人工，不�
         revoke: async () => {
             throw new LicenseServiceError({ code: 'allocation_conflict', httpStatus: 409 })
         },
-        getCardStatus: async (cardId) => makeCardStatus(cardId, 'sold'),
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'active', 'sold'),
     })
     const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000, sleep: async () => {} }
 
@@ -616,4 +710,148 @@ test('空作废范围不写任何台账（已作废的卡不会被重新拉进�
     })
     assert.equal(outcome.requested, 0)
     assert.equal(ctx.get('SELECT COUNT(*) AS total FROM card_service_operations')?.total, 0)
+})
+
+// ---------------------------------------------------------------------------
+// 本地卡隔离：作废未确认期间不得留在可售池
+// ---------------------------------------------------------------------------
+
+test('作废意图落账即隔离本地卡：is_used 置 1，且不改写已交付卡的 used_at', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedCard(ctx, 8, { isUsed: true })
+    ctx.exec('UPDATE cards SET used_at = 500 WHERE id = 8')
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1', state: 'sold', orderId: ORDER_ID })
+    seedMapping(ctx, { localCardId: 8, remoteCardId: 'card_a2', state: 'sold', orderId: ORDER_ID })
+
+    const client = createFakeLicenseServiceClient({ revoke: async (cardId) => ({ cardId, status: 'revoked' }) })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7, 8] }))
+    await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.equal(card(ctx, 7)?.is_used, 1)
+    assert.equal(card(ctx, 7)?.used_at, 1_000)
+    // 已交付的卡保留它真实的交付时间，隔离不改写历史。
+    assert.equal(card(ctx, 8)?.used_at, 500)
+})
+
+test('作废未确认（中心 429）时本地卡也必须已经隔离 —— 否则会被再卖一次', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1', state: 'sold', orderId: ORDER_ID })
+
+    const client = createFakeLicenseServiceClient({
+        revoke: async () => {
+            throw new LicenseServiceError({ code: 'rate_limited', httpStatus: 429, retryable: true })
+        },
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000, sleep: async () => {} }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.equal(outcome.deferred, 1)
+    assert.equal(card(ctx, 7)?.is_used, 1)
+    assert.equal(card(ctx, 7)?.reserved_order_id, null)
+    assert.equal(operation(ctx, 'card_a1')?.state, 'pending')
+})
+
+test('中心确认仍可用 → 本地卡放回可售池', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'active', 'acknowledged'),
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.equal(outcome.retained, 1)
+    assert.equal(card(ctx, 7)?.is_used, 0)
+    assert.equal(card(ctx, 7)?.used_at, null)
+    assert.equal(card(ctx, 7)?.reserved_order_id, null)
+})
+
+test('放回库存只针对「从未交付」的卡：台账已是 sold 时绝不放行', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7, { isUsed: true })
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1', state: 'sold', orderId: ORDER_ID })
+
+    await ctx.database.write(buildRevokeIntentStatements({
+        orderId: ORDER_ID,
+        cards: [{ remoteCardId: 'card_a1', localCardId: 7 }],
+        nowMs: 900,
+    }))
+    await ctx.database.write(buildRevokeRetainStatements({
+        orderId: ORDER_ID,
+        remoteCardId: 'card_a1',
+        localCardId: 7,
+        nowMs: 1_000,
+    }))
+
+    // 台账说这张卡已交付 → 不放回；台账仍要记成 done（放回动作已做过判断）。
+    assert.equal(card(ctx, 7)?.is_used, 1)
+    assert.equal(operation(ctx, 'card_a1')?.state, 'done')
+})
+
+test('退款批次语句：未作废的写意图 + 隔离，已作废的只隔离', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 1)
+    seedCard(ctx, 2)
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 1, remoteCardId: 'card_a1', state: 'sold', orderId: ORDER_ID })
+    seedMapping(ctx, { localCardId: 2, remoteCardId: 'card_a2', state: 'revoked', orderId: ORDER_ID })
+
+    await ctx.database.write(buildRefundRevokeStatements({
+        orderId: ORDER_ID,
+        cards: [
+            { localCardId: 1, remoteCardId: 'card_a1', allocationId: ALLOC_A, state: 'sold', alreadyRevoked: false },
+            { localCardId: 2, remoteCardId: 'card_a2', allocationId: ALLOC_A, state: 'revoked', alreadyRevoked: true },
+        ],
+        nowMs: 1_000,
+    }))
+
+    // 两张卡都被隔离：远端已死的卡同样不该还能卖。
+    assert.equal(card(ctx, 1)?.is_used, 1)
+    assert.equal(card(ctx, 2)?.is_used, 1)
+    // 只有未作废的那张需要待办。
+    assert.equal(ctx.all('SELECT operation_key FROM card_service_operations').length, 1)
+    assert.equal(operation(ctx, 'card_a1')?.state, 'pending')
+})
+
+test('退款动作把作废语句拼进同一个原子批次（先本地结算、后远端作废）', () => {
+    const source = readFileSync(new URL('../../actions/refund.ts', import.meta.url), 'utf8')
+
+    const pushAt = source.indexOf('planOrderRevokeBatchStatements(')
+    const batchAt = source.indexOf('runAtomicD1Batch(refundStatements)')
+    const executeAt = source.indexOf('executeOrderRevokePlan(')
+
+    assert.ok(pushAt > 0, '退款动作必须把作废语句拼进 refundStatements')
+    assert.ok(batchAt > pushAt, '作废语句必须在 runAtomicD1Batch(refundStatements) 之前拼好，否则又留下丢失窗口')
+    assert.ok(executeAt > batchAt, '远端作废必须排在本地结算之后，顺序不能反')
+})
+
+// ---------------------------------------------------------------------------
+// 源码级守卫：别再把卡状态当分配状态用
+// ---------------------------------------------------------------------------
+
+test('revoke.ts 不得用卡状态判「已售出」（它永不返回 sold）', () => {
+    const source = readFileSync(new URL('./revoke.ts', import.meta.url), 'utf8')
+
+    // 旧实现写的是 `probe.status !== 'sold'`（恒真）——这类比较一旦回归，
+    // 「中心已售出但本地未落账」的卡就会被当成库存留下，永久留在流通里。
+    assert.doesNotMatch(source, /cardStatus\s*[!=]==?\s*'sold'/)
+    assert.doesNotMatch(source, /probe\.(cardStatus|status)\s*[!=]==?\s*'sold'/)
+
+    // 判定必须走分配状态，且分配状态必须真的被读出来。
+    assert.match(source, /allocationStatus\s*[!=]==?\s*'sold'/)
+    assert.match(source, /getAllocation/)
 })

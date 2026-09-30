@@ -35,6 +35,10 @@ import type { LicenseServiceClient } from './client.ts'
 import { isMissingTableError, type CardServiceDatabase, type CardServiceStatement } from './db-port.ts'
 import { toLicenseServiceError, type LicenseServiceError, type LicenseServiceErrorCategory } from './errors.ts'
 import { buildSellIdempotencyKey } from './idempotency.ts'
+import {
+    CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL,
+    buildOperationFailureClauses,
+} from './operation-queue.ts'
 import { runWithRetry, type RetryPolicy, type RunWithRetryOptions } from './retry.ts'
 import { CARD_SERVICE_OPERATION_SELL } from './restock.ts'
 
@@ -426,7 +430,7 @@ export async function listPendingSellOperations(
             `SELECT operation_key, resource_id, order_id, state, attempts
              FROM ${CARD_SERVICE_OPERATIONS_TABLE}
              WHERE operation = ? AND state IN ('pending', 'failed')
-             ORDER BY COALESCE(next_retry_at, 0) ASC, created_at ASC
+             ${CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL}
              LIMIT ?`,
             [CARD_SERVICE_OPERATION_SELL, Math.max(1, Math.trunc(options.limit ?? 20))],
         )
@@ -489,6 +493,21 @@ function buildSellOperationStateStatements(input: {
     nextRetryAtMs: number | null
     nowMs: number
 }): CardServiceStatement[] {
+    const key = buildSellIdempotencyKey(input.allocationId, input.orderId)
+
+    if (input.state === 'failed') {
+        // 不可重试失败走统一的重试预算（退避 + 尝试上限 → `abandoned`），
+        // 因此这里**不用** `nextRetryAtMs`（它只对可重试的 `pending` 有意义）。
+        const failure = buildOperationFailureClauses(input.nowMs)
+        return [{
+            sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
+                SET state = ${failure.state}, attempts = attempts + 1, next_retry_at = ${failure.nextRetryAt},
+                    request_id = ?, last_error_code = ?, updated_at = ?
+                WHERE operation_key = ?`,
+            params: [input.requestId, input.errorCode, input.nowMs, key],
+        }]
+    }
+
     return [{
         sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
             SET state = ?, attempts = attempts + 1, next_retry_at = ?,
@@ -500,7 +519,7 @@ function buildSellOperationStateStatements(input: {
             input.requestId,
             input.errorCode,
             input.nowMs,
-            buildSellIdempotencyKey(input.allocationId, input.orderId),
+            key,
         ],
     }]
 }
@@ -521,7 +540,7 @@ export function buildSellDeferStatements(input: {
     })
 }
 
-/** 不可重试失败：待办置 `failed`，等待人工核查（不是「已完成」）。 */
+/** 不可重试失败：待办置 `failed`（含退避与尝试上限），等待人工核查（不是「已完成」）。 */
 export function buildSellFailStatements(input: {
     orderId: string
     allocationId: string
@@ -532,6 +551,7 @@ export function buildSellFailStatements(input: {
     return buildSellOperationStateStatements({
         ...input,
         state: 'failed',
+        // 失败分支不使用它（退避由 `buildOperationFailureClauses` 在 SQL 里算）。
         nextRetryAtMs: null,
     })
 }

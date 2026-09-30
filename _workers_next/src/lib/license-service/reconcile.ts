@@ -61,6 +61,14 @@ export interface ReconcileSummary {
     failed: number
     requiresReview: number
     skipped: number
+    /**
+     * 本轮**真正把新卡搬进本地卡池**的商品（去重）。
+     *
+     * 与 `ReplenishSummary.changedProductIds` 同义：`products.stock_count` 只在
+     * `recalcProductAggregates*` 里回写，重放 Ack 之后必须由装配层重算，
+     * 否则「对账补齐了库存、商品页仍然显示 0」。
+     */
+    changedProductIds: string[]
 }
 
 export function emptyReconcileSummary(): ReconcileSummary {
@@ -73,13 +81,17 @@ export function emptyReconcileSummary(): ReconcileSummary {
         failed: 0,
         requiresReview: 0,
         skipped: 0,
+        changedProductIds: [],
     }
 }
 
-function tally(summary: ReconcileSummary, outcome: ReconcileOutcome) {
+function tally(summary: ReconcileSummary, outcome: ReconcileOutcome, productId: string) {
     summary.checked += 1
     switch (outcome) {
-        case 'acknowledged': summary.acknowledged += 1; break
+        case 'acknowledged':
+            summary.acknowledged += 1
+            if (productId && !summary.changedProductIds.includes(productId)) summary.changedProductIds.push(productId)
+            break
         case 'expired': summary.expired += 1; break
         case 'cancelled': summary.cancelled += 1; break
         case 'deferred': summary.deferred += 1; break
@@ -218,10 +230,10 @@ export async function reconcilePendingAckOperations(
             continue
         }
         if (row.state !== 'allocated') {
-            tally(summary, 'skipped')
+            tally(summary, 'skipped', row.productId)
             continue
         }
-        tally(summary, await resolveAllocationWithRemoteState(deps, row))
+        tally(summary, await resolveAllocationWithRemoteState(deps, row), row.productId)
     }
 
     return summary
@@ -247,7 +259,7 @@ export async function abandonStaleAllocations(
     })
 
     for (const row of rows) {
-        tally(summary, await resolveAllocationWithRemoteState(deps, row))
+        tally(summary, await resolveAllocationWithRemoteState(deps, row), row.productId)
     }
 
     return summary
@@ -261,6 +273,11 @@ export async function reconcileCardServiceState(
     const pending = await reconcilePendingAckOperations(deps, options)
     const stale = await abandonStaleAllocations(deps, options)
 
+    const changedProductIds: string[] = []
+    for (const productId of [...pending.changedProductIds, ...stale.changedProductIds]) {
+        if (!changedProductIds.includes(productId)) changedProductIds.push(productId)
+    }
+
     return {
         checked: pending.checked + stale.checked,
         acknowledged: pending.acknowledged + stale.acknowledged,
@@ -270,5 +287,6 @@ export async function reconcileCardServiceState(
         failed: pending.failed + stale.failed,
         requiresReview: pending.requiresReview + stale.requiresReview,
         skipped: pending.skipped + stale.skipped,
+        changedProductIds,
     }
 }

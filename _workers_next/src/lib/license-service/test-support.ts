@@ -51,7 +51,13 @@ const { DatabaseSync } = nodeRequire('node:sqlite') as SqliteModule
  * 「claim 丢失时整批落空」这条不变式。
  */
 const CORE_TABLE_STATEMENTS: readonly string[] = [
-    `CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY)`,
+    // `is_shared` 必须在这里出现：接入准入闸门（`loadProductSupplyGuard`）靠它
+    // 判断「共享商品不得走中心供应」。少了这一列，闸门会走「缺列即放行」的
+    // 降级分支 —— 测试就永远验证不到真正的拒绝语义。
+    `CREATE TABLE IF NOT EXISTS products (
+        id TEXT PRIMARY KEY,
+        is_shared INTEGER DEFAULT 0
+    )`,
     `CREATE TABLE IF NOT EXISTS cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,

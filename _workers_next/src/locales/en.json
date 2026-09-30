@@ -908,7 +908,8 @@
             "apiPullSuccess": "Pulled 1 card from API",
             "apiPullFailed": "API pull failed",
             "apiAutoPulled": "Config saved and 1 card was auto-pulled",
-            "apiAutoPullFailed": "Config saved but auto-pull failed"
+            "apiAutoPullFailed": "Config saved but auto-pull failed",
+            "remoteMapped": "This card is still managed by the card center (allocated or sold) and cannot be deleted. Revoke or disable it instead."
         },
         "productForm": {
             "addTitle": "Add New Product",
@@ -1192,6 +1193,7 @@
                 "skipped_not_configured": "This product is not connected to the card center",
                 "skipped_supply_mode_not_license_service": "This product does not use the card center",
                 "skipped_program_key_missing": "This product has no Program configured",
+                "skipped_shared_product": "Shared-card products cannot source from the card center (shared delivery bypasses the sale confirmation)",
                 "deferred": "Restock is in flight; the scheduled job will replay it",
                 "expired": "The allocation overran its window and the local copy was voided; a new task is required",
                 "failed": "Restock failed. See the review list."
@@ -1201,6 +1203,9 @@
             "errorProgramKey": "Program may only contain letters, digits, dots, underscores and hyphens",
             "errorProgramKeyRequired": "Program is required when sourcing from the card center",
             "errorTargetStock": "Target stock must be a non-negative integer no greater than 10000",
+            "errorProductNotFound": "Product not found",
+            "errorSharedProduct": "Shared-card products cannot use the card center: their delivery path sends the plaintext key straight to the buyer, bypassing the sale confirmation",
+            "errorUnsettledRemoteCards": "This product still has unsettled remote cards (allocated or sold). Finish reconciliation or revocation before switching the supply mode.",
             "errorOrderId": "Missing order ID",
             "errorRevokeTarget": "Missing revoke target",
             "retryDeliveryPending": "Fulfillment is still incomplete; retry from the review list later",

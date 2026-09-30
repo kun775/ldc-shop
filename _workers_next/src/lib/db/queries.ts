@@ -1,6 +1,6 @@
 import { db, runAtomicD1Batch } from "./index";
 import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger, refundRequests, userMessages } from "./schema";
-import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS } from "@/lib/constants";
+import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS, SHARED_CARD_CANDIDATE_WINDOW } from "@/lib/constants";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema, repairPointLedgerStructureIfNeeded, resetPointLedgerSchemaReady, verifyPointLedgerStructure } from "@/lib/points/ledger-db";
 import { USER_POINT_LEDGER_REBUILD_STATEMENTS } from "@/lib/db/point-ledger-schema";
 import {
@@ -3665,6 +3665,55 @@ export async function updateLoginUserDesktopNotificationsEnabled(userId: string,
         if (isMissingTableOrColumn(error)) return;
         throw error;
     }
+}
+
+/**
+ * 共享商品取一张卡作为「交付引用」。
+ *
+ * ⚠️ 必须排除**已有远端映射的卡**。共享交付路径是把本地卡明文直接发给用户，
+ * **完全绕过 Sell**；一旦取到一张归通用卡密服务中心管理的卡，中心那边会永远
+ * 显示它未售出 —— 账目对不上，退款时也无从作废。
+ *
+ * 两处调用点（结算的零元分支、支付回调的交付分支）曾各自抄一份 SQL，口径很容易
+ * 走偏；这里收敛成唯一实现。0038 未执行时子查询会报「no such table」，
+ * 此时回退到不带该子查询的语句，行为与接入前一致。
+ */
+export async function pickSharedDeliveryCard(
+    productId: string,
+    nowMs: number = Date.now(),
+): Promise<{ id: unknown; cardKey: string } | null> {
+    const queryWithMappingGuard = sql`
+        SELECT id, card_key FROM (
+            SELECT id, card_key FROM cards
+            WHERE product_id = ${productId}
+              AND (is_used = 0 OR is_used IS NULL)
+              AND (expires_at IS NULL OR expires_at > ${nowMs})
+              AND id NOT IN (SELECT local_card_id FROM ${sql.raw(CARD_SERVICE_CARDS_TABLE)})
+            ORDER BY id
+            LIMIT ${SHARED_CARD_CANDIDATE_WINDOW}
+        ) ORDER BY RANDOM() LIMIT 1
+    `;
+    const queryWithoutGuard = sql`
+        SELECT id, card_key FROM (
+            SELECT id, card_key FROM cards
+            WHERE product_id = ${productId}
+              AND (is_used = 0 OR is_used IS NULL)
+              AND (expires_at IS NULL OR expires_at > ${nowMs})
+            ORDER BY id
+            LIMIT ${SHARED_CARD_CANDIDATE_WINDOW}
+        ) ORDER BY RANDOM() LIMIT 1
+    `;
+
+    let rows: Array<{ id?: unknown; card_key?: unknown }>;
+    try {
+        rows = await db.all(queryWithMappingGuard) as Array<{ id?: unknown; card_key?: unknown }>;
+    } catch (error) {
+        if (!isMissingTableOrColumn(error)) throw error;
+        rows = await db.all(queryWithoutGuard) as Array<{ id?: unknown; card_key?: unknown }>;
+    }
+
+    if (!rows.length) return null;
+    return { id: rows[0].id, cardKey: typeof rows[0].card_key === 'string' ? rows[0].card_key : '' };
 }
 
 export async function cleanupExpiredCardsIfNeeded(throttleMs: number = 10 * 60 * 1000, productId?: string) {

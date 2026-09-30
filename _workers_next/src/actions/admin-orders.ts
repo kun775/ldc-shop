@@ -22,7 +22,7 @@ import { ORDER_ERROR_KEY_MAP } from "@/lib/orders/order-errors"
 import { auth } from "@/lib/auth"
 import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
 import { createD1CardServiceDatabase } from "@/lib/license-service/database"
-import { orderHasRemoteMappings } from "@/lib/license-service/guards"
+import { orderHasUnsettledCardServiceLedger } from "@/lib/license-service/guards"
 
 /**
  * 订单写操作的统一返回协议。
@@ -381,9 +381,13 @@ async function deleteOneOrder(orderId: string): Promise<{ deleted: boolean; bloc
   // 守卫必须在**任何副作用之前**：订单行一旦删掉，就再也说不清这笔映射属于哪笔
   // 业务，退款与对账都只能靠人工比对；而中心在 Ack 之后没有归还可售的接口。
   // 所以这里直接拦下，让管理员先把远端卡处理掉（作废或继续履约）。
+  //
+  // 判定覆盖两路（见 `orderHasUnsettledCardServiceLedger`）：已确认的远端映射，
+  // 以及尚未确认的 Sell / Revoke 待办 —— 只查前者会漏掉「中心可能已经卖掉了、
+  // 本地还没确认」这段窗口。
   try {
-    if (await orderHasRemoteMappings(createD1CardServiceDatabase(), orderId)) {
-      console.warn(`[LicenseService] deleteOneOrder skipped ${orderId}: still holds remote card mappings`)
+    if (await orderHasUnsettledCardServiceLedger(createD1CardServiceDatabase(), orderId)) {
+      console.warn(`[LicenseService] deleteOneOrder skipped ${orderId}: still holds unsettled card-service ledger entries`)
       return { deleted: false, blockedByRemoteMapping: true }
     }
   } catch (error) {

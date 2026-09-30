@@ -39,7 +39,11 @@ import {
     buildRestockTaskId,
 } from './idempotency.ts'
 import type { CardServiceDatabase, CardServiceStatement } from './db-port.ts'
-import { loadCardServiceProductConfig } from './product-config.ts'
+import { loadCardServiceProductConfig, loadProductSupplyGuard } from './product-config.ts'
+import {
+    CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL,
+    buildOperationFailureClauses,
+} from './operation-queue.ts'
 import { runWithRetry, type RetryPolicy, type RunWithRetryOptions } from './retry.ts'
 
 /** `card_service_operations.state` 取值。 */
@@ -131,6 +135,11 @@ export type RestockSkipReason =
     | 'not_configured'
     | 'supply_mode_not_license_service'
     | 'program_key_missing'
+    /**
+     * 共享卡商品：它的交付方式是「把一张本地卡明文当交付引用发出去」，**绕过 Sell**。
+     * 让它从中心领卡等于「卡领出来、明文发出去、中心永远显示未售出」。
+     */
+    | 'shared_product'
 
 export type RestockResult =
     | {
@@ -294,7 +303,9 @@ export async function listPendingCardServiceOperations(
         statements.push('AND operation = ?')
         params.push(options.operation)
     }
-    statements.push('ORDER BY COALESCE(next_retry_at, 0) ASC, created_at ASC LIMIT ?')
+    // 排序片段与 sell / revoke 两处共用：死信（`failed`）必须排在 `pending` 之后，
+    // 否则它会恒定占据队首、把 LIMIT 吃光（见 `operation-queue.ts`）。
+    statements.push(`${CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL} LIMIT ?`)
     params.push(Math.max(1, Math.trunc(options.limit ?? 20)))
 
     const rows = await database.query(statements.join(' '), params)
@@ -512,6 +523,7 @@ export function buildFailAckStatements(input: {
     requestId: string | null
     nowMs: number
 }): CardServiceStatement[] {
+    const failure = buildOperationFailureClauses(input.nowMs)
     return [
         {
             sql: `UPDATE ${CARD_SERVICE_ALLOCATIONS_TABLE}
@@ -521,7 +533,7 @@ export function buildFailAckStatements(input: {
         },
         {
             sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
-                SET state = 'failed', attempts = attempts + 1, next_retry_at = NULL,
+                SET state = ${failure.state}, attempts = attempts + 1, next_retry_at = ${failure.nextRetryAt},
                     request_id = ?, last_error_code = ?, updated_at = ?
                 WHERE operation_key = ?`,
             params: [input.requestId, input.errorCode, input.nowMs, input.ackOperationKey],
@@ -667,6 +679,13 @@ export async function restockProductCards(
     }
     if (!config.programKey) {
         return { status: 'skipped', reason: 'program_key_missing' }
+    }
+
+    // 兜底闸门：就算配置行是历史遗留（或在准入校验上线前就写下了），共享商品
+    // 也绝不允许从这里领卡 —— 它的交付路径绕过 Sell，领出来就是一张对不上账的卡。
+    const product = await loadProductSupplyGuard(deps.database, options.productId)
+    if (product.isShared) {
+        return { status: 'skipped', reason: 'shared_product' }
     }
 
     const intent = createRestockIntent({

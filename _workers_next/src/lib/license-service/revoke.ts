@@ -13,12 +13,17 @@
  *     中心不提供「归还可售」接口，作废后这张卡就永久退出流通（N4），代价是
  *     可接受的 —— 钱已经退给用户了。
  *   - 映射仍是 `acknowledged`（本地从未交付过）：这张卡**仍然归商城管理**，
- *     作废只会白白损失一张库存。所以先 `GET /cards/{id}` 查真实状态：
- *       · 中心显示 `sold` → 说明交付时 Sell 成功而本地没落上账（响应丢失），
+ *     作废只会白白损失一张库存。所以先问中心真实状态：
+ *       · **分配**已 `sold` → 说明交付时 Sell 成功而本地没落上账（响应丢失），
  *         属于「未展示但已 Sell」，按同一策略作废；
- *       · 中心显示 `revoked` → 幂等：直接补记本地终态；
- *       · 中心仍可用/已分配 → **保留**，退款批次已把本地预留释放，它可以被
- *         另一笔订单正常卖出。
+ *       · **卡**已 `revoked` → 幂等：直接补记本地终态；
+ *       · 分配仍是 `acknowledged`/`allocated` → **保留**，退款批次已把本地预留
+ *         释放，它可以被另一笔订单正常卖出。
+ *
+ *     ⚠️ 判「已售出」只能看**分配状态**（`GET /allocations/{id}` 的 `status`，或
+ *     卡状态响应里的 `allocation_status`）。`GET /cards/{id}/status` 的
+ *     `data.status` 是**卡运行态**（`revoked`/`disabled`/`expired`/`exhausted`/
+ *     `active`），**永不返回 `sold`** —— 用它判已售出等于写了一个恒假条件。
  *
  * 与交付路径一致的另外两条：
  *   - 作废**没有**本地原子批次可依赖（订单已退款），因此逐卡独立推进、逐卡落账，
@@ -34,6 +39,10 @@ import {
 } from '../db/license-service-schema.ts'
 import type { LicenseServiceClient } from './client.ts'
 import { isMissingTableError, type CardServiceDatabase, type CardServiceStatement } from './db-port.ts'
+import {
+    CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL,
+    buildOperationFailureClauses,
+} from './operation-queue.ts'
 import { toLicenseServiceError, type LicenseServiceError, type LicenseServiceErrorCategory } from './errors.ts'
 import { buildRevokeIdempotencyKey } from './idempotency.ts'
 import { runWithRetry, type RetryPolicy, type RunWithRetryOptions } from './retry.ts'
@@ -69,7 +78,12 @@ export type OrderRevokePlan =
     /** 纯本地订单：没有远端映射，退款流程照旧，不触碰中心。 */
     | { kind: 'none' }
     | { kind: 'revoke'; cards: OrderRevokeCard[] }
-    | { kind: 'blocked'; reason: OrderRevokeBlockReason; detail: string }
+    /**
+     * 需要人工介入。`cards` 是**已经能安全识别出来的那部分**（可能为空）：
+     * 它们不能被自动作废，但**必须被隔离** —— 退款会释放本单的本地预留，
+     * 不隔离就会被前台当成普通可售卡再卖一次。
+     */
+    | { kind: 'blocked'; reason: OrderRevokeBlockReason; detail: string; cards?: OrderRevokeCard[] }
 
 /** 作废执行结论。`requested` 只统计真正需要调中心或补记的卡。 */
 export interface RevokeOutcome {
@@ -85,7 +99,11 @@ export interface RevokeOutcome {
 }
 
 export interface RevokeDeps {
-    client: Pick<LicenseServiceClient, 'revoke' | 'getCardStatus'>
+    /**
+     * `getAllocation` 是必需的：判断「中心是否已售出」只能看**分配状态**
+     * （`GET /allocations/{id}` 的 `status`），卡状态接口永远不返回 `sold`。
+     */
+    client: Pick<LicenseServiceClient, 'revoke' | 'getCardStatus' | 'getAllocation'>
     database: CardServiceDatabase
     now?: () => number
     policy?: Partial<RetryPolicy>
@@ -284,20 +302,28 @@ export async function loadOrderRevokePlan(
     const cards: OrderRevokeCard[] = []
     const seen = new Set<number>()
 
+    // `blocked` 也把已经认出来的卡带出去：它们不能被自动作废，但退款方需要拿它们
+    // 做本地隔离（见 `OrderRevokePlan` 的注释）。
+    const blocked = (reason: OrderRevokeBlockReason, detail: string): OrderRevokePlan => ({
+        kind: 'blocked',
+        reason,
+        detail,
+        cards,
+    })
+
     // 订单列出的每一张卡都必须能查到映射：缺一张说明这单混了本地库存或映射被
     // 清理过，整单不做自动化处置。
     for (const localCardId of localIds) {
         const row = byLocalId.get(localCardId)
         if (!row) {
-            return {
-                kind: 'blocked',
-                reason: 'partial_mapping',
-                detail: `local card ${localCardId} has no remote mapping while others do`,
-            }
+            return blocked(
+                'partial_mapping',
+                `local card ${localCardId} has no remote mapping while others do`,
+            )
         }
         const classified = classifyRow(row, input.orderId)
         if (!classified.ok) {
-            return { kind: 'blocked', reason: classified.reason, detail: classified.detail }
+            return blocked(classified.reason, classified.detail)
         }
         cards.push(classified.card)
         seen.add(localCardId)
@@ -308,7 +334,7 @@ export async function loadOrderRevokePlan(
         if (seen.has(row.localCardId)) continue
         const classified = classifyRow(row, input.orderId)
         if (!classified.ok) {
-            return { kind: 'blocked', reason: classified.reason, detail: classified.detail }
+            return blocked(classified.reason, classified.detail)
         }
         cards.push(classified.card)
         seen.add(row.localCardId)
@@ -318,11 +344,7 @@ export async function loadOrderRevokePlan(
 
     const unusable = await allocationIsUnusable(database, cards.map((card) => card.allocationId))
     if (unusable) {
-        return {
-            kind: 'blocked',
-            reason: 'allocation_unusable',
-            detail: `allocation ${unusable} is already terminal locally`,
-        }
+        return blocked('allocation_unusable', `allocation ${unusable} is already terminal locally`)
     }
 
     return { kind: 'revoke', cards }
@@ -383,7 +405,7 @@ export async function listPendingRevokeOperations(
             `SELECT operation_key, resource_id, order_id, state, attempts
              FROM ${CARD_SERVICE_OPERATIONS_TABLE}
              WHERE operation = ? AND state IN ('pending', 'failed')
-             ORDER BY COALESCE(next_retry_at, 0) ASC, created_at ASC
+             ${CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL}
              LIMIT ?`,
             [CARD_SERVICE_OPERATION_REVOKE, Math.max(1, Math.trunc(options.limit ?? 20))],
         )
@@ -411,26 +433,119 @@ function operationKey(remoteCardId: string, orderId: string) {
     return buildRevokeIdempotencyKey(remoteCardId, orderId)
 }
 
-/** 作废意图先落账：订单卡密马上就要被清空，必须留下可重放的记录。 */
+/**
+ * 作废意图先落账：订单卡密马上就要被清空，必须留下可重放的记录。
+ *
+ * 同一条意图还会**顺手把本地卡隔离**（`is_used = 1`）——作废未确认期间可能跨多次
+ * 重放、中心甚至长时间不可达，而退款已经把这单的本地预留释放了；不隔离的话这张卡
+ * 会被前台当成普通可售卡再卖一次，后果是**同一张卡卖给两个人**，其中一个必然作废。
+ * 隔离由 `buildRevokeRetainStatements` 在「中心确认仍可用」时精确放回。
+ */
 export function buildRevokeIntentStatements(input: {
     orderId: string
-    cards: ReadonlyArray<{ remoteCardId: string }>
+    cards: ReadonlyArray<{ remoteCardId: string; localCardId?: number | null }>
     nowMs: number
 }): CardServiceStatement[] {
-    return input.cards.map((card) => ({
+    const statements: CardServiceStatement[] = []
+
+    for (const card of input.cards) {
         // OR IGNORE：重放时保留既有行（可能已是 done/failed），不要把状态改回 pending。
-        sql: `INSERT OR IGNORE INTO ${CARD_SERVICE_OPERATIONS_TABLE}
-            (operation_key, operation, resource_id, order_id, state, attempts,
-             next_retry_at, request_id, last_error_code, created_at, updated_at)
-            VALUES (?, '${CARD_SERVICE_OPERATION_REVOKE}', ?, ?, 'pending', 0, NULL, NULL, NULL, ?, ?)`,
-        params: [
-            operationKey(card.remoteCardId, input.orderId),
-            card.remoteCardId,
-            input.orderId,
-            input.nowMs,
-            input.nowMs,
-        ],
-    }))
+        statements.push({
+            sql: `INSERT OR IGNORE INTO ${CARD_SERVICE_OPERATIONS_TABLE}
+                (operation_key, operation, resource_id, order_id, state, attempts,
+                 next_retry_at, request_id, last_error_code, created_at, updated_at)
+                VALUES (?, '${CARD_SERVICE_OPERATION_REVOKE}', ?, ?, 'pending', 0, NULL, NULL, NULL, ?, ?)`,
+            params: [
+                operationKey(card.remoteCardId, input.orderId),
+                card.remoteCardId,
+                input.orderId,
+                input.nowMs,
+                input.nowMs,
+            ],
+        })
+
+        if (Number.isSafeInteger(card.localCardId)) {
+            statements.push(...buildRevokeQuarantineStatements({
+                orderId: input.orderId,
+                cards: [card],
+                nowMs: input.nowMs,
+            }))
+        }
+    }
+
+    return statements
+}
+
+/**
+ * 只做本地隔离、不写意图。
+ *
+ * 用途是「已经作废的卡」：远端已经死了，本地卡同样不该还能卖，但不需要再建待办。
+ */
+export function buildRevokeQuarantineStatements(input: {
+    orderId: string
+    cards: ReadonlyArray<{ localCardId?: number | null }>
+    nowMs: number
+}): CardServiceStatement[] {
+    return input.cards
+        .filter((card) => Number.isSafeInteger(card.localCardId))
+        .map((card) => buildLocalCardQuarantineStatement({
+            orderId: input.orderId,
+            localCardId: card.localCardId as number,
+            nowMs: input.nowMs,
+        }))
+}
+
+/**
+ * 退款原子批次里要一并提交的作废语句（阶段 E 第 2 条的「丢失窗口」修复）。
+ *
+ * 作废意图必须**和退款结算在同一个 D1 批次里提交**：两步分开的话，进程在中间被
+ * 回收（或部署）就会留下「订单已退款、卡密已清空、却没有任何记录说明这些远端卡
+ * 需要作废」的状态 —— 中心那几张卡会永久留在流通里，且无从追溯。
+ *
+ * 未作废的卡写意图 + 隔离；已作废的卡只隔离。
+ */
+export function buildRefundRevokeStatements(input: {
+    orderId: string
+    cards: readonly OrderRevokeCard[]
+    nowMs: number
+}): CardServiceStatement[] {
+    const pending = input.cards.filter((card) => !card.alreadyRevoked)
+    const revoked = input.cards.filter((card) => card.alreadyRevoked)
+
+    return [
+        ...buildRevokeIntentStatements({
+            orderId: input.orderId,
+            cards: pending,
+            nowMs: input.nowMs,
+        }),
+        ...buildRevokeQuarantineStatements({
+            orderId: input.orderId,
+            cards: revoked,
+            nowMs: input.nowMs,
+        }),
+    ]
+}
+
+/**
+ * 把本地卡移出可售池（作废前的隔离）。
+ *
+ * 三条守卫都很必要：
+ *   - `used_at = COALESCE(used_at, ?)`：已交付过的卡保留它真实的交付时间，不改写历史；
+ *   - 只动 `reserved_order_id IS NULL OR = 本单`：绝不去抢别的订单的预留；
+ *   - 幂等：重复执行只是把同样的行再置一遍 `is_used = 1`。
+ */
+function buildLocalCardQuarantineStatement(input: {
+    orderId: string
+    localCardId: number
+    nowMs: number
+}): CardServiceStatement {
+    return {
+        sql: `UPDATE cards
+            SET is_used = 1, used_at = COALESCE(used_at, ?),
+                reserved_order_id = NULL, reserved_at = NULL
+            WHERE id = ? AND (reserved_order_id IS NULL OR reserved_order_id = ?)`,
+        params: [input.nowMs, input.localCardId, input.orderId],
+    }
 }
 
 function buildRevokeOperationStateStatements(input: {
@@ -442,6 +557,21 @@ function buildRevokeOperationStateStatements(input: {
     nextRetryAtMs: number | null
     nowMs: number
 }): CardServiceStatement[] {
+    const key = operationKey(input.remoteCardId, input.orderId)
+
+    if (input.state === 'failed') {
+        // 不可重试失败走统一的重试预算（退避 + 尝试上限 → `abandoned`），
+        // 因此这里**不用** `nextRetryAtMs`（它只对可重试的 `pending` 有意义）。
+        const failure = buildOperationFailureClauses(input.nowMs)
+        return [{
+            sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
+                SET state = ${failure.state}, attempts = attempts + 1, next_retry_at = ${failure.nextRetryAt},
+                    request_id = ?, last_error_code = ?, updated_at = ?
+                WHERE operation_key = ?`,
+            params: [input.requestId, input.errorCode, input.nowMs, key],
+        }]
+    }
+
     return [{
         sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
             SET state = ?, attempts = attempts + 1, next_retry_at = ?,
@@ -453,7 +583,7 @@ function buildRevokeOperationStateStatements(input: {
             input.requestId,
             input.errorCode,
             input.nowMs,
-            operationKey(input.remoteCardId, input.orderId),
+            key,
         ],
     }]
 }
@@ -489,20 +619,47 @@ export function buildRevokeSuccessStatements(input: {
 /**
  * 保留库存：中心显示该卡仍可用，本店留作库存。
  *
+ * 必须把 `buildRevokeIntentStatements` 的隔离**精确放回**，否则这张卡会永久
+ * 从可售池里消失（`is_used` 恒为 1，前台再也看不到它）。
+ *
+ * 放回条件是**凭台账判定「从未交付」**（`card_service_cards.state = 'acknowledged'`），
+ * 而不是凭时间戳：时间戳要跨「退款批次 → 多次重放」传递，任一环节换一个 `now()`
+ * 就配对失败。而「是否交付过」恰好是我们唯一需要的事实 —— 交付过的卡（`sold`）
+ * 即使走不到这个分支，也不该被放回。
+ *
  * 台账置 `done` 而不是删除 —— 面板要能回答「这笔退款为什么没有作废卡」。
  */
 export function buildRevokeRetainStatements(input: {
     orderId: string
     remoteCardId: string
+    localCardId?: number | null
     nowMs: number
 }): CardServiceStatement[] {
-    return buildRevokeOperationStateStatements({
+    const statements: CardServiceStatement[] = []
+
+    if (Number.isSafeInteger(input.localCardId)) {
+        statements.push({
+            sql: `UPDATE cards
+                SET is_used = 0, used_at = NULL, reserved_order_id = NULL, reserved_at = NULL
+                WHERE id = ? AND EXISTS (
+                    SELECT 1 FROM ${CARD_SERVICE_CARDS_TABLE}
+                     WHERE local_card_id = cards.id
+                       AND remote_card_id = ?
+                       AND state = 'acknowledged'
+                )`,
+            params: [input.localCardId, input.remoteCardId],
+        })
+    }
+
+    statements.push(...buildRevokeOperationStateStatements({
         ...input,
         state: 'done',
         errorCode: null,
         requestId: null,
         nextRetryAtMs: null,
-    })
+    }))
+
+    return statements
 }
 
 /** 可重试失败：保持待办可被重放，并记录下次重试时间。 */
@@ -517,7 +674,7 @@ export function buildRevokeDeferStatements(input: {
     return buildRevokeOperationStateStatements({ ...input, state: 'pending' })
 }
 
-/** 不可重试失败：待办置 `failed` 等人工核查（不是「已完成」）。 */
+/** 不可重试失败：待办置 `failed`（含退避与尝试上限）等人工核查（不是「已完成」）。 */
 export function buildRevokeFailStatements(input: {
     orderId: string
     remoteCardId: string
@@ -528,6 +685,7 @@ export function buildRevokeFailStatements(input: {
     return buildRevokeOperationStateStatements({
         ...input,
         state: 'failed',
+        // 失败分支不使用它（退避由 `buildOperationFailureClauses` 在 SQL 里算）。
         nextRetryAtMs: null,
     })
 }
@@ -575,8 +733,8 @@ export async function failRevokesWithoutClient(
 // 执行
 // ---------------------------------------------------------------------------
 
-type CardStatusProbe =
-    | { ok: true; status: string }
+type RemoteRevokeProbe =
+    | { ok: true; cardStatus: string; allocationStatus: string }
     | { ok: false; error: LicenseServiceError }
 
 function resolveNow(deps: RevokeDeps) {
@@ -595,23 +753,65 @@ function retryOptions(deps: RevokeDeps, operation: string): RunWithRetryOptions 
 }
 
 /**
- * 查中心的卡状态。
+ * 查中心的**卡状态**与**分配状态** —— 两个字段缺一不可，因为它们的取值域完全不同：
  *
- * 不可用类错误（429/503/超时）交给调用方决定「等下一轮」，查不到等确定性错误
- * 按「未知」处理 —— 未知时**保留**本地映射，绝不默认作废（作废不回库存，误判
- * 等于白丢一张卡）。
+ *   · 卡状态（`GET /cards/{id}/status` 的 `data.status`）是**运行态**：
+ *     `revoked` / `disabled` / `expired` / `exhausted` / `active`。
+ *     ⚠️ **永远不会是 `sold`** —— 拿它判「中心是否已售出」是恒假条件。
+ *     这里只用它识别 `revoked`（幂等补记：首次调用成功但响应丢了）。
+ *   · 分配状态（`data.allocation_status`，或 `GET /allocations/{id}` 的 `status`）
+ *     才是生命周期：`unallocated`/`allocated`/`acknowledged`/`sold`/`cancelled`/`expired`。
+ *     **只有它**能回答「这批卡是否已经卖给了某个订单」。
+ *
+ * 卡状态响应里通常直接带 `allocation_status`，省一次往返；缺失时再按 `allocationId`
+ * 单查分配。**只在调用方真的需要分配状态时才回退**（`needAllocationStatus`）——
+ * 409 分支只关心卡是否已 `revoked`，多打一次分配查询毫无意义。
+ *
+ * 不可用类错误（429/503/超时）交给调用方决定「等下一轮」，查不到等确定性错误按
+ * 「未知」处理 —— 未知时**保留**本地映射，绝不默认作废（作废不回库存，误判等于
+ * 白丢一张卡）。
  */
-async function probeRemoteCardStatus(deps: RevokeDeps, remoteCardId: string): Promise<CardStatusProbe> {
+async function probeRemoteCardStatus(
+    deps: RevokeDeps,
+    remoteCardId: string,
+    options: { allocationId: string; needAllocationStatus: boolean },
+): Promise<RemoteRevokeProbe> {
+    let cardStatus = 'unknown'
+    let inlineStatus = ''
+
     try {
         const detail = await runWithRetry(
             () => deps.client.getCardStatus(remoteCardId),
             retryOptions(deps, 'getCardStatus'),
         )
-        return { ok: true, status: (detail.status || '').toLowerCase() }
+        cardStatus = (detail.status || '').toLowerCase()
+        inlineStatus = (detail.allocationStatus || '').toLowerCase()
+        // 空 `allocation_status` 不能当作「未售出」——那是字段缺失，必须再单查一次。
+        if (inlineStatus || !options.needAllocationStatus) {
+            return { ok: true, cardStatus, allocationStatus: inlineStatus }
+        }
     } catch (error) {
         const classified = toLicenseServiceError(error, 'getCardStatus')
         if (classified.category === 'unavailable') return { ok: false, error: classified }
-        return { ok: true, status: 'unknown' }
+        // 卡本身查不到（not_found 等）：分配状态仍值得一问。
+        cardStatus = 'unknown'
+        if (!options.needAllocationStatus) {
+            return { ok: true, cardStatus, allocationStatus: '' }
+        }
+    }
+
+    if (!options.allocationId) return { ok: true, cardStatus, allocationStatus: 'unknown' }
+
+    try {
+        const allocation = await runWithRetry(
+            () => deps.client.getAllocation(options.allocationId),
+            retryOptions(deps, 'getAllocation'),
+        )
+        return { ok: true, cardStatus, allocationStatus: (allocation.status || '').toLowerCase() }
+    } catch (error) {
+        const classified = toLicenseServiceError(error, 'getAllocation')
+        if (classified.category === 'unavailable') return { ok: false, error: classified }
+        return { ok: true, cardStatus, allocationStatus: 'unknown' }
     }
 }
 
@@ -627,9 +827,12 @@ async function revokeOneCard(
     const now = resolveNow(deps)
     const { card, orderId, reason } = input
 
-    // 未交付的卡先问中心：只有中心确实已售出（或已作废）才作废，否则留作库存。
+    // 未交付的卡先问中心：只有分配确实已 `sold`（或卡已 `revoked`）才作废，否则留作库存。
     if (card.state === 'acknowledged') {
-        const probe = await probeRemoteCardStatus(deps, card.remoteCardId)
+        const probe = await probeRemoteCardStatus(deps, card.remoteCardId, {
+            allocationId: card.allocationId,
+            needAllocationStatus: true,
+        })
         if (!probe.ok) {
             const error = probe.error
             await deps.database.write(buildRevokeDeferStatements({
@@ -643,17 +846,27 @@ async function revokeOneCard(
             outcome.deferred += 1
             return
         }
-        if (probe.status === 'revoked') {
+        if (probe.cardStatus === 'revoked') {
+            // 幂等补记：首次 `revoke` 其实成功了，只是响应丢了。
             await deps.database.write(buildRevokeSuccessStatements({ orderId, remoteCardId: card.remoteCardId, nowMs: now() }))
             outcome.revoked += 1
             return
         }
-        if (probe.status !== 'sold') {
-            // 仍可用 / 仍分配给我们：不作废，保留为库存（本地预留由退款批次释放）。
-            await deps.database.write(buildRevokeRetainStatements({ orderId, remoteCardId: card.remoteCardId, nowMs: now() }))
+        if (probe.allocationStatus !== 'sold') {
+            // 分配尚未售出（`acknowledged`/`allocated`/未知）：这张卡仍归商城管理，
+            // 作废只会白丢一张库存。保留映射，本地预留由退款批次释放，它可以被另一
+            // 笔订单正常卖出。
+            await deps.database.write(buildRevokeRetainStatements({
+                orderId,
+                remoteCardId: card.remoteCardId,
+                localCardId: card.localCardId,
+                nowMs: now(),
+            }))
             outcome.retained += 1
             return
         }
+        // 分配已 `sold`：说明交付时 Sell 成功但本地没落上账（响应丢失）——
+        // 「未展示但已 Sell」，与已交付卡同一策略：必须作废。
     }
 
     try {
@@ -670,10 +883,13 @@ async function revokeOneCard(
         const classified = toLicenseServiceError(error, 'revoke')
 
         if (classified.category === 'conflict') {
-            // 409 一律不重试：先用单查核实真实状态。已 `revoked` 说明首次其实
-            // 成功了（响应丢失），补记终态；`sold` 之外的冲突交人工核查。
-            const probe = await probeRemoteCardStatus(deps, card.remoteCardId)
-            if (probe.ok && probe.status === 'revoked') {
+            // 409 一律不重试：先用单查核实真实状态。卡已 `revoked` 说明首次其实
+            // 成功了（响应丢失），补记终态；其余冲突交人工核查。
+            const probe = await probeRemoteCardStatus(deps, card.remoteCardId, {
+                allocationId: card.allocationId,
+                needAllocationStatus: false,
+            })
+            if (probe.ok && probe.cardStatus === 'revoked') {
                 await deps.database.write(buildRevokeSuccessStatements({ orderId, remoteCardId: card.remoteCardId, nowMs: now() }))
                 outcome.revoked += 1
                 return
@@ -752,8 +968,8 @@ export async function executeOrderRevokes(
 export async function revokePendingCardServiceOperations(
     deps: RevokeDeps,
     options: { limit?: number; reason?: string } = {},
-): Promise<RevokeOutcome & { attempted: number; review: number }> {
-    const outcome = { ...emptyRevokeOutcome(), attempted: 0, review: 0 }
+): Promise<RevokeOutcome & { attempted: number; review: number; orderIds: string[] }> {
+    const outcome = { ...emptyRevokeOutcome(), attempted: 0, review: 0, orderIds: [] as string[] }
     const operations = await listPendingRevokeOperations(deps.database, { limit: options.limit ?? 20 })
 
     const byOrder = new Map<string, string[]>()
@@ -782,6 +998,8 @@ export async function revokePendingCardServiceOperations(
         outcome.retained += result.retained
         outcome.deferred += result.deferred
         outcome.failed += result.failed
+        // 真正动过本地卡的订单才需要重算前台库存（作废会隔离本地卡、保留会放回库存）。
+        if (!outcome.orderIds.includes(orderId)) outcome.orderIds.push(orderId)
     }
 
     return outcome

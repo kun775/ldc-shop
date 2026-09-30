@@ -85,12 +85,32 @@ test('outbound notification and mail helpers sanitize thrown errors', () => {
 })
 
 test('shared card selection avoids an unbounded ORDER BY RANDOM()', () => {
+    const queries = source('./db/queries.ts')
     const checkout = source('../actions/checkout.ts')
     const orderProcessing = source('./order-processing.ts')
 
-    assert.match(checkout, /SHARED_CARD_CANDIDATE_WINDOW/)
-    assert.match(orderProcessing, /SHARED_CARD_CANDIDATE_WINDOW/)
-    // 两处都不应再直接对整表候选做全量随机排序。
+    // 取卡口径收敛在唯一实现里（它同时负责排除有远端映射的卡）。
+    assert.match(queries, /export async function pickSharedDeliveryCard\(/)
+    assert.match(queries, /SHARED_CARD_CANDIDATE_WINDOW/)
+    // 两个调用点都必须走这个入口，不允许再各自抄一份 SQL。
+    assert.match(checkout, /pickSharedDeliveryCard\(/)
+    assert.match(orderProcessing, /pickSharedDeliveryCard\(/)
+    // 都不应再直接对整表候选做全量随机排序。
     assert.doesNotMatch(checkout, /\.orderBy\(sql`RANDOM\(\)`\)/)
     assert.doesNotMatch(orderProcessing, /\.orderBy\(sql`RANDOM\(\)`\)/)
+})
+
+test('shared delivery never hands out a card that is managed by the license service', () => {
+    const queries = source('./db/queries.ts')
+    const helper = queries.slice(
+        queries.indexOf('export async function pickSharedDeliveryCard('),
+        queries.indexOf('export async function cleanupExpiredCardsIfNeeded('),
+    )
+
+    assert.ok(helper.length > 0, 'pickSharedDeliveryCard must be defined before cleanupExpiredCardsIfNeeded')
+    // 排除有远端映射的卡：共享交付绕过 Sell，取到映射卡就会造出一张中心永远
+    // 显示「未售出」的卡。
+    assert.match(helper, /NOT IN \(SELECT local_card_id FROM/)
+    // 0038 未执行时回退，不能因为子查询报错就让共享商品买不了。
+    assert.match(helper, /isMissingTableOrColumn\(/)
 })

@@ -19,6 +19,7 @@ import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 import {
     executeOrderRevokePlan,
     planOrderCardRevoke,
+    planOrderRevokeBatchStatements,
 } from "@/lib/license-service"
 
 export async function markOrderRefunded(orderId: string) {
@@ -133,6 +134,23 @@ export async function markOrderRefunded(orderId: string) {
                     WHERE reserved_order_id = ? AND (is_used = 0 OR is_used IS NULL)`,
                 bindings: [orderId],
             })
+        }
+
+        // 作废意图与本地卡隔离**必须和退款结算在同一个原子批次里提交**。
+        // 分开提交就存在丢失窗口：订单卡密已被清空、却没有任何记录说明这些远端卡
+        // 需要作废 —— 中心那几张卡会永久留在流通里，且事后无从追溯（退款可能只是
+        // 一次部署/超时打断）。隔离同样关键：作废未确认期间，本单的本地预留已被
+        // 释放，不隔离这张卡就会被前台当成普通可售卡再卖一次。
+        //
+        // `blocked` 的计划也带出已识别的卡：不能自动作废，不代表可以再卖一次。
+        // 放在预留释放语句**之后**：`paid` 分支先释放预留，这边再把它隔离回去。
+        const revokePlanCards = revokePlan && revokePlan.kind !== 'none' ? revokePlan.cards ?? [] : []
+        if (revokePlanCards.length > 0) {
+            refundStatements.push(...planOrderRevokeBatchStatements({
+                orderId,
+                cards: revokePlanCards,
+                nowMs: consumedAt,
+            }))
         }
 
         refundStatements.push({

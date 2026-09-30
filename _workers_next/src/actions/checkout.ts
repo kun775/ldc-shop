@@ -3,7 +3,7 @@
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { products, cards, orders, loginUsers } from "@/lib/db/schema"
-import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded, createUserNotification, ensureDatabaseInitialized, getLoginUserEmail, recalcProductAggregates } from "@/lib/db/queries"
+import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded, createUserNotification, ensureDatabaseInitialized, getLoginUserEmail, pickSharedDeliveryCard, recalcProductAggregates } from "@/lib/db/queries"
 import { generateOrderId, generateSign } from "@/lib/crypto"
 import { eq, sql, and, or, isNull, lt, gt, inArray, ne } from "drizzle-orm"
 import { cookies } from "next/headers"
@@ -11,7 +11,7 @@ import { revalidatePath, updateTag } from "next/cache"
 import { after } from "next/server"
 import { notifyAdminPaymentSuccess } from "@/lib/notifications"
 import { sendOrderEmail } from "@/lib/email"
-import { INFINITE_STOCK, RESERVATION_TTL_MS, SHARED_CARD_CANDIDATE_WINDOW } from "@/lib/constants"
+import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
 import { pullOneCardFromApi } from "@/lib/card-api"
 import { getProductCardDeliveryNote } from "@/lib/card-delivery-note"
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord } from "@/lib/points/ledger-db"
@@ -335,22 +335,14 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
             // Let's grab ONE key for reference (randomly) just in case
             const nowMs = Date.now()
-            // 先按 id 取有界候选窗口，再在窗口内随机：避免 ORDER BY RANDOM()
-            // 对该商品全部可用卡做全量排序（详见 SHARED_CARD_CANDIDATE_WINDOW 注释）。
-            const availableCard = await db.all(sql`
-                SELECT id, card_key FROM (
-                    SELECT id, card_key FROM cards
-                    WHERE product_id = ${productId}
-                      AND (is_used = 0 OR is_used IS NULL)
-                      AND (expires_at IS NULL OR expires_at > ${nowMs})
-                    ORDER BY id
-                    LIMIT ${SHARED_CARD_CANDIDATE_WINDOW}
-                ) ORDER BY RANDOM() LIMIT 1
-            `) as Array<{ id: unknown; card_key?: string | null }>;
+            // 取卡口径收敛在 `pickSharedDeliveryCard`：有界候选窗口 + 随机，
+            // 并排除**有远端映射的卡**（那些卡归卡密服务中心管理，共享交付发明文
+            // 绕过 Sell，取到就会造出一张中心永远显示「未售出」的卡）。
+            const pickedCard = await pickSharedDeliveryCard(productId, nowMs);
 
-            if (availableCard.length > 0) {
-                const referenceId = Number(availableCard[0].id);
-                const referenceKey = availableCard[0].card_key ?? '';
+            if (pickedCard) {
+                const referenceId = Number(pickedCard.id);
+                const referenceKey = pickedCard.cardKey;
                 // We push the SAME key 'quantity' times
                 for (let i = 0; i < quantity; i++) {
                     reservedCards.push({ id: referenceId, key: referenceKey });

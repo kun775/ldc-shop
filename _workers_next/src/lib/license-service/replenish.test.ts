@@ -104,7 +104,12 @@ test('低水位补货：串行补齐到目标库存，每张卡独立领卡', as
 
     const summary = await replenishLowStockProducts({ client, database: ctx.database, now: () => NOW })
 
-    assert.deepEqual(summary, { ...emptyReplenishSummary(), products: 1, restocked: 3 })
+    assert.deepEqual(summary, {
+        ...emptyReplenishSummary(),
+        products: 1,
+        restocked: 3,
+        changedProductIds: [PROGRAM_PRODUCT],
+    })
     assert.equal(client.callCount('allocate'), 3)
     assert.equal(countOf(ctx, 'cards'), 3)
     // 串行领卡：三次 Allocate 的 external_ref 必须互不相同（external_ref 中心终身唯一）。
@@ -131,7 +136,12 @@ test('已有可用卡时只补差额，不会补过头', async () => {
 
     const summary = await replenishLowStockProducts({ client, database: ctx.database, now: () => NOW })
 
-    assert.deepEqual(summary, { ...emptyReplenishSummary(), products: 1, restocked: 1 })
+    assert.deepEqual(summary, {
+        ...emptyReplenishSummary(),
+        products: 1,
+        restocked: 1,
+        changedProductIds: [PROGRAM_PRODUCT],
+    })
     assert.equal(countOf(ctx, 'cards'), 2)
 })
 
@@ -144,7 +154,12 @@ test('单商品单轮有上限，剩余额度留给下一轮', async () => {
         maxPerProduct: 2,
     })
 
-    assert.deepEqual(summary, { ...emptyReplenishSummary(), products: 1, restocked: 2 })
+    assert.deepEqual(summary, {
+        ...emptyReplenishSummary(),
+        products: 1,
+        restocked: 2,
+        changedProductIds: [PROGRAM_PRODUCT],
+    })
     assert.equal(client.callCount('allocate'), 2)
     assert.ok(CARD_SERVICE_REPLENISH_BATCH_LIMIT < 50)
 })
@@ -174,7 +189,12 @@ test('只扫描走通用卡密服务的商品，本地供应商品不参与补�
 
     const summary = await replenishLowStockProducts({ client, database: ctx.database, now: () => NOW })
 
-    assert.deepEqual(summary, { ...emptyReplenishSummary(), products: 1, restocked: 1 })
+    assert.deepEqual(summary, {
+        ...emptyReplenishSummary(),
+        products: 1,
+        restocked: 1,
+        changedProductIds: [PROGRAM_PRODUCT],
+    })
     assert.equal(countOf(ctx, 'cards'), 1)
     assert.equal(
         ctx.get(`SELECT product_id FROM cards ORDER BY id ASC LIMIT 1`)?.product_id,
