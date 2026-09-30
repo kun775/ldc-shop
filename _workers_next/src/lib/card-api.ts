@@ -102,18 +102,49 @@ export async function saveProductCardApiConfig(productId: string, config: Produc
 }
 
 /**
- * 这个商品是否已交由卡密中心供应（`supply_mode = 'license_service'`）。
+ * 旧 GET 入口的准入结论。
  *
- * 配置表尚未建立（0038 未执行）或读取失败时返回 `false` —— 这是分流闸门，
- * 失败不该让既有的旧补货路径整个停摆。
+ *   allow  可以走这条历史入口：**没有配置行**（从未接入，保持既有行为）
+ *          或**显式**声明 `supply_mode = 'legacy_get'`
+ *   skip   明确不该走（显式 `local` / `license_service`）：不是故障，
+ *          调用方按「本条路径不适用」处理，只记 info
+ *   error  配置读不出来：**必须停**，绝不能让旧入口在状态不明时继续取卡
  */
-async function isCardServiceSuppliedProduct(productId: string): Promise<boolean> {
+type LegacyGetGate =
+    | { kind: 'allow' }
+    | { kind: 'skip'; error: string }
+    | { kind: 'error'; error: string }
+
+/**
+ * 决定「这个商品还能不能走旧 GET 取卡」。
+ *
+ * 只有三种情况放行：**没有配置行**（历史兼容，从未接入过中心）或显式
+ * `legacy_get`。显式 `local` **不放行** —— `local` 的契约就是「只用本地库存」，
+ * 只要 `cards_api_enabled` 还是 `true` 就联网取卡等于违约。
+ *
+ * ⚠️ 读取异常**绝不能**折算成 `allow`：那时商品的供应模式是**未知**的，
+ * 继续取卡会插入一批没有任何远端映射的卡 —— 若该商品其实是 `license_service`
+ * 供应，混合库存会直接阻断多卡订单交付。缺表兼容已由
+ * `loadCardServiceProductConfig` 内部处理（返回 `configured: false`），
+ * 因此走到 `catch` 的都是**真实读取异常**，必须报错停手。
+ */
+async function evaluateLegacyGetGate(productId: string): Promise<LegacyGetGate> {
+    let supplyMode: string
+    let configured: boolean
     try {
         const config = await loadCardServiceProductConfig(createD1CardServiceDatabase(), productId)
-        return config.configured && config.supplyMode === 'license_service'
-    } catch {
-        return false
+        supplyMode = config.supplyMode
+        configured = config.configured
+    } catch (error) {
+        console.error(`[Card API] supply config unreadable for product ${productId}:`, error)
+        return { kind: 'error', error: 'api_supply_config_unreadable' }
     }
+
+    if (!configured) return { kind: 'allow' }
+    if (supplyMode === 'license_service') return { kind: 'skip', error: 'api_card_service_supplied' }
+    if (supplyMode === 'local') return { kind: 'skip', error: 'api_local_supply_mode' }
+    // 只剩显式 `legacy_get`：它就是为这条旧接口准备的。
+    return { kind: 'allow' }
 }
 
 export async function pullOneCardFromApi(productId: string): Promise<{
@@ -122,13 +153,12 @@ export async function pullOneCardFromApi(productId: string): Promise<{
     error?: string
     cardKey?: string
 }> {
-    // 供应模式分流：已接入卡密中心（`supply_mode = 'license_service'`）的商品**不再**
-    // 走这条旧 GET 入口。这条路径取到的卡没有任何远端映射，中心那边永远显示
-    // 「未售出」；混进同一个商品后，多卡订单还会因 `mixed_inventory` 阻断交付。
-    // 中心供应的补货由 `restockProductCards` 负责，两者不能并行。
-    if (await isCardServiceSuppliedProduct(productId)) {
-        return { ok: false, skipped: true, error: "api_card_service_supplied" }
-    }
+    // 供应模式分流**必须在读取旧 GET 配置之前**：这条路径取到的卡没有任何远端
+    // 映射，中心那边永远显示「未售出」；混进同一个商品后，多卡订单还会因
+    // `mixed_inventory` 阻断交付。中心供应的补货由 `restockProductCards` 负责。
+    const gate = await evaluateLegacyGetGate(productId)
+    if (gate.kind === 'skip') return { ok: false, skipped: true, error: gate.error }
+    if (gate.kind === 'error') return { ok: false, error: gate.error }
 
     const config = await getProductCardApiConfig(productId)
     if (!config.enabled) {

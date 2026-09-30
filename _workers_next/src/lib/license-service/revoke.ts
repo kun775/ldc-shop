@@ -849,6 +849,94 @@ function classifyRevokeFailure(category: LicenseServiceErrorCategory): 'deferred
     return category === 'unavailable' ? 'deferred' : 'failed'
 }
 
+/**
+ * 卡运行态里**唯一**「明确可用」的取值。
+ *
+ * 注意这是**白名单**：判定「能不能放回可售池」时，必须由中心**明确确认**卡可用。
+ * 拿黑名单（只排除几个已知坏状态）会把新增状态、字段缺失、读不到的 `unknown`
+ * 一并当成「可用」—— 而那正是「买得下、发不出」的订单来源。
+ */
+export const USABLE_REMOTE_CARD_STATUS = 'active'
+
+/**
+ * 卡运行态里「明确不可用」的取值：中心卖不出去，放回库存只会制造发不出的订单。
+ * `revoked` 不在此列 —— 它单独走幂等补记（首次 revoke 其实成功了、只是响应丢了）。
+ */
+export const DEAD_REMOTE_CARD_STATUSES = ['disabled', 'expired', 'exhausted'] as const
+
+/** 分配状态里「仍归本店持有、且尚未售出」的取值 —— 放回库存的必要条件。 */
+export const SHOP_HELD_ALLOCATION_STATUSES = ['allocated', 'acknowledged'] as const
+
+/**
+ * 分配状态里「已被中心回收」的取值。
+ *
+ * 这两个状态下卡密可能已经回到中心的可用池、甚至已被别的 Program 领走。
+ * 因此既**不能放回本地库存**（会再卖一次），也**不能凭本单退款去吊销**
+ * （吊销可能落在已经不属于本店的卡上）—— 只能交人工核查。
+ */
+export const DEAD_ALLOCATION_STATUSES = ['expired', 'cancelled'] as const
+
+/**
+ * 「未交付映射」（本地 `acknowledged`）在探测中心之后的处置结论。
+ *
+ *   reclaim  卡已 `revoked`：幂等补记本地终态（首次调用成功、响应丢了）
+ *   revoke   必须作废（分配已售给本单 / 卡已明确不可用）
+ *   retain   放回可售池（**仅当**卡明确可用 **且** 分配仍归本店持有）
+ *   defer    暂时拿不到结论（未知）：保留隔离与待办，等下一轮重放
+ *   review   结论明确但不该自动处置（分配已回收 / 状态不认识）：保留隔离，交人工
+ */
+export type AcknowledgedProbeDisposition =
+    | { kind: 'reclaim' }
+    | { kind: 'revoke' }
+    | { kind: 'retain' }
+    | { kind: 'defer'; errorCode: string }
+    | { kind: 'review'; errorCode: string }
+
+/**
+ * 判定「未交付的远端卡」该怎么处置。
+ *
+ * 核心是**两道都必须是「明确确认」**：卡确实可用 + 分配确实还在本店手上。
+ * 只判一半都会出事：
+ *
+ *   - 只看分配状态 → `disabled`/`expired`/`exhausted` 的卡会被放回可售池，
+ *     顾客买下后 Sell 必然失败（「买了发不出」）；
+ *   - 只看卡状态 → 分配已 `expired`/`cancelled` 时，卡密可能已被中心回收或
+ *     归了别人，放回库存等于把别人的卡再卖一次。
+ *
+ * 「不是 sold」**远不等于**「仍可售」—— 分配还有 `expired`/`cancelled` 两个终态，
+ * 卡的运行态还有四种非可用取值。所以这里穷举取值域，不认识的一律人工核查。
+ */
+export function classifyAcknowledgedProbe(input: {
+    cardStatus: string
+    allocationStatus: string
+}): AcknowledgedProbeDisposition {
+    const cardStatus = (input.cardStatus || '').toLowerCase()
+    const allocationStatus = (input.allocationStatus || '').toLowerCase()
+
+    if (cardStatus === 'revoked') return { kind: 'reclaim' }
+    // 未知（查询失败/字段缺失/本地没有 allocationId）**不是**「仍可售」的证据。
+    if (!allocationStatus || allocationStatus === 'unknown') {
+        return { kind: 'defer', errorCode: 'remote_status_unknown' }
+    }
+    if (allocationStatus === 'sold') return { kind: 'revoke' }
+    if ((DEAD_ALLOCATION_STATUSES as readonly string[]).includes(allocationStatus)) {
+        return { kind: 'review', errorCode: 'allocation_unusable' }
+    }
+    if (!(SHOP_HELD_ALLOCATION_STATUSES as readonly string[]).includes(allocationStatus)) {
+        // `unallocated` 或将来新增的取值：不猜。既不放回库存，也不自动吊销。
+        return { kind: 'review', errorCode: 'allocation_not_held' }
+    }
+    // 分配确实还在本店手上，还要卡本身能卖。
+    if ((DEAD_REMOTE_CARD_STATUSES as readonly string[]).includes(cardStatus)) {
+        return { kind: 'revoke' }
+    }
+    if (cardStatus !== USABLE_REMOTE_CARD_STATUS) {
+        // 读不到卡状态、或取值不在已知域内 —— 同样不是「可售」的证据。
+        return { kind: 'review', errorCode: 'card_status_unusable' }
+    }
+    return { kind: 'retain' }
+}
+
 async function revokeOneCard(
     deps: RevokeDeps,
     input: { orderId: string; card: OrderRevokeCard; reason: string },
@@ -857,7 +945,7 @@ async function revokeOneCard(
     const now = resolveNow(deps)
     const { card, orderId, reason } = input
 
-    // 未交付的卡先问中心：只有分配确实已 `sold`（或卡已 `revoked`）才作废，否则留作库存。
+    // 未交付的卡先问中心，再按**明确确认**的事实决定：作废 / 保留库存 / 延后 / 人工复核。
     if (card.state === 'acknowledged') {
         const probe = await probeRemoteCardStatus(deps, card.remoteCardId, {
             allocationId: card.allocationId,
@@ -876,21 +964,23 @@ async function revokeOneCard(
             outcome.deferred += 1
             return
         }
-        if (probe.cardStatus === 'revoked') {
+        // 「不是 sold」远不等于「仍可售」：处置口径全部交给纯函数判定，穷举取值域。
+        const disposition = classifyAcknowledgedProbe({
+            cardStatus: probe.cardStatus,
+            allocationStatus: probe.allocationStatus,
+        })
+        if (disposition.kind === 'reclaim') {
             // 幂等补记：首次 `revoke` 其实成功了，只是响应丢了。
             await deps.database.write(buildRevokeSuccessStatements({ orderId, remoteCardId: card.remoteCardId, nowMs: now() }))
             outcome.revoked += 1
             return
         }
-        if (probe.allocationStatus === 'unknown') {
-            // 远端状态**未知**：查询 402/403/无效响应，或本地没有 `allocationId`。
-            // 绝不能假定它还能卖 —— 中心那侧完全可能已经 `sold`，一旦放回库存，
-            // 同一张卡会被本地再卖给第二个人，其中一个必然作废。
-            // 保留隔离与待办，等下一次重放拿到明确结论（未知**不是**可保留的证据）。
+        if (disposition.kind === 'defer') {
+            // 暂时拿不到结论：保留隔离与待办，等下一次重放。
             await deps.database.write(buildRevokeDeferStatements({
                 orderId,
                 remoteCardId: card.remoteCardId,
-                errorCode: 'remote_status_unknown',
+                errorCode: disposition.errorCode,
                 requestId: null,
                 nextRetryAtMs: now(),
                 nowMs: now(),
@@ -898,10 +988,22 @@ async function revokeOneCard(
             outcome.deferred += 1
             return
         }
-        if (probe.allocationStatus !== 'sold') {
-            // **明确确认**分配尚未售出（`acknowledged`/`allocated`）：这张卡仍归商城
-            // 管理，作废只会白丢一张库存。保留映射，本地预留由退款批次释放，它可以被
-            // 另一笔订单正常卖出。
+        if (disposition.kind === 'review') {
+            // 分配已被中心回收 / 状态不认识：既不放回库存（会再卖一次），也不自动吊销
+            // （可能落在已不属于本店的卡上）。待办置 `failed` 进运维面板复核清单。
+            await deps.database.write(buildRevokeFailStatements({
+                orderId,
+                remoteCardId: card.remoteCardId,
+                errorCode: disposition.errorCode,
+                requestId: null,
+                nowMs: now(),
+            }))
+            outcome.failed += 1
+            return
+        }
+        if (disposition.kind === 'retain') {
+            // **明确确认**卡可用（`active`）**且**分配仍归本店持有（`allocated`/`acknowledged`）：
+            // 作废只会白丢一张库存。保留映射，本地预留由退款批次释放，它可以被另一笔订单卖出去。
             await deps.database.write(buildRevokeRetainStatements({
                 orderId,
                 remoteCardId: card.remoteCardId,
@@ -911,8 +1013,9 @@ async function revokeOneCard(
             outcome.retained += 1
             return
         }
-        // 分配已 `sold`：说明交付时 Sell 成功但本地没落上账（响应丢失）——
-        // 「未展示但已 Sell」，与已交付卡同一策略：必须作废。
+        // `disposition.kind === 'revoke'`：分配已 `sold`（交付时 Sell 成功但本地没落上账，
+        // 响应丢了 —— 「未展示但已 Sell」），或卡已明确不可用（`disabled`/`expired`/
+        // `exhausted`，放回库存只会制造发不出的订单）。两者都必须作废。
     }
 
     try {

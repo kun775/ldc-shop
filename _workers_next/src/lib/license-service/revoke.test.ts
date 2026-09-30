@@ -24,6 +24,7 @@ import {
     buildRefundRevokeStatements,
     buildRevokeIntentStatements,
     buildRevokeRetainStatements,
+    classifyAcknowledgedProbe,
     executeOrderRevokes,
     failRevokesWithoutClient,
     listPendingRevokeOperations,
@@ -345,14 +346,15 @@ test('未交付且分配仍在我们手上 → 不作废，保留为本店库存
     assert.equal(operation(ctx, 'card_a1')?.state, 'done')
 })
 
-test('回归：卡状态取值域里没有 sold —— 只有分配状态 sold 才算「中心已售出」', async () => {
+test('回归：卡状态取值域里没有 sold —— 卡状态是 sold 也不得据此作废', async () => {
     const ctx = createSqliteCardServiceDatabase()
     seedCard(ctx, 7)
     seedAllocation(ctx)
     seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
 
-    // 故意造一个取值域外的卡状态 'sold'：只要分配状态还是 acknowledged，
-    // 就**必须**保留 —— 旧实现拿卡状态比 'sold' 是恒假条件，这张卡会被误作废。
+    // 故意造一个取值域外的卡状态 'sold'：旧实现拿卡状态比 'sold' 会把这张卡误作废。
+    // 现在分配状态是 acknowledged（未售出），所以**绝不能**吊销；
+    // 但 'sold' 也不是「明确可用」，因此也不能放回库存 —— 只能交人工核查。
     const client = createFakeLicenseServiceClient({
         getCardStatus: async (cardId) => makeCardStatus(cardId, 'sold', 'acknowledged'),
         revoke: async () => { throw new Error('revoke must not be called') },
@@ -362,8 +364,12 @@ test('回归：卡状态取值域里没有 sold —— 只有分配状态 sold �
     const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
     const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
 
-    assert.deepEqual(outcome, { requested: 1, revoked: 0, retained: 1, deferred: 0, failed: 0 })
+    assert.equal(client.callCount('revoke'), 0)
+    assert.deepEqual(outcome, { requested: 1, revoked: 0, retained: 0, deferred: 0, failed: 1 })
     assert.equal(mapped(ctx, 'card_a1')?.state, 'acknowledged')
+    assert.equal(operation(ctx, 'card_a1')?.state, 'failed')
+    // 不能恢复成「可售」：卡状态读不准时放回库存就是「买得下、发不出」。
+    assert.equal(card(ctx, 7)?.is_used, 1)
 })
 
 test('卡状态响应不带 allocation_status → 回退单查分配', async () => {
@@ -949,4 +955,114 @@ test('放回库存只认领本单的预留：并发重放不会清掉新订单�
     // 既不能放回（is_used 仍为 1），更不能清掉那条不属于本单的预留。
     assert.equal(card(ctx, 7)?.is_used, 1)
     assert.equal(card(ctx, 7)?.reserved_order_id, OTHER_ORDER)
+})
+
+// ---------------------------------------------------------------------------
+// 「不是 sold」≠「仍可售」：处置口径必须穷举取值域
+// ---------------------------------------------------------------------------
+
+test('处置口径逐格穷举：只有「卡 active 且分配仍归本店」才放回库存', () => {
+    const cases: Array<[string, string, string]> = [
+        // 卡状态, 分配状态, 期望 kind
+        ['active', 'acknowledged', 'retain'],
+        ['active', 'allocated', 'retain'],
+        ['revoked', 'acknowledged', 'reclaim'],
+        ['revoked', 'sold', 'reclaim'],
+        ['active', 'sold', 'revoke'],
+        ['active', '', 'defer'],
+        ['active', 'unknown', 'defer'],
+        ['', 'unknown', 'defer'],
+        // ⚠️ 本轮 P1：分配「不是 sold」但已不可用 —— 曾一律被放回库存。
+        ['active', 'expired', 'review'],
+        ['active', 'cancelled', 'review'],
+        ['active', 'unallocated', 'review'],
+        // 分配还在手上，但卡本身已经卖不出去 —— 曾一律被放回库存，制造发不出的订单。
+        ['disabled', 'acknowledged', 'revoke'],
+        ['expired', 'acknowledged', 'revoke'],
+        ['exhausted', 'acknowledged', 'revoke'],
+        // 卡状态读不到 / 不认识：不是「可售」的证据。
+        ['unknown', 'acknowledged', 'review'],
+        ['', 'acknowledged', 'review'],
+        ['sold', 'acknowledged', 'review'],
+    ]
+
+    for (const [cardStatus, allocationStatus, expected] of cases) {
+        const disposition = classifyAcknowledgedProbe({ cardStatus, allocationStatus })
+        assert.equal(
+            disposition.kind,
+            expected,
+            `cardStatus=${cardStatus || '(空)'} allocationStatus=${allocationStatus || '(空)'} 期望 ${expected}，实际 ${disposition.kind}`,
+        )
+    }
+})
+
+test('复核分支给出可区分的错误码，便于运维定位', () => {
+    assert.deepEqual(
+        classifyAcknowledgedProbe({ cardStatus: 'active', allocationStatus: 'expired' }),
+        { kind: 'review', errorCode: 'allocation_unusable' },
+    )
+    assert.deepEqual(
+        classifyAcknowledgedProbe({ cardStatus: 'active', allocationStatus: 'unallocated' }),
+        { kind: 'review', errorCode: 'allocation_not_held' },
+    )
+    assert.deepEqual(
+        classifyAcknowledgedProbe({ cardStatus: 'unknown', allocationStatus: 'acknowledged' }),
+        { kind: 'review', errorCode: 'card_status_unusable' },
+    )
+    assert.deepEqual(
+        classifyAcknowledgedProbe({ cardStatus: 'active', allocationStatus: '' }),
+        { kind: 'defer', errorCode: 'remote_status_unknown' },
+    )
+})
+
+test('卡已 disabled（分配仍在我们手上）→ 必须吊销，且绝不放回库存', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'disabled', 'acknowledged'),
+        revoke: async (cardId) => ({ cardId, status: 'revoked' }),
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.deepEqual(outcome, { requested: 1, revoked: 1, retained: 0, deferred: 0, failed: 0 })
+    assert.equal(client.callCount('revoke'), 1)
+    assert.equal(mapped(ctx, 'card_a1')?.state, 'revoked')
+    assert.equal(operation(ctx, 'card_a1')?.state, 'done')
+})
+
+test('分配已 expired/cancelled（卡状态仍 active）→ 不放回库存、不自动吊销，转人工复核', async () => {
+    for (const allocationStatus of ['expired', 'cancelled']) {
+        const ctx = createSqliteCardServiceDatabase()
+        seedCard(ctx, 7)
+        seedAllocation(ctx)
+        seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+
+        const client = createFakeLicenseServiceClient({
+            getCardStatus: async (cardId) => makeCardStatus(cardId, 'active', allocationStatus),
+            revoke: async () => { throw new Error('分配已被中心回收，不得凭本单退款去吊销') },
+        })
+        const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+        const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+        const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+        assert.deepEqual(
+            outcome,
+            { requested: 1, revoked: 0, retained: 0, deferred: 0, failed: 1 },
+            `allocationStatus=${allocationStatus} 的处置`,
+        )
+        assert.equal(client.callCount('revoke'), 0)
+        // 映射保持原状（未作废、也未被放回），本地卡仍是隔离态。
+        assert.equal(mapped(ctx, 'card_a1')?.state, 'acknowledged')
+        assert.equal(card(ctx, 7)?.is_used, 1)
+        const op = operation(ctx, 'card_a1')
+        assert.equal(op?.state, 'failed')
+        assert.equal(op?.last_error_code, 'allocation_unusable')
+    }
 })
