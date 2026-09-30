@@ -41,6 +41,7 @@ import type { LicenseServiceClient } from './client.ts'
 import { isMissingTableError, type CardServiceDatabase, type CardServiceStatement } from './db-port.ts'
 import {
     CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL,
+    CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL,
     buildOperationFailureClauses,
 } from './operation-queue.ts'
 import { toLicenseServiceError, type LicenseServiceError, type LicenseServiceErrorCategory } from './errors.ts'
@@ -311,19 +312,30 @@ export async function loadOrderRevokePlan(
         cards,
     })
 
+    // ⚠️ 遇到问题卡**不能立即返回**：两轮遍历都必须走完，才能把「可确认归属」的卡
+    // 全部收进 `cards`。只带出前缀的话，退款方拿不到后面的远端卡 —— 它们既不进作废
+    // 待办、也不会被本地隔离，而订单 `card_ids` 一清就再没有追溯线索。
+    // 因此这里只记录**首个**阻断原因，遍历结束后统一决定返回形态。
+    let blockedReason: OrderRevokeBlockReason | null = null
+    let blockedDetail = ''
+    const noteBlock = (reason: OrderRevokeBlockReason, detail: string): void => {
+        if (blockedReason) return
+        blockedReason = reason
+        blockedDetail = detail
+    }
+
     // 订单列出的每一张卡都必须能查到映射：缺一张说明这单混了本地库存或映射被
     // 清理过，整单不做自动化处置。
     for (const localCardId of localIds) {
         const row = byLocalId.get(localCardId)
         if (!row) {
-            return blocked(
-                'partial_mapping',
-                `local card ${localCardId} has no remote mapping while others do`,
-            )
+            noteBlock('partial_mapping', `local card ${localCardId} has no remote mapping while others do`)
+            continue
         }
         const classified = classifyRow(row, input.orderId)
         if (!classified.ok) {
-            return blocked(classified.reason, classified.detail)
+            noteBlock(classified.reason, classified.detail)
+            continue
         }
         cards.push(classified.card)
         seen.add(localCardId)
@@ -334,11 +346,14 @@ export async function loadOrderRevokePlan(
         if (seen.has(row.localCardId)) continue
         const classified = classifyRow(row, input.orderId)
         if (!classified.ok) {
-            return blocked(classified.reason, classified.detail)
+            noteBlock(classified.reason, classified.detail)
+            continue
         }
         cards.push(classified.card)
         seen.add(row.localCardId)
     }
+
+    if (blockedReason) return blocked(blockedReason, blockedDetail)
 
     if (!cards.some((card) => !card.alreadyRevoked)) return { kind: 'none' }
 
@@ -397,17 +412,25 @@ export async function loadRevokePlanForRemoteCards(
 /** 列出待重放的作废操作（供定时任务与运维面板使用）。 */
 export async function listPendingRevokeOperations(
     database: CardServiceDatabase,
-    options: { limit?: number } = {},
+    options: { limit?: number; respectBackoff?: boolean; nowMs?: number } = {},
 ): Promise<Array<{ operationKey: string; remoteCardId: string; orderId: string; state: string; attempts: number }>> {
     let rows: Array<Record<string, unknown>>
     try {
+        const params: unknown[] = [CARD_SERVICE_OPERATION_REVOKE]
+        const filters = ["operation = ? AND state IN ('pending', 'failed')"]
+        // 定时重放要遵守退避；人工重试传 `respectBackoff: false` 跳过它。
+        if (options.respectBackoff) {
+            filters.push(CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL)
+            params.push(options.nowMs ?? Date.now())
+        }
+        params.push(Math.max(1, Math.trunc(options.limit ?? 20)))
         rows = await database.query(
             `SELECT operation_key, resource_id, order_id, state, attempts
              FROM ${CARD_SERVICE_OPERATIONS_TABLE}
-             WHERE operation = ? AND state IN ('pending', 'failed')
+             WHERE ${filters.join(' ')}
              ${CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL}
              LIMIT ?`,
-            [CARD_SERVICE_OPERATION_REVOKE, Math.max(1, Math.trunc(options.limit ?? 20))],
+            params,
         )
     } catch (error) {
         if (isMissingTableError(error)) return []
@@ -638,16 +661,23 @@ export function buildRevokeRetainStatements(input: {
     const statements: CardServiceStatement[] = []
 
     if (Number.isSafeInteger(input.localCardId)) {
+        // 归属校验与隔离语句（`buildLocalCardQuarantineStatement`）严格对称：只放回
+        // 「没人预留、或预留归属就是本单」的卡。
+        //
+        // 少了它，一笔**并发重放**的旧执行会清掉另一个订单刚刚做的预留 —— 那张卡
+        // 于是在两笔订单之间同时可售，谁先交付谁拿到，另一单必然拿到一张已死的卡。
         statements.push({
             sql: `UPDATE cards
                 SET is_used = 0, used_at = NULL, reserved_order_id = NULL, reserved_at = NULL
-                WHERE id = ? AND EXISTS (
+                WHERE id = ?
+                  AND (reserved_order_id IS NULL OR reserved_order_id = ?)
+                  AND EXISTS (
                     SELECT 1 FROM ${CARD_SERVICE_CARDS_TABLE}
                      WHERE local_card_id = cards.id
                        AND remote_card_id = ?
                        AND state = 'acknowledged'
                 )`,
-            params: [input.localCardId, input.remoteCardId],
+            params: [input.localCardId, input.orderId, input.remoteCardId],
         })
     }
 
@@ -852,10 +882,26 @@ async function revokeOneCard(
             outcome.revoked += 1
             return
         }
+        if (probe.allocationStatus === 'unknown') {
+            // 远端状态**未知**：查询 402/403/无效响应，或本地没有 `allocationId`。
+            // 绝不能假定它还能卖 —— 中心那侧完全可能已经 `sold`，一旦放回库存，
+            // 同一张卡会被本地再卖给第二个人，其中一个必然作废。
+            // 保留隔离与待办，等下一次重放拿到明确结论（未知**不是**可保留的证据）。
+            await deps.database.write(buildRevokeDeferStatements({
+                orderId,
+                remoteCardId: card.remoteCardId,
+                errorCode: 'remote_status_unknown',
+                requestId: null,
+                nextRetryAtMs: now(),
+                nowMs: now(),
+            }))
+            outcome.deferred += 1
+            return
+        }
         if (probe.allocationStatus !== 'sold') {
-            // 分配尚未售出（`acknowledged`/`allocated`/未知）：这张卡仍归商城管理，
-            // 作废只会白丢一张库存。保留映射，本地预留由退款批次释放，它可以被另一
-            // 笔订单正常卖出。
+            // **明确确认**分配尚未售出（`acknowledged`/`allocated`）：这张卡仍归商城
+            // 管理，作废只会白丢一张库存。保留映射，本地预留由退款批次释放，它可以被
+            // 另一笔订单正常卖出。
             await deps.database.write(buildRevokeRetainStatements({
                 orderId,
                 remoteCardId: card.remoteCardId,
@@ -970,7 +1016,7 @@ export async function revokePendingCardServiceOperations(
     options: { limit?: number; reason?: string } = {},
 ): Promise<RevokeOutcome & { attempted: number; review: number; orderIds: string[] }> {
     const outcome = { ...emptyRevokeOutcome(), attempted: 0, review: 0, orderIds: [] as string[] }
-    const operations = await listPendingRevokeOperations(deps.database, { limit: options.limit ?? 20 })
+    const operations = await listPendingRevokeOperations(deps.database, { limit: options.limit ?? 20, respectBackoff: true })
 
     const byOrder = new Map<string, string[]>()
     for (const operation of operations) {

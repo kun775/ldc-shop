@@ -42,6 +42,7 @@ import type { CardServiceDatabase, CardServiceStatement } from './db-port.ts'
 import { loadCardServiceProductConfig, loadProductSupplyGuard } from './product-config.ts'
 import {
     CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL,
+    CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL,
     buildOperationFailureClauses,
 } from './operation-queue.ts'
 import { runWithRetry, type RetryPolicy, type RunWithRetryOptions } from './retry.ts'
@@ -135,6 +136,12 @@ export type RestockSkipReason =
     | 'not_configured'
     | 'supply_mode_not_license_service'
     | 'program_key_missing'
+    /**
+     * 商品已被删除，但供应配置行还在（历史遗留、或「先删商品再删配置」的时序）。
+     * 从这里继续领卡会 Allocate / Ack 出一批**永远物化不了**的远端卡（本地
+     * `cards` 外键失败），而且会持续消耗中心库存。
+     */
+    | 'product_not_found'
     /**
      * 共享卡商品：它的交付方式是「把一张本地卡明文当交付引用发出去」，**绕过 Sell**。
      * 让它从中心领卡等于「卡领出来、明文发出去、中心永远显示未售出」。
@@ -291,7 +298,7 @@ export interface PendingOperationRow {
 /** 列出待重放的操作（`pending` / `failed`），对账时按写入顺序推进。 */
 export async function listPendingCardServiceOperations(
     database: CardServiceDatabase,
-    options: { operation?: string; limit?: number } = {},
+    options: { operation?: string; limit?: number; respectBackoff?: boolean; nowMs?: number } = {},
 ): Promise<PendingOperationRow[]> {
     const statements: string[] = [
         `SELECT operation_key, operation, resource_id, order_id, state, attempts
@@ -302,6 +309,11 @@ export async function listPendingCardServiceOperations(
     if (options.operation) {
         statements.push('AND operation = ?')
         params.push(options.operation)
+    }
+    // 定时重放要遵守退避；人工重试（面板「重试」）传 `respectBackoff: false` 跳过它。
+    if (options.respectBackoff) {
+        statements.push(CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL)
+        params.push(options.nowMs ?? Date.now())
     }
     // 排序片段与 sell / revoke 两处共用：死信（`failed`）必须排在 `pending` 之后，
     // 否则它会恒定占据队首、把 LIMIT 吃光（见 `operation-queue.ts`）。
@@ -683,7 +695,14 @@ export async function restockProductCards(
 
     // 兜底闸门：就算配置行是历史遗留（或在准入校验上线前就写下了），共享商品
     // 也绝不允许从这里领卡 —— 它的交付路径绕过 Sell，领出来就是一张对不上账的卡。
+    //
+    // ⚠️ `exists` 与 `isShared` 必须**都**看：商品删除后供应配置行仍在，低水位扫描
+    // 会继续对着一个不存在的商品 Allocate / Ack（物化时本地 `cards` 外键失败），
+    // 而中心那几张卡已经扣掉库存，只会越积越多。
     const product = await loadProductSupplyGuard(deps.database, options.productId)
+    if (!product.exists) {
+        return { status: 'skipped', reason: 'product_not_found' }
+    }
     if (product.isShared) {
         return { status: 'skipped', reason: 'shared_product' }
     }

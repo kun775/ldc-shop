@@ -19,9 +19,13 @@
  *      **仍出现在运维面板的复核清单里**（`ops.ts` 的复核查询包含
  *      `failed` / `abandoned`），不会静默消失。
  *
- * `next_retry_at` 在这里是**优先级提示**而不是硬闸门：重放入口（定时任务与面板上
- * 的「重试」）不按它过滤，因为一次退避不该挡住「凭据刚刚配好、现在就能补上」的
- * 重放。真正的节奏控制来自外部调度（cron 每分钟一次）。
+ * `next_retry_at` 对**人工重试**是优先级提示，对**定时重放**是硬闸门：
+ *
+ *   - 面板上的「重试」由人判断，不该被退避挡住（凭据刚配好就该能立刻补上），
+ *     所以它用默认的 `respectBackoff: false`；
+ *   - 定时任务必须传 `respectBackoff: true`（见 `CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL`）。
+ *     少了这道过滤，每分钟一次的调度会让刚失败的操作**立刻重试**，退避形同虚设 ——
+ *     `CARD_SERVICE_MAX_OPERATION_ATTEMPTS` 会在约 12 分钟内被耗尽，操作提前死信。
  */
 
 /**
@@ -47,6 +51,15 @@ export const CARD_SERVICE_RETRY_BACKOFF_MAX_SHIFT = 6
  */
 export const CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL =
     "ORDER BY CASE WHEN state = 'failed' THEN 1 ELSE 0 END ASC, COALESCE(next_retry_at, 0) ASC, created_at ASC"
+
+/**
+ * 「退避尚未到期」的过滤片段（`AND (...)`，占位符是 `now` 毫秒）——
+ * **只给自动重放用**，拼接位置必须在 `ORDER BY` 之前。
+ *
+ * `next_retry_at IS NULL` 的待办（首次入队的 `pending`）永远放行。
+ */
+export const CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL =
+    'AND (next_retry_at IS NULL OR next_retry_at <= ?)'
 
 /**
  * 「一次不可重试的失败」要写进待办行的两个表达式。

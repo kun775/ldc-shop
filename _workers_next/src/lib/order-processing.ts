@@ -668,14 +668,13 @@ export async function completePaidOrderDelivery(orderId: string): Promise<Automa
         // 订单尚未被标记为已支付：不做任何事。
         return { orderStatus: "processing", delivered: false, cardKeys: "", deliveryNote: "" }
     }
+    // 租约已过期的 `processing` 是**可回收**的声明：它必须能继续往下重新认领，
+    // 否则进程在交付中途被杀留下的 `processing` 会让订单**永久卡死** ——
+    // 既不会被重新认领，也不会被 `cancelExpiredOrders` 取消（那不是 `pending`）。
+    // 零元订单是重灾区：它没有支付回调这条重放路径，只有本函数能把它救回来。
+    let reclaimableStaleClaim = false
     if (existing.status === FULFILLMENT_CLAIM_STATUS) {
         // 声明租约**尚未过期**才让开 —— 那是别的请求正在交付。
-        //
-        // 租约过期则必须继续往下抢（下方 `claimable` 与这里同一口径）。少了
-        // 这一步，进程在交付中途被杀留下的 `processing` 会让订单**永久卡死**：
-        // 它既不会被重新认领，也不会被 `cancelExpiredOrders` 取消（那不是
-        // `pending`）。零元订单是重灾区 —— 它没有支付回调这条重放路径，
-        // 只有本函数能把它救回来。
         const claimedAt = existing.fulfillmentClaimedAt
         const claimedAtMs = claimedAt instanceof Date ? claimedAt.getTime() : Number(claimedAt ?? 0)
         const leaseUntilMs = Number.isFinite(claimedAtMs) && claimedAtMs > 0
@@ -684,8 +683,13 @@ export async function completePaidOrderDelivery(orderId: string): Promise<Automa
         if (leaseUntilMs > Date.now()) {
             return { orderStatus: "processing", delivered: false, cardKeys: "", deliveryNote: "" }
         }
+        reclaimableStaleClaim = true
     }
-    if (existing.status !== "paid" || existing.cardKey) {
+    // 只处理「已付款且未交付」的订单，外加租约已过期的 `processing` 声明（可回收）。
+    // 其余终态（`refunded` / `cancelled` 等）一律不动 —— 交付自动化不能复活终态订单。
+    // ⚠️ 这个判断必须放行 `reclaimableStaleClaim`：漏掉它，上面「租约过期则继续往下抢」
+    // 就成了一段走到这里又被挡回去的死代码（下方 `claimable` 条件与这里同一口径）。
+    if (existing.cardKey || (existing.status !== "paid" && !reclaimableStaleClaim)) {
         return { orderStatus: "processing", delivered: false, cardKeys: "", deliveryNote: "" }
     }
 
@@ -755,7 +759,7 @@ export async function retryPendingCardServiceDeliveries(
     await ensureDatabaseInitialized()
 
     const database = createD1CardServiceDatabase()
-    const pending = await listPendingSellOperations(database, { limit: options.limit ?? 20 })
+    const pending = await listPendingSellOperations(database, { limit: options.limit ?? 20, respectBackoff: true })
     const orderIds = Array.from(new Set(pending.map((row) => row.orderId).filter((id): id is string => !!id)))
 
     let delivered = 0

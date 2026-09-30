@@ -18,7 +18,7 @@
  *     先处理远端卡。删除是管理端显式动作，拒绝比静默留下孤儿映射更安全。
  */
 
-import { CARD_SERVICE_CARDS_TABLE, CARD_SERVICE_OPERATIONS_TABLE } from '../db/license-service-schema.ts'
+import { CARD_SERVICE_ALLOCATIONS_TABLE, CARD_SERVICE_CARDS_TABLE, CARD_SERVICE_OPERATIONS_TABLE } from '../db/license-service-schema.ts'
 import { isMissingTableError, type CardServiceDatabase } from './db-port.ts'
 
 function placeholders(count: number): string {
@@ -154,4 +154,57 @@ export async function orderHasUnsettledCardServiceLedger(
 ): Promise<boolean> {
     if (await orderHasRemoteMappings(database, orderId)) return true
     return orderHasPendingCardServiceOperations(database, orderId)
+}
+
+/**
+ * 这个商品是否还有**未结清的中心台账**（映射 ∪ 待办）。
+ *
+ * 用于**商品删除**守卫。商品删除会级联带走本地 `cards`，进而删掉
+ * `card_service_cards` 里的映射行 —— 中心那几张卡从此失去本地归属，退款时再也
+ * 无法作废。而且供应配置行不随商品删除消失，低水位扫描会继续对着一个不存在的
+ * 商品 Allocate / Ack（物化时本地外键失败），持续消耗中心库存。
+ *
+ * 口径与「供应模式切离」的互斥判定（`countUnsettledRemoteMappings`）保持一致：
+ * 仍归中心管理的 `acknowledged`、已由中心售出的 `sold`，以及还会被重放的
+ * `pending` / `failed` 待办。已 `revoked` 的映射不拦 —— 远端卡已是死卡。
+ */
+export async function productHasUnsettledCardServiceLedger(
+    database: CardServiceDatabase,
+    productId: string,
+): Promise<boolean> {
+    const id = (productId || '').trim()
+    if (!id) return false
+
+    try {
+        const rows = await database.query<{ hit?: unknown }>(
+            `SELECT 1 AS hit FROM ${CARD_SERVICE_CARDS_TABLE}
+              WHERE product_id = ? AND state IN ('acknowledged', 'sold') LIMIT 1`,
+            [id],
+        )
+        if (rows.length > 0) return true
+    } catch (error) {
+        if (isMissingTableError(error)) return false
+        const text = `${(error as { message?: unknown } | null)?.message ?? ''}`.toLowerCase()
+        if (text.includes('no such column')) return false
+        throw error
+    }
+
+    // 待办表没有 `product_id` 列，按资源归属反查：`sell` / `ack` 待办的
+    // `resource_id` 是 allocation id，`revoke` 待办的是远端 card id。
+    try {
+        const rows = await database.query<{ hit?: unknown }>(
+            `SELECT 1 AS hit FROM ${CARD_SERVICE_OPERATIONS_TABLE}
+              WHERE state IN ('pending', 'failed')
+                AND (resource_id IN (SELECT allocation_id FROM ${CARD_SERVICE_ALLOCATIONS_TABLE} WHERE product_id = ?)
+                     OR resource_id IN (SELECT remote_card_id FROM ${CARD_SERVICE_CARDS_TABLE} WHERE product_id = ?))
+              LIMIT 1`,
+            [id, id],
+        )
+        return rows.length > 0
+    } catch (error) {
+        if (isMissingTableError(error)) return false
+        const text = `${(error as { message?: unknown } | null)?.message ?? ''}`.toLowerCase()
+        if (text.includes('no such column')) return false
+        throw error
+    }
 }

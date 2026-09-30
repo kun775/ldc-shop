@@ -219,6 +219,9 @@ export async function reconcilePendingAckOperations(
     const operations = await listPendingCardServiceOperations(deps.database, {
         operation: CARD_SERVICE_OPERATION_ACK,
         limit: options.limit ?? RECONCILE_DEFAULT_LIMIT,
+        // 自动对账必须遵守退避：没到期的待办这一轮跳过，否则每分钟一次的调度
+        // 会把 attempts 迅速烧光（12 次上限约 12 分钟耗尽），操作提前死信。
+        respectBackoff: true,
     })
 
     for (const operation of operations) {

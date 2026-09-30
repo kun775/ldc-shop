@@ -1,6 +1,8 @@
 import { db } from "@/lib/db"
 import { cards, settings } from "@/lib/db/schema"
 import { setSetting } from "@/lib/db/queries"
+import { createD1CardServiceDatabase } from "@/lib/license-service/database"
+import { loadCardServiceProductConfig } from "@/lib/license-service/product-config"
 import { inArray } from "drizzle-orm"
 import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
 
@@ -99,12 +101,35 @@ export async function saveProductCardApiConfig(productId: string, config: Produc
     ])
 }
 
+/**
+ * 这个商品是否已交由卡密中心供应（`supply_mode = 'license_service'`）。
+ *
+ * 配置表尚未建立（0038 未执行）或读取失败时返回 `false` —— 这是分流闸门，
+ * 失败不该让既有的旧补货路径整个停摆。
+ */
+async function isCardServiceSuppliedProduct(productId: string): Promise<boolean> {
+    try {
+        const config = await loadCardServiceProductConfig(createD1CardServiceDatabase(), productId)
+        return config.configured && config.supplyMode === 'license_service'
+    } catch {
+        return false
+    }
+}
+
 export async function pullOneCardFromApi(productId: string): Promise<{
     ok: boolean
     skipped?: boolean
     error?: string
     cardKey?: string
 }> {
+    // 供应模式分流：已接入卡密中心（`supply_mode = 'license_service'`）的商品**不再**
+    // 走这条旧 GET 入口。这条路径取到的卡没有任何远端映射，中心那边永远显示
+    // 「未售出」；混进同一个商品后，多卡订单还会因 `mixed_inventory` 阻断交付。
+    // 中心供应的补货由 `restockProductCards` 负责，两者不能并行。
+    if (await isCardServiceSuppliedProduct(productId)) {
+        return { ok: false, skipped: true, error: "api_card_service_supplied" }
+    }
+
     const config = await getProductCardApiConfig(productId)
     if (!config.enabled) {
         return { ok: false, skipped: true, error: "api_disabled" }

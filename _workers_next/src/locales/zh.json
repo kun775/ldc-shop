@@ -697,7 +697,8 @@
             "actions": "操作",
             "manageCards": "卡密",
             "confirmDelete": "确定要删除此商品吗？",
-            "productMissing": "商品不存在或已被删除。"
+            "productMissing": "商品不存在或已被删除。",
+            "unsettledCardService": "该商品还有未结清的卡密中心台账（已领取或已售出的远端卡），不能删除；请先完成对账、作废或切离中心供应"
         },
         "users": {
             "title": "顾客管理",
@@ -1194,6 +1195,7 @@
                 "skipped_supply_mode_not_license_service": "该商品当前不使用卡密中心供应",
                 "skipped_program_key_missing": "该商品未配置 Program",
                 "skipped_shared_product": "共享卡商品不能接入卡密中心（共享交付会绕过售出确认）",
+                "skipped_product_not_found": "商品已被删除，不再补货（供应配置行仍在）",
                 "deferred": "补货在途，稍后由定时任务重放",
                 "expired": "分配已超窗，本地副本已作废，需换新任务再领",
                 "failed": "补货失败，请查看复核清单"

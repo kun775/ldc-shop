@@ -39,17 +39,26 @@ test('零元订单入口不会把 processing 当成不可逆终态', () => {
     assert.match(body, /if \(existing\.status === FULFILLMENT_CLAIM_STATUS\)/)
 })
 
-test('过期声明可以重新认领：早退之前必须比较租约', () => {
+test('过期声明可以重新认领：早退之前必须比较租约，过期后必须放行', () => {
     const body = functionBody('completePaidOrderDelivery')
 
     assert.match(body, /existing\.fulfillmentClaimedAt/)
     assert.match(body, /FULFILLMENT_CLAIM_TTL_MS/)
     assert.match(body, /if \(leaseUntilMs > Date\.now\(\)\)/)
-    // 比较必须出现在早退之前：晚于早退就永远走不到。
-    assert.ok(
-        body.indexOf('leaseUntilMs > Date.now()') < body.indexOf('if (existing.status !== "paid" || existing.cardKey)'),
-        '租约比较必须排在后面的 paid 分支之前',
-    )
+
+    const leaseCheck = body.indexOf('leaseUntilMs > Date.now()')
+    const finalGate = body.indexOf('existing.cardKey || (existing.status !== "paid"')
+    assert.ok(leaseCheck >= 0, '租约比较必须存在')
+    assert.ok(finalGate >= 0, '最终闸门必须存在')
+    // 比较必须出现在最终闸门之前：晚于闸门就永远走不到。
+    assert.ok(leaseCheck < finalGate, '租约比较必须排在最终闸门之前')
+
+    // ⚠️ 仅仅「比较了租约」不够：过期之后必须**真的往下走**。
+    // 曾经这里漏了一手 —— 租约过期后继续执行，却又被下面的
+    // `existing.status !== "paid"` 挡回去，认领次数恒为 0（零元订单永久卡住）。
+    assert.match(body, /let reclaimableStaleClaim = false/)
+    assert.match(body, /reclaimableStaleClaim = true/)
+    assert.match(body, /!reclaimableStaleClaim/, '最终闸门必须放行租约已过期的声明')
 })
 
 test('原子认领条件与租约口径一致：容忍「声明为空」或「已过期」', () => {

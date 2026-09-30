@@ -172,3 +172,47 @@ test('三条重放队列共用同一份排序：ack / revoke 同样不被死信�
     const revokes = await listPendingRevokeOperations(ctx.database, { limit: 1 })
     assert.deepEqual(revokes.map((item) => item.operationKey), [buildRevokeIdempotencyKey('card_live', ORDER_ID)])
 })
+
+// ---------------------------------------------------------------------------
+// 退避是**定时重放**的闸门，不是人工重试的闸门
+// ---------------------------------------------------------------------------
+
+test('定时重放遵守退避：未到期的待办这一轮跳过，人工重试仍拿得到', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    const future = NOW + 5 * 60_000
+    seedOperation(ctx, { key: SELL_KEY, operation: 'sell', state: 'failed', attempts: 1, nextRetryAt: NOW, createdAt: 0 })
+    seedOperation(ctx, { key: ACK_KEY, operation: 'sell', state: 'failed', attempts: 1, nextRetryAt: future, createdAt: 10 })
+
+    // 自动重放（`respectBackoff: true`）：只拿已到期的。少了这道过滤，每分钟一次的
+    // 调度会让刚失败的操作立刻重试，12 次上限约 12 分钟就被烧光。
+    const scheduled = await listPendingSellOperations(ctx.database, { limit: 10, respectBackoff: true, nowMs: NOW })
+    assert.deepEqual(scheduled.map((item) => item.operationKey), [SELL_KEY])
+
+    // 人工重试（默认不遵守退避）：两条都拿得到 —— 凭据刚配好就该能立刻补上。
+    const manual = await listPendingSellOperations(ctx.database, { limit: 10 })
+    assert.deepEqual(manual.map((item) => item.operationKey).sort(), [ACK_KEY, SELL_KEY].sort())
+})
+
+test('三条队列共用退避口径：revoke / ack 同样按 next_retry_at 过滤', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    const future = NOW + 5 * 60_000
+    seedOperation(ctx, { key: REVOKE_KEY, operation: 'revoke', state: 'failed', attempts: 1, nextRetryAt: future, createdAt: 0 })
+    seedOperation(ctx, { key: ACK_KEY, operation: 'ack', state: 'failed', attempts: 1, nextRetryAt: future, createdAt: 0 })
+
+    assert.deepEqual(
+        await listPendingRevokeOperations(ctx.database, { limit: 10, respectBackoff: true, nowMs: NOW }),
+        [],
+    )
+    assert.deepEqual(
+        await listPendingCardServiceOperations(ctx.database, { operation: 'ack', limit: 10, respectBackoff: true, nowMs: NOW }),
+        [],
+    )
+})
+
+test('首次入队的待办（next_retry_at 为空）不受退避过滤影响', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedOperation(ctx, { key: SELL_KEY, operation: 'sell', state: 'pending', attempts: 0, nextRetryAt: null })
+
+    const rows = await listPendingSellOperations(ctx.database, { limit: 10, respectBackoff: true, nowMs: NOW })
+    assert.deepEqual(rows.map((item) => item.operationKey), [SELL_KEY])
+})

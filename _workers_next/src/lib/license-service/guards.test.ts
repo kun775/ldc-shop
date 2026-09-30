@@ -15,6 +15,7 @@ import {
     orderHasRemoteMappings,
     orderHasUnsettledCardServiceLedger,
     partitionDeletableLocalCardIds,
+    productHasUnsettledCardServiceLedger,
 } from './guards.ts'
 import { createSqliteCardServiceDatabase, type SqliteTestContext } from './test-support.ts'
 
@@ -209,4 +210,142 @@ test('两路都没有时订单可以正常删除', async () => {
     seedMapping(ctx, { localCardId: 2, remoteCardId: 'card_a2', orderId: 'ORDER-OTHER' })
 
     assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'ORDER-CLEAN'), false)
+})
+
+// ---------------------------------------------------------------------------
+// productHasUnsettledCardServiceLedger
+// ---------------------------------------------------------------------------
+
+/**
+ * 说明：商品删除守卫的两路判定与订单守卫同构，但**归属维度不同** ——
+ * 映射按 `product_id` 直查，待办表没有 `product_id` 列，只能按资源归属反查
+ * （`sell` / `ack` 待办的 `resource_id` 是 allocation id，`revoke` 待办的是
+ * 远端 card id）。下面把三种命中路径与两条放行路径都验一遍。
+ */
+
+const OTHER_PRODUCT_ID = 'prod_002'
+
+function seedProduct(ctx: SqliteTestContext, id: string) {
+    ctx.exec(`INSERT OR IGNORE INTO products (id) VALUES ('${id}')`)
+}
+
+function seedMappingFor(
+    ctx: SqliteTestContext,
+    options: { localCardId: number; remoteCardId: string; productId?: string; state?: string; allocationId?: string },
+) {
+    seedProduct(ctx, options.productId ?? PRODUCT_ID)
+    ctx.exec(`INSERT INTO card_service_cards
+        (local_card_id, remote_card_id, allocation_id, product_id, order_id, state, created_at, updated_at)
+        VALUES (${options.localCardId}, '${options.remoteCardId}', '${options.allocationId ?? 'alloc_a'}',
+                '${options.productId ?? PRODUCT_ID}', NULL, '${options.state ?? 'acknowledged'}', 0, 0)`)
+}
+
+function seedAllocation(ctx: SqliteTestContext, options: { allocationId: string; productId: string }) {
+    ctx.exec(`INSERT INTO card_service_allocations
+        (allocation_id, product_id, program_key, external_ref, quantity, state, request_key, ack_key,
+         expires_at, created_at, updated_at)
+        VALUES ('${options.allocationId}', '${options.productId}', 'prog', 'ref_${options.allocationId}', 1,
+                'acknowledged', 'q_${options.allocationId}', 'a_${options.allocationId}', 0, 0, 0)`)
+}
+
+function seedScopedOperation(
+    ctx: SqliteTestContext,
+    options: { operationKey: string; operation: string; resourceId: string; state: string },
+) {
+    ctx.exec(`INSERT INTO card_service_operations
+        (operation_key, operation, resource_id, order_id, state, attempts, created_at, updated_at)
+        VALUES ('${options.operationKey}', '${options.operation}', '${options.resourceId}', NULL, '${options.state}', 0, 0, 0)`)
+}
+
+test('商品仍有 acknowledged 映射时不许删除：删掉映射中心那几张卡再也无法作废', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedMappingFor(ctx, { localCardId: 1, remoteCardId: 'card_a1' })
+
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, PRODUCT_ID), true)
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, OTHER_PRODUCT_ID), false)
+})
+
+test('商品仍有 sold 映射时同样不许删除：卡已在用户手里，删了就查不到来源', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedMappingFor(ctx, { localCardId: 1, remoteCardId: 'card_a1', state: 'sold' })
+
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, PRODUCT_ID), true)
+})
+
+test('只有 revoked 映射的商品可以删除：远端卡已是死卡', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedMappingFor(ctx, { localCardId: 1, remoteCardId: 'card_a1', state: 'revoked' })
+
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, PRODUCT_ID), false)
+})
+
+test('按 allocation 归属反查出未了结待办时不许删除商品', async () => {
+    // Sell 意图已落账、映射行却还是 acknowledged 的窗口：映射查得到，但真正
+    // 说明「中心可能已经卖掉了」的是这条 sell 待办。
+    const ctx = createSqliteCardServiceDatabase()
+    seedAllocation(ctx, { allocationId: 'alloc_x', productId: PRODUCT_ID })
+    seedScopedOperation(ctx, {
+        operationKey: 'sell:alloc_x', operation: 'sell', resourceId: 'alloc_x', state: 'pending',
+    })
+
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, PRODUCT_ID), true)
+})
+
+test('按远端卡归属反查出未了结待办（revoke）时不许删除商品', async () => {
+    // 退款后 `cards` 与映射可能已被清理，只剩 revoke 待办是「中心还留着一张已售出
+    // 的卡」的唯一痕迹。此时映射状态是 revoked（不拦），但待办必须拦住。
+    const ctx = createSqliteCardServiceDatabase()
+    seedMappingFor(ctx, { localCardId: 1, remoteCardId: 'card_a1', state: 'revoked' })
+    seedScopedOperation(ctx, {
+        operationKey: 'revoke:card_a1', operation: 'revoke', resourceId: 'card_a1', state: 'failed',
+    })
+
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, PRODUCT_ID), true)
+})
+
+test('终态待办（done / abandoned）不拦删除，否则历史商品永远删不掉', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedAllocation(ctx, { allocationId: 'alloc_done', productId: PRODUCT_ID })
+    seedScopedOperation(ctx, {
+        operationKey: 'sell:alloc_done', operation: 'sell', resourceId: 'alloc_done', state: 'done',
+    })
+    seedScopedOperation(ctx, {
+        operationKey: 'sell:alloc_gone', operation: 'sell', resourceId: 'alloc_gone', state: 'abandoned',
+    })
+
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, PRODUCT_ID), false)
+})
+
+test('别的商品的未了结待办不会误伤本商品', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedProduct(ctx, OTHER_PRODUCT_ID)
+    seedAllocation(ctx, { allocationId: 'alloc_other', productId: OTHER_PRODUCT_ID })
+    seedScopedOperation(ctx, {
+        operationKey: 'sell:alloc_other', operation: 'sell', resourceId: 'alloc_other', state: 'pending',
+    })
+
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, PRODUCT_ID), false)
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, OTHER_PRODUCT_ID), true)
+})
+
+test('空商品号、缺表与缺列一律放行，不抛出', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, ''), false)
+    assert.equal(await productHasUnsettledCardServiceLedger(ctx.database, '   '), false)
+    assert.equal(await productHasUnsettledCardServiceLedger(missingTableDatabase, PRODUCT_ID), false)
+})
+
+test('0038 已建表但缺 product_id 列时不误伤（按缺列放行），不抛出', async () => {
+    // 升级项半执行/旧表的真实形态：表在，列没有。此时删除商品必须放行 ——
+    // 守卫是「多拦一层」，不该因为结构缺失把管理端整个卡死。
+    const missingColumnDatabase = {
+        async query(): Promise<never[]> {
+            throw new Error('D1_ERROR: no such column: product_id')
+        },
+        async write(): Promise<never[]> {
+            throw new Error('unreachable')
+        },
+    }
+
+    assert.equal(await productHasUnsettledCardServiceLedger(missingColumnDatabase, PRODUCT_ID), false)
 })

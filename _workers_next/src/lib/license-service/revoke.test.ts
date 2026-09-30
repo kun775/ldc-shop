@@ -190,6 +190,24 @@ test('部分本地卡查不到映射 → blocked partial_mapping（混合库存�
 
     const blocked = blockedOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [1, 2] }))
     assert.equal(blocked.reason, 'partial_mapping')
+    // 已识别的远端卡必须一并带出：退款方要拿它做本地隔离，否则这张卡会停留在
+    // 可售池里 —— 而订单 `card_ids` 一清就再没有追溯线索。
+    assert.deepEqual(blocked.cards.map((card) => card.remoteCardId), ['card_a1'])
+})
+
+test('阻断发生在遍历前段时，后面的远端卡仍然必须被收集', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    // 订单 `card_ids` 里是一张**没有映射**的本地卡（混合库存），而台账里另有一张
+    // 挂在本单、仍有映射的远端卡 —— 它被排在阻断点之后。
+    seedCard(ctx, 1)
+    seedCard(ctx, 2)
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 1, remoteCardId: 'card_a1', state: 'sold', orderId: ORDER_ID })
+
+    const blocked = blockedOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [2] }))
+    assert.equal(blocked.reason, 'partial_mapping')
+    // 修复前这里返回 `cards: []`：那张远端卡既不进作废待办、也不会被本地隔离。
+    assert.deepEqual(blocked.cards.map((card) => card.remoteCardId), ['card_a1'])
 })
 
 test('映射挂在别的订单上 → blocked external_mismatch', async () => {
@@ -854,4 +872,81 @@ test('revoke.ts 不得用卡状态判「已售出」（它永不返回 sold）',
     // 判定必须走分配状态，且分配状态必须真的被读出来。
     assert.match(source, /allocationStatus\s*[!=]==?\s*'sold'/)
     assert.match(source, /getAllocation/)
+})
+
+// ---------------------------------------------------------------------------
+// 远端状态未知 ≠ 未售出
+// ---------------------------------------------------------------------------
+
+test('远端状态未知（403 / 无效响应）→ 不得放回库存，保留隔离与待办', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+
+    // 卡状态与分配查询都拿不到明确结论 → probe 返回 allocationStatus = 'unknown'。
+    const forbidden = () => { throw new LicenseServiceError({ code: 'forbidden', httpStatus: 403 }) }
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async () => forbidden(),
+        getAllocation: async () => forbidden(),
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    // 未知**不是**「仍可售」的证据：中心完全可能已经 sold，放回就是「一张卡卖给两个人」。
+    assert.equal(outcome.retained, 0)
+    assert.equal(outcome.deferred, 1)
+    assert.equal(card(ctx, 7)?.is_used, 1)
+    assert.equal(operation(ctx, 'card_a1')?.state, 'pending')
+})
+
+test('明确确认仍可用（acknowledged）才放回 —— 与 unknown 区别对待', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async (cardId) => makeCardStatus(cardId, 'active', 'acknowledged'),
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.equal(outcome.retained, 1)
+    assert.equal(card(ctx, 7)?.is_used, 0)
+})
+
+// ---------------------------------------------------------------------------
+// 放回库存不得越权动别的订单的预留
+// ---------------------------------------------------------------------------
+
+test('放回库存只认领本单的预留：并发重放不会清掉新订单刚做的预留', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7, { isUsed: true })
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+
+    // 1) 退款批次先隔离这张卡（预留被清空）。
+    await ctx.database.write(buildRevokeIntentStatements({
+        orderId: ORDER_ID,
+        cards: [{ remoteCardId: 'card_a1', localCardId: 7 }],
+        nowMs: 900,
+    }))
+    // 2) 卡回到可售池后，另一笔订单把它预留了。
+    ctx.exec(`UPDATE cards SET is_used = 1, reserved_order_id = '${OTHER_ORDER}', reserved_at = 500 WHERE id = 7`)
+    // 3) 一笔**并发重放**的旧执行尝试把卡「放回」。
+    await ctx.database.write(buildRevokeRetainStatements({
+        orderId: ORDER_ID,
+        remoteCardId: 'card_a1',
+        localCardId: 7,
+        nowMs: 1_000,
+    }))
+
+    // 既不能放回（is_used 仍为 1），更不能清掉那条不属于本单的预留。
+    assert.equal(card(ctx, 7)?.is_used, 1)
+    assert.equal(card(ctx, 7)?.reserved_order_id, OTHER_ORDER)
 })

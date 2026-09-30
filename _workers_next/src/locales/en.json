@@ -697,7 +697,8 @@
             "actions": "Actions",
             "manageCards": "Cards",
             "confirmDelete": "Are you sure you want to delete this product?",
-            "productMissing": "This product does not exist or has been deleted."
+            "productMissing": "This product does not exist or has been deleted.",
+            "unsettledCardService": "This product still has unsettled card-center ledger entries (allocated or sold remote cards) and cannot be deleted. Settle, revoke, or switch it away from card-center supply first."
         },
         "users": {
             "title": "Customer Management",
@@ -1194,6 +1195,7 @@
                 "skipped_supply_mode_not_license_service": "This product does not use the card center",
                 "skipped_program_key_missing": "This product has no Program configured",
                 "skipped_shared_product": "Shared-card products cannot source from the card center (shared delivery bypasses the sale confirmation)",
+                "skipped_product_not_found": "Product has been deleted; restocking is skipped (its supply config row remains)",
                 "deferred": "Restock is in flight; the scheduled job will replay it",
                 "expired": "The allocation overran its window and the local copy was voided; a new task is required",
                 "failed": "Restock failed. See the review list."

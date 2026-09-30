@@ -28,7 +28,7 @@ import { logServerError, sanitizeClientErrorMessage } from "@/lib/errors/safe-er
 import { normalizeProductCouponUsageRestriction, PRODUCT_COUPON_USAGE_RESTRICTIONS } from "@/lib/coupons/product-policy"
 import { sanitizeFooterHtml } from "@/lib/footer-html"
 import { createD1CardServiceDatabase } from "@/lib/license-service/database"
-import { partitionDeletableLocalCardIds } from "@/lib/license-service/guards"
+import { partitionDeletableLocalCardIds, productHasUnsettledCardServiceLedger } from "@/lib/license-service/guards"
 
 export async function checkAdmin() {
     const session = await auth()
@@ -249,6 +249,23 @@ export async function getProductForAdminAction(id: string) {
 
 export async function deleteProduct(id: string) {
     await checkAdmin()
+
+    // 商品还挂着未结清的中心台账时不许删除：删除会级联带走本地卡与映射行，中心那
+    // 几张卡从此失去本地归属、再也无法作废；而供应配置行不随商品删除消失，低水位
+    // 扫描会继续对着一个不存在的商品补货。判定失败（数据库异常）时宁可拦下 ——
+    // 管理员可以先处理远端卡再删。
+    let hasUnsettledLedger = false
+    try {
+        hasUnsettledLedger = await productHasUnsettledCardServiceLedger(createD1CardServiceDatabase(), id)
+    } catch (error) {
+        console.error(`[LicenseService] deleteProduct guard failed for product ${id}:`, error)
+        hasUnsettledLedger = true
+    }
+    if (hasUnsettledLedger) {
+        console.warn(`[LicenseService] deleteProduct skipped ${id}: still holds unsettled card-service ledger entries`)
+        throw new Error("admin.products.unsettledCardService")
+    }
+
     await db.delete(products).where(eq(products.id, id))
     try {
         await deleteProductCardDeliveryNote(id)

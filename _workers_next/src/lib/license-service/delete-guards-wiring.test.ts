@@ -77,3 +77,31 @@ test('新增的拒绝文案在 zh / en 两侧都有（键集合 1:1）', () => {
     const enKeys = Object.keys(en.admin.cards).sort()
     assert.deepEqual(zhKeys, enKeys)
 })
+
+test('删除商品：级联删除之前先过「未结清中心台账」守卫', () => {
+    // `deleteProduct` 会级联带走本地 `cards` 与 `card_service_cards` 映射行，而
+    // 供应配置行**不随商品删除消失** —— 漏了守卫就是「中心那几张卡永远无法作废
+    // + 低水位扫描对着不存在的商品持续领卡」。判定逻辑由 guards.test.ts 覆盖，
+    // 这里守的是接线：守卫必须在 `db.delete(products)` 之前，且失败时宁可拦下。
+    const region = sliceBetween(ADMIN, 'export async function deleteProduct(', 'export async function toggleProductStatus(')
+    const guardAt = region.indexOf('productHasUnsettledCardServiceLedger(createD1CardServiceDatabase(), id)')
+    const deleteAt = region.indexOf('db.delete(products)')
+
+    assert.ok(guardAt >= 0, 'deleteProduct 缺少中心台账守卫')
+    assert.ok(deleteAt > guardAt, '守卫必须排在删除语句之前')
+    // 判定失败（数据库异常）时宁可拦下，不能静默放行。
+    assert.match(region, /catch \(error\) \{[\s\S]{0,200}hasUnsettledLedger = true/)
+    // 被拦住时给管理员一个可翻译的原因，而不是静默跳过。
+    assert.match(region, /throw new Error\("admin\.products\.unsettledCardService"\)/)
+})
+
+test('商品删除的拒绝文案在 zh / en 两侧都有', () => {
+    const zh = JSON.parse(source('../../locales/zh.json'))
+    const en = JSON.parse(source('../../locales/en.json'))
+    assert.ok(zh.admin?.products?.unsettledCardService, 'zh 缺少 admin.products.unsettledCardService')
+    assert.ok(en.admin?.products?.unsettledCardService, 'en 缺少 admin.products.unsettledCardService')
+
+    const zhKeys = Object.keys(zh.admin.products).sort()
+    const enKeys = Object.keys(en.admin.products).sort()
+    assert.deepEqual(zhKeys, enKeys)
+})

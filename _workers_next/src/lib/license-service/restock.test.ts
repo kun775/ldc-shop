@@ -81,6 +81,22 @@ test('供应模式不是 license_service 或缺少 program_key 时跳过，不�
     assert.equal(client.calls.length, 0)
 })
 
+test('商品已被删除（供应配置行还在）时不再补货，一张卡都不向中心领', async () => {
+    // 这是删除商品后的真实残留形态：`deleteProduct` 级联带走 `products` 与本地
+    // `cards`，但 `card_service_product_configs` 行仍在。低水位扫描若只看配置，
+    // 就会继续对着一个不存在的商品 Allocate / Ack —— 中心库存被扣掉，物化时
+    // 本地外键失败，白烧库存。所以兜底闸门必须同时看 `exists`。
+    const ctx = setup()
+    await configure(ctx)
+    ctx.exec(`DELETE FROM products WHERE id = '${PRODUCT_ID}'`)
+
+    const client = createFakeLicenseServiceClient()
+    const result = await restockProductCards({ client, database: ctx.database }, { productId: PRODUCT_ID })
+
+    assert.deepEqual(result, { status: 'skipped', reason: 'product_not_found' })
+    assert.equal(client.calls.length, 0)
+})
+
 test('正常补货：Ack 之前卡密只落在不可售暂存表，Ack 成功后才进 cards', async () => {
     const ctx = setup()
     await configure(ctx)

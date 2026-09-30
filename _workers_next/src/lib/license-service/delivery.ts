@@ -37,6 +37,7 @@ import { toLicenseServiceError, type LicenseServiceError, type LicenseServiceErr
 import { buildSellIdempotencyKey } from './idempotency.ts'
 import {
     CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL,
+    CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL,
     buildOperationFailureClauses,
 } from './operation-queue.ts'
 import { runWithRetry, type RetryPolicy, type RunWithRetryOptions } from './retry.ts'
@@ -422,17 +423,25 @@ export async function loadOrderRemoteSalePlan(
 /** 列出待重放的 Sell 操作所属订单（供交付补偿入口使用）。 */
 export async function listPendingSellOperations(
     database: CardServiceDatabase,
-    options: { limit?: number } = {},
+    options: { limit?: number; respectBackoff?: boolean; nowMs?: number } = {},
 ): Promise<Array<{ operationKey: string; allocationId: string; orderId: string | null; state: string; attempts: number }>> {
     let rows: Array<Record<string, unknown>>
     try {
+        const params: unknown[] = [CARD_SERVICE_OPERATION_SELL]
+        const filters = ["operation = ? AND state IN ('pending', 'failed')"]
+        // 定时重放要遵守退避；人工重试传 `respectBackoff: false` 跳过它。
+        if (options.respectBackoff) {
+            filters.push(CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL)
+            params.push(options.nowMs ?? Date.now())
+        }
+        params.push(Math.max(1, Math.trunc(options.limit ?? 20)))
         rows = await database.query(
             `SELECT operation_key, resource_id, order_id, state, attempts
              FROM ${CARD_SERVICE_OPERATIONS_TABLE}
-             WHERE operation = ? AND state IN ('pending', 'failed')
+             WHERE ${filters.join(' ')}
              ${CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL}
              LIMIT ?`,
-            [CARD_SERVICE_OPERATION_SELL, Math.max(1, Math.trunc(options.limit ?? 20))],
+            params,
         )
     } catch (error) {
         if (isMissingTableError(error)) return []
