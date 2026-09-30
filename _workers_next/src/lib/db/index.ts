@@ -121,6 +121,17 @@ async function getD1() {
     throw new Error("D1 Database binding not found in Cloudflare context");
 }
 
+/**
+ * 暴露原始 D1 绑定，供需要 `prepare/bind/all` 这类原生接口的模块使用
+ * （例如通用卡密服务适配器要按列名读取账本行）。
+ *
+ * 写操作请优先用 `runAtomicD1Batch`，它已经封装了「整批原子、任一失败全批回滚」
+ * 的语义，不要把 `batch` 再实现一遍。
+ */
+export async function getD1Database() {
+    return getD1() as Promise<any>;
+}
+
 const getDb = () => {
     // 1. Production / Cloudflare context: Use Proxy
     if (process.env.NODE_ENV === 'production' || process.env.NEXT_RUNTIME === 'edge') {
