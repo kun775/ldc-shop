@@ -86,7 +86,7 @@ test('补货阈值口径与订单预留口径一致：已用、已预留、已�
     ctx.exec(`INSERT INTO cards (product_id, card_key, is_used, reserved_at, expires_at, created_at) VALUES
         ('${PROGRAM_PRODUCT}', 'k1', 0, NULL, NULL, 1),
         ('${PROGRAM_PRODUCT}', 'k2', 1, NULL, NULL, 1),
-        ('${PROGRAM_PRODUCT}', 'k3', 0, 5, NULL, 1),
+        ('${PROGRAM_PRODUCT}', 'k3', 0, ${NOW}, NULL, 1),
         ('${PROGRAM_PRODUCT}', 'k4', 0, NULL, 5, 1),
         ('${PROGRAM_PRODUCT}', 'k5', 0, NULL, 9999999999999, 1),
         ('${LOCAL_PRODUCT}', 'k6', 0, NULL, NULL, 1)`)
@@ -218,4 +218,52 @@ test('Ack 失败时本轮计入 deferred 并停止，留给对账重放', async 
     // 暂存保留，等对账推进；可售库存仍为 0。
     assert.equal(countOf(ctx, 'cards'), 0)
     assert.equal(countOf(ctx, 'card_service_staged_cards'), 1)
+})
+
+
+test('目标库存保存为 5 后从现有 2 张逐轮补齐，售出后继续补差额', async () => {
+    const ctx = setup()
+    await configure(ctx, PROGRAM_PRODUCT, { targetStock: 5 })
+    ctx.exec(`INSERT INTO cards (product_id, card_key, is_used, created_at) VALUES
+        ('${PROGRAM_PRODUCT}', 'existing-1', 0, 1), ('${PROGRAM_PRODUCT}', 'existing-2', 0, 1)`)
+    const client = sequentialClient()
+    const deps = { client, database: ctx.database, now: () => NOW }
+
+    const first = await replenishLowStockProducts(deps, { maxPerProduct: 2 })
+    assert.equal(first.restocked, 2)
+    assert.equal(await countReplenishableLocalCards(deps, PROGRAM_PRODUCT, NOW), 4)
+    const second = await replenishLowStockProducts(deps)
+    assert.equal(second.restocked, 1)
+    assert.equal(await countReplenishableLocalCards(deps, PROGRAM_PRODUCT, NOW), 5)
+    assert.equal((await replenishLowStockProducts(deps)).restocked, 0)
+    assert.equal(client.callCount('allocate'), 3)
+
+    ctx.exec(`UPDATE cards SET is_used = 1 WHERE card_key = 'existing-1'`)
+    assert.equal((await replenishLowStockProducts(deps)).restocked, 1)
+    assert.equal(await countReplenishableLocalCards(deps, PROGRAM_PRODUCT, NOW), 5)
+})
+
+test('目标库存留空默认补到 1 张', async () => {
+    const ctx = setup()
+    await configure(ctx, PROGRAM_PRODUCT, { targetStock: null })
+    const client = sequentialClient()
+    const deps = { client, database: ctx.database, now: () => NOW }
+
+    assert.equal((await replenishLowStockProducts(deps)).restocked, 1)
+    assert.equal(await countReplenishableLocalCards(deps, PROGRAM_PRODUCT, NOW), 1)
+    assert.equal((await replenishLowStockProducts(deps)).restocked, 0)
+})
+
+test('超时预留卡恢复可售，不重复补货；有效预留仍不计入目标库存', async () => {
+    const ctx = setup()
+    await configure(ctx, PROGRAM_PRODUCT, { targetStock: 1 })
+    ctx.exec(`INSERT INTO cards (product_id, card_key, is_used, reserved_at, created_at) VALUES
+        ('${PROGRAM_PRODUCT}', 'expired-reservation', 0, ${NOW - 5 * 60_000 - 1}, 1),
+        ('${PROGRAM_PRODUCT}', 'active-reservation', 0, ${NOW}, 1)`)
+    const client = sequentialClient()
+    const deps = { client, database: ctx.database, now: () => NOW }
+
+    assert.equal(await countReplenishableLocalCards(deps, PROGRAM_PRODUCT, NOW), 1)
+    assert.equal((await replenishLowStockProducts(deps)).restocked, 0)
+    assert.equal(client.callCount('allocate'), 0)
 })

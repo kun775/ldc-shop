@@ -11,6 +11,7 @@
  *     下一轮（cron 每分钟一次，收敛速度足够）。
  */
 
+import { RESERVATION_TTL_MS } from '../constants.ts'
 import { listCardServiceProgramProducts } from './product-config.ts'
 import { restockProductCards, type RestockDeps, type RestockResult } from './restock.ts'
 
@@ -71,9 +72,9 @@ export async function countReplenishableLocalCards(
         `SELECT COUNT(*) AS available FROM cards
          WHERE product_id = ?
            AND (is_used = 0 OR is_used IS NULL)
-           AND reserved_at IS NULL
+           AND (reserved_at IS NULL OR reserved_at < ?)
            AND (expires_at IS NULL OR expires_at > ?)`,
-        [productId, nowMs],
+        [productId, nowMs - RESERVATION_TTL_MS, nowMs],
     )
     const parsed = Number(rows[0]?.available)
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0
@@ -89,8 +90,8 @@ export interface ReplenishOptions {
 /**
  * 扫描所有走通用卡密服务的商品，把低于目标库存的部分补齐。
  *
- * 目标库存为 `null` / `0` 的商品视为「暂停补货」，直接跳过 —— 这是运维停止
- * 自动补货的开关，比改供应模式更轻，也不会影响已经在售的本地库存。
+ * 目标库存留空时默认保有 1 张；设为 0 时暂停自动补货，已有卡仍可正常销售。
+ * 每轮有补货上限，较大的库存缺口由后续定时任务逐步补齐。
  */
 export async function replenishLowStockProducts(
     deps: RestockDeps,

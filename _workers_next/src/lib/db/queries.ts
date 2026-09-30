@@ -2657,6 +2657,14 @@ export async function searchActiveProducts(params: {
         }
     })()
 
+    // 首页筛选和排序也必须按实时卡池计算，不能依赖可能滞后的库存汇总列。
+    // 三个子查询按 product_id 命中卡池索引，时间与详情页的实时库存口径一致。
+    const stockNowMs = Date.now()
+    const reservationCutoffMs = stockNowMs - RESERVATION_TTL_MS
+    const liveCardPredicate = sql`c.product_id = p.id
+        AND COALESCE(c.is_used, 0) = 0
+        AND (c.expires_at IS NULL OR c.expires_at > ${stockNowMs})`
+
     const buildGroupedQuery = (selectPageRows: boolean) => sql`
         WITH eligible AS (
             SELECT
@@ -2682,8 +2690,21 @@ export async function searchActiveProducts(params: {
                 p.created_at,
                 p.variant_group_id,
                 p.variant_label,
-                COALESCE(p.stock_count, 0) AS stock,
-                COALESCE(p.locked_count, 0) AS locked,
+                CASE
+                    WHEN p.fulfillment_mode = 'manual' THEN MAX(0, COALESCE(p.manual_stock_count, 0))
+                    WHEN p.is_shared = 1 THEN CASE WHEN EXISTS (
+                        SELECT 1 FROM cards c WHERE ${liveCardPredicate}
+                    ) THEN ${INFINITE_STOCK} ELSE 0 END
+                    ELSE (SELECT COUNT(*) FROM cards c
+                        WHERE ${liveCardPredicate}
+                          AND (c.reserved_at IS NULL OR c.reserved_at < ${reservationCutoffMs}))
+                END AS stock,
+                CASE
+                    WHEN p.fulfillment_mode = 'manual' OR p.is_shared = 1 THEN 0
+                    ELSE (SELECT COUNT(*) FROM cards c
+                        WHERE ${liveCardPredicate}
+                          AND c.reserved_at IS NOT NULL AND c.reserved_at >= ${reservationCutoffMs})
+                END AS locked,
                 COALESCE(p.sold_count, 0) AS sold,
                 COALESCE(p.rating, 0) AS rating,
                 COALESCE(p.review_count, 0) AS review_count,

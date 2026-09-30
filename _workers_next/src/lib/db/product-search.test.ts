@@ -82,7 +82,8 @@ function createProductsDatabase() {
             created_at INTEGER,
             variant_group_id TEXT,
             variant_label TEXT,
-            fulfillment_mode TEXT DEFAULT 'auto'
+            fulfillment_mode TEXT DEFAULT 'auto',
+            manual_stock_count INTEGER DEFAULT 0
         );
     `)
     database.exec(`
@@ -97,6 +98,20 @@ function createProductsDatabase() {
             ('hidden', 'Hidden', 'not visible to guest', '1', 'games', 0, 1, 6, 3, 0, 0, 0, 0, 600, NULL, 'auto', 1),
             ('inactive', 'Inactive', 'not active', '2', 'games', 0, 0, 0, 3, 0, 0, 0, 0, 50, NULL, 'auto', -1);
     `)
+    database.exec(`
+        CREATE TABLE cards (
+            id INTEGER PRIMARY KEY, product_id TEXT, is_used INTEGER, reserved_at INTEGER, expires_at INTEGER
+        );
+        CREATE INDEX cards_product_id_idx ON cards(product_id);
+        UPDATE products SET manual_stock_count = stock_count WHERE fulfillment_mode = 'manual';
+    `)
+    const insertCard = database.prepare('INSERT INTO cards (product_id, is_used, reserved_at) VALUES (?, 0, ?)')
+    for (const [productId, available, locked] of [
+        ['a1', 2, 3], ['a2', 4, 1], ['b1', 1, 0], ['hidden', 3, 0], ['inactive', 3, 0],
+    ] as Array<[string, number, number]>) {
+        for (let i = 0; i < available; i++) insertCard.run(productId, null)
+        for (let i = 0; i < locked; i++) insertCard.run(productId, Date.now())
+    }
     return database
 }
 
@@ -179,6 +194,8 @@ test('混合履约变体按组过滤，且保持代表商品', async () => {
     database.exec(`INSERT INTO products (id, name, price, category, sort_order, stock_count, variant_group_id, fulfillment_mode)
         VALUES ('mixed-auto', 'Mixed auto', '30', 'mixed', 1, 1, 'mixed-group', 'auto'),
                ('mixed-manual', 'Mixed manual', '40', 'mixed', 2, 2, 'mixed-group', 'manual')`)
+    database.exec(`UPDATE products SET manual_stock_count = 2 WHERE id = 'mixed-manual';
+        INSERT INTO cards (product_id, is_used) VALUES ('mixed-auto', 0);`)
 
     const manual = await searchActiveProducts({ category: 'mixed', fulfillment: 'manual' })
     assert.equal(manual.total, 1)
@@ -209,4 +226,50 @@ test('用户排序不会被变体整形阶段改回默认排序', async () => {
 
     const hot = await searchActiveProducts({ sort: 'hot', pageSize: 2 })
     assert.equal(hot.items[0].id, 'a1')
+})
+
+
+test('首页库存按实时卡池读取，旧汇总为零也能展示、筛选和排序现货', async () => {
+    database.exec(`INSERT INTO products (id, name, price, category, stock_count)
+        VALUES ('live-stock', 'Live stock', '15', 'live', 0),
+               ('stale-stock', 'Stale stock', '20', 'live', 99)`)
+    database.exec(`CREATE TABLE IF NOT EXISTS cards (
+        id INTEGER PRIMARY KEY, product_id TEXT, is_used INTEGER, reserved_at INTEGER, expires_at INTEGER
+    )`)
+    database.exec(`INSERT INTO cards (product_id, is_used, reserved_at, expires_at)
+        VALUES ('live-stock', 0, NULL, NULL), ('live-stock', 0, NULL, NULL)`)
+
+    const result = await searchActiveProducts({ category: 'live', sort: 'stockDesc' })
+    assert.equal(result.items[0].id, 'live-stock')
+    assert.equal(result.items[0].stockCount, 2)
+    assert.equal(result.items[1].stockCount, 0)
+
+    const inStock = await searchActiveProducts({ category: 'live', fulfillment: 'inStock', pageSize: 1 })
+    assert.equal(inStock.total, 1)
+    assert.deepEqual(inStock.items.map((item) => item.id), ['live-stock'])
+})
+
+
+test('实时库存排除过期与已使用卡，并保留预留、共享和手动库存语义', async () => {
+    const now = Date.now()
+    database.exec(`INSERT INTO products (id, name, price, category, stock_count, is_shared, fulfillment_mode, manual_stock_count)
+        VALUES ('edge-auto', 'Auto', '10', 'edge', 99, 0, 'auto', 0),
+               ('edge-shared', 'Shared', '20', 'edge', 0, 1, 'auto', 0),
+               ('edge-manual', 'Manual', '30', 'edge', 99, 0, 'manual', 3)`)
+    database.exec(`INSERT INTO cards (product_id, is_used, reserved_at, expires_at) VALUES
+        ('edge-auto', NULL, NULL, NULL),
+        ('edge-auto', 0, NULL, ${now + 60_000}),
+        ('edge-auto', 0, NULL, ${now - 1}),
+        ('edge-auto', 1, NULL, NULL),
+        ('edge-auto', 0, ${now}, NULL),
+        ('edge-auto', 0, ${now - 5 * 60_000 - 1}, NULL),
+        ('edge-shared', 0, ${now}, NULL)`)
+
+    const result = await searchActiveProducts({ category: 'edge' })
+    const auto = result.items.find((item) => item.id === 'edge-auto')
+    assert.equal(auto?.stock, 3)
+    assert.equal(auto?.locked, 1)
+    assert.equal(auto?.stockCount, 4)
+    assert.equal(result.items.find((item) => item.id === 'edge-shared')?.stockCount, 999999)
+    assert.equal(result.items.find((item) => item.id === 'edge-manual')?.stockCount, 3)
 })
