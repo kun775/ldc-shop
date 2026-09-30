@@ -36,6 +36,7 @@ import {
 /** 本地业务表名：漂移口径要 join 它们，硬编码一处便于与 `queries.ts` 对照。 */
 const LOCAL_CARDS_TABLE = 'cards'
 const LOCAL_ORDERS_TABLE = 'orders'
+const LOCAL_PRODUCTS_TABLE = 'products'
 
 /** 「临近 Ack 超窗」的缺省阈值。中心默认窗口 30 分钟，5 分钟是可见的止损点。 */
 export const CARD_SERVICE_EXPIRING_SOON_DEFAULT_MS = 5 * 60_000
@@ -158,6 +159,9 @@ export interface CardServiceOverview {
 
 export interface CardServiceProductStatus {
     productId: string
+    productName: string | null
+    /** 与商城已售口径一致：已付款和已交付订单的商品数量。 */
+    soldCount: number
     supplyMode: CardServiceSupplyMode
     programKey: string | null
     targetStock: number | null
@@ -168,6 +172,7 @@ export interface CardServiceProductStatus {
     /** 在途分配（`allocated`，尚未 Ack）。 */
     inFlightAllocations: number
     pendingAck: number
+    /** 待处理或失败的销售同步任务数；已完成任务不计入。 */
     pendingSell: number
     pendingRevoke: number
     /** 目标库存 > 0 而本地可售 + 远端可售合计为 0：补货已耗尽。 */
@@ -532,7 +537,10 @@ export async function listCardServiceProductStatus(
     const limit = Math.max(1, Math.trunc(options.limit ?? 200))
     try {
         const rows = await database.query<Record<string, unknown>>(
-            `SELECT pc.product_id, pc.supply_mode, pc.program_key, pc.target_stock,
+            `SELECT pc.product_id, p.name AS product_name, pc.supply_mode, pc.program_key, pc.target_stock,
+                    (SELECT COALESCE(SUM(o.quantity), 0) FROM ${LOCAL_ORDERS_TABLE} o
+                        WHERE o.product_id = pc.product_id
+                          AND o.status IN ('paid', 'delivered')) AS sold_count,
                     (SELECT COUNT(*) FROM ${LOCAL_CARDS_TABLE} c
                         WHERE c.product_id = pc.product_id
                           AND (c.is_used = 0 OR c.is_used IS NULL)
@@ -557,6 +565,7 @@ export async function listCardServiceProductStatus(
                           AND o.state IN ('pending', 'failed')
                           AND m.product_id = pc.product_id) AS pending_revoke
                 FROM ${CARD_SERVICE_PRODUCT_CONFIG_TABLE} pc
+                LEFT JOIN ${LOCAL_PRODUCTS_TABLE} p ON p.id = pc.product_id
                 WHERE pc.supply_mode = 'license_service'
                 ORDER BY pc.product_id ASC
                 LIMIT ?`,
@@ -569,6 +578,8 @@ export async function listCardServiceProductStatus(
             const remoteSellableCards = toInteger(row.remote_sellable)
             return {
                 productId: toStringOrEmpty(row.product_id),
+                productName: toStringOrNull(row.product_name),
+                soldCount: toInteger(row.sold_count),
                 supplyMode: toStringOrEmpty(row.supply_mode) as CardServiceSupplyMode,
                 programKey: toStringOrNull(row.program_key),
                 targetStock,

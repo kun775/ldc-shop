@@ -1184,6 +1184,8 @@
                 "targetStockHint": "每分钟检查可售库存，低于目标时自动补齐；填 0 暂停自动补货。",
                 "defaultTargetStock": "默认 1",
                 "saveTargetStock": "保存目标库存",
+                "sold": "已售",
+                "salesHint": "已售统计已付款及已交付订单的商品数量；待 Sell 是未完成的销售同步任务数，为 0 表示当前没有待处理或失败的任务。",
                 "localSellable": "本地可售",
                 "remoteSellable": "远端可售",
                 "inFlight": "在途分配",

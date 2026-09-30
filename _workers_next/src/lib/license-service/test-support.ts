@@ -56,6 +56,7 @@ const CORE_TABLE_STATEMENTS: readonly string[] = [
     // 降级分支 —— 测试就永远验证不到真正的拒绝语义。
     `CREATE TABLE IF NOT EXISTS products (
         id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
         is_shared INTEGER DEFAULT 0
     )`,
     `CREATE TABLE IF NOT EXISTS cards (

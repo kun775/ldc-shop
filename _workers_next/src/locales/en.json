@@ -1184,6 +1184,8 @@
                 "targetStockHint": "Checks sellable stock every minute and replenishes shortages toward the target. Set 0 to pause automatic restocking.",
                 "defaultTargetStock": "Default: 1",
                 "saveTargetStock": "Save target stock",
+                "sold": "Sold",
+                "salesHint": "Sold counts product units in paid and delivered orders. Pending Sell counts unfinished sale sync tasks; 0 means no pending or failed tasks.",
                 "localSellable": "Local sellable",
                 "remoteSellable": "Remote sellable",
                 "inFlight": "In-flight",

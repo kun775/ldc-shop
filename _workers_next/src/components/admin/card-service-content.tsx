@@ -559,6 +559,7 @@ export function CardServiceContent({
                 <div className="space-y-1">
                     <h2 className="text-sm font-semibold text-foreground">{t('admin.cardService.products.title')}</h2>
                     <p className="text-xs text-muted-foreground">{t('admin.cardService.products.description')}</p>
+                    <p className="text-xs text-muted-foreground">{t('admin.cardService.products.salesHint')}</p>
                 </div>
 
                 {/* 接入新商品：没有配置行的商品不会出现在下面的列表里，这是唯一的入口。 */}
@@ -643,7 +644,10 @@ export function CardServiceContent({
                                 <div className="flex flex-wrap items-start justify-between gap-3">
                                     <div className="min-w-0 space-y-1">
                                         <div className="flex flex-wrap items-center gap-2">
-                                            <span className="font-mono text-xs font-semibold text-foreground">{product.productId}</span>
+                                            {product.productName ? (
+                                                <span className="break-words text-sm font-semibold text-foreground">{product.productName}</span>
+                                            ) : null}
+                                            <span className="break-all font-mono text-xs text-muted-foreground">{t('admin.cardService.products.productId')}：{product.productId}</span>
                                             <Badge variant="outline" className="border-border/60 text-muted-foreground">
                                                 {product.supplyMode === 'license_service'
                                                     ? t('admin.cardService.products.supplyModeRemote')
@@ -658,6 +662,7 @@ export function CardServiceContent({
                                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
                                             <span>{t('admin.cardService.products.programKey')}：<span className="font-mono">{product.programKey ?? '-'}</span></span>
                                             <span>{t('admin.cardService.products.targetStock')}：<span className="tabular-nums">{product.targetStock ?? t('admin.cardService.products.defaultTargetStock')}</span></span>
+                                            <span>{t('admin.cardService.products.sold')}：<span className="tabular-nums">{product.soldCount}</span></span>
                                             <span>{t('admin.cardService.products.localSellable')}：<span className="tabular-nums">{product.localSellableCards}</span></span>
                                             <span>{t('admin.cardService.products.remoteSellable')}：<span className="tabular-nums">{product.remoteSellableCards}</span></span>
                                             <span>{t('admin.cardService.products.inFlight')}：<span className="tabular-nums">{product.inFlightAllocations}</span></span>

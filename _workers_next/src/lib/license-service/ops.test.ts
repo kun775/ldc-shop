@@ -154,16 +154,17 @@ async function insertLocalCard(
     ])
 }
 
-async function insertOrder(ctx: Ctx, overrides: { orderId?: string; status?: string; productId?: string } = {}) {
+async function insertOrder(ctx: Ctx, overrides: { orderId?: string; status?: string; productId?: string; quantity?: number } = {}) {
     await ctx.database.write([{
-        sql: `INSERT INTO orders (order_id, product_id, product_name, amount, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO orders (order_id, product_id, product_name, amount, status, quantity, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
         params: [
             overrides.orderId ?? 'order_1',
             overrides.productId ?? 'prod_1',
             'Bill Service',
             '9.90',
             overrides.status ?? 'delivered',
+            overrides.quantity ?? 1,
             NOW,
         ],
     }])
@@ -549,6 +550,7 @@ test('product status only lists license_service products and aggregates their co
     assert.equal(rows.length, 1)
     const status = rows[0]
     assert.equal(status.productId, 'prod_remote')
+    assert.equal(status.soldCount, 0)
     assert.equal(status.supplyMode, 'license_service')
     assert.equal(status.programKey, 'bill-service')
     assert.equal(status.targetStock, 3)
@@ -578,4 +580,53 @@ test('product status without a target stock never reports exhaustion', async () 
     const rows = await listCardServiceProductStatus(ctx.database)
     assert.equal(rows[0].targetStock, null)
     assert.equal(rows[0].stockExhausted, false)
+})
+
+test('product sales count paid and delivered units while completed Sell tasks leave no backlog', async () => {
+    const ctx = makeContext()
+    await insertProductConfig(ctx, { productId: 'prod_remote' })
+    await ctx.database.write([{
+        sql: 'INSERT INTO products (id, name) VALUES (?, ?)',
+        params: ['prod_remote', '演示商品'],
+    }])
+    await insertAllocation(ctx, { allocationId: 'alloc_sold', productId: 'prod_remote', state: 'sold' })
+    await insertOperation(ctx, {
+        operationKey: 'sell_done', operation: 'sell', resourceId: 'alloc_sold', state: 'done',
+    })
+    for (const [orderId, status, quantity, productId] of [
+        ['delivered', 'delivered', 3, 'prod_remote'],
+        ['paid', 'paid', 2, 'prod_remote'],
+        ['pending', 'pending', 7, 'prod_remote'],
+        ['cancelled', 'cancelled', 8, 'prod_remote'],
+        ['refunded', 'refunded', 9, 'prod_remote'],
+        ['other_product', 'delivered', 10, 'prod_other'],
+    ] as const) await insertOrder(ctx, { orderId, status, quantity, productId })
+
+    const [status] = await listCardServiceProductStatus(ctx.database)
+    assert.equal(status.productName, '演示商品')
+    assert.equal(status.soldCount, 5)
+    assert.equal(status.pendingSell, 0)
+
+    await insertOperation(ctx, {
+        operationKey: 'sell_pending', operation: 'sell', resourceId: 'alloc_sold', state: 'pending',
+    })
+    await insertOperation(ctx, {
+        operationKey: 'sell_failed', operation: 'sell', resourceId: 'alloc_sold', state: 'failed',
+    })
+    await insertOperation(ctx, {
+        operationKey: 'sell_abandoned', operation: 'sell', resourceId: 'alloc_sold', state: 'abandoned',
+    })
+    const [withBacklog] = await listCardServiceProductStatus(ctx.database)
+    assert.equal(withBacklog.soldCount, 5)
+    assert.equal(withBacklog.pendingSell, 2)
+})
+
+test('product status retains deleted product configurations with no name or sales', async () => {
+    const ctx = makeContext()
+    await insertProductConfig(ctx, { productId: 'deleted_product' })
+    const [status] = await listCardServiceProductStatus(ctx.database)
+    assert.equal(status.productId, 'deleted_product')
+    assert.equal(status.productName, null)
+    assert.equal(status.soldCount, 0)
+    assert.equal(status.pendingSell, 0)
 })
