@@ -1,0 +1,299 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+
+import { createLicenseServiceClient, type LicenseServiceClientOptions } from './client.ts'
+import { isLicenseServiceError } from './errors.ts'
+
+interface CapturedRequest {
+    url: string
+    init: RequestInit
+}
+
+function stubFetch(handler: (url: string, init: RequestInit) => Response | Promise<Response>) {
+    const calls: CapturedRequest[] = []
+    const impl = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        calls.push({ url, init })
+        return handler(url, init)
+    }) as unknown as typeof fetch
+    return { impl, calls }
+}
+
+function jsonResponse(payload: unknown, status = 200, headers: Record<string, string> = {}): Response {
+    return new Response(JSON.stringify(payload), {
+        status,
+        headers: { 'content-type': 'application/json', ...headers },
+    })
+}
+
+function allocationEnvelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+        ok: true,
+        data: {
+            allocation_id: 'all_1',
+            program_id: 'prog_1',
+            program_key: 'bill-service',
+            external_ref: 'ldc-shop:restock:task-1',
+            status: 'allocated',
+            quantity: 1,
+            cards: [{ id: 'card_1', key: 'CS-7K2M-9XPT-4WQH-8CDE-1', masked_key: 'CS-7K2M-****-1' }],
+            expires_at: '2026-09-22T08:30:00Z',
+            created_at: '2026-09-22T08:00:00Z',
+            acknowledged_at: null,
+            ...overrides,
+        },
+    }
+}
+
+function makeClient(fetchImpl: typeof fetch, overrides: Partial<LicenseServiceClientOptions> = {}) {
+    return createLicenseServiceClient({
+        baseUrl: 'https://lks.test',
+        apiKey: 'cs_live_sales',
+        revokeApiKey: 'cs_live_revoke',
+        fetchImpl,
+        timeoutMs: 5_000,
+        requestIdFactory: () => 'req_fixed',
+        now: () => 1_000,
+        ...overrides,
+    })
+}
+
+function headerOf(call: CapturedRequest, name: string): string | undefined {
+    return (call.init.headers as Record<string, string> | undefined)?.[name]
+}
+
+test('Allocate 请求形态：路径、方法、三个头与严格请求体', async () => {
+    const { impl, calls } = stubFetch(() => jsonResponse(allocationEnvelope()))
+    const client = makeClient(impl)
+
+    const detail = await client.allocate({
+        programKey: 'bill-service',
+        quantity: 1,
+        externalRef: 'ldc-shop:restock:task-1',
+        metadata: { source: 'manual' },
+        idempotencyKey: 'restock:task-1:allocate',
+    })
+
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].url, 'https://lks.test/api/v1/allocations')
+    assert.equal(calls[0].init.method, 'POST')
+    assert.equal(headerOf(calls[0], 'Authorization'), 'Bearer cs_live_sales')
+    assert.equal(headerOf(calls[0], 'Idempotency-Key'), 'restock:task-1:allocate')
+    assert.equal(headerOf(calls[0], 'X-Request-ID'), 'req_fixed')
+    assert.equal(headerOf(calls[0], 'Content-Type'), 'application/json')
+    assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+        program_key: 'bill-service',
+        quantity: 1,
+        external_ref: 'ldc-shop:restock:task-1',
+        metadata: { source: 'manual' },
+    })
+
+    assert.equal(detail.allocationId, 'all_1')
+    assert.equal(detail.cards[0].key, 'CS-7K2M-9XPT-4WQH-8CDE-1')
+})
+
+test('本地参数缺陷就地失败：不发请求，也不会把注定被 400 的请求发出去', async () => {
+    const { impl, calls } = stubFetch(() => jsonResponse(allocationEnvelope()))
+    const client = makeClient(impl)
+
+    const cases: Array<() => Promise<unknown>> = [
+        () => client.allocate({ programKey: 'p', quantity: 0, idempotencyKey: 'restock:task-1:allocate' }),
+        () => client.allocate({ programKey: 'p', quantity: 101, idempotencyKey: 'restock:task-1:allocate' }),
+        () => client.allocate({ programKey: '  ', idempotencyKey: 'restock:task-1:allocate' }),
+        () => client.allocate({ programKey: 'p', externalRef: 'x'.repeat(129), idempotencyKey: 'restock:task-1:allocate' }),
+        // 幂等键字符集/长度由服务端中间件强制，本地必须同规则先拦。
+        () => client.allocate({ programKey: 'p', idempotencyKey: 'short' }),
+        () => client.ack({ allocationId: 'all_1', receivedCardIds: [], idempotencyKey: 'restock:task-1:ack' }),
+        () => client.listAllocations({ limit: 0 }),
+        () => client.listAllocations({ limit: 101 }),
+    ]
+
+    for (const run of cases) {
+        await assert.rejects(run(), (error: unknown) => isLicenseServiceError(error) && error.code === 'invalid_request')
+    }
+    assert.equal(calls.length, 0)
+})
+
+test('契约错配（响应 program_key 与请求不一致）判 invalid_response，不把错配数据当成功', async () => {
+    const { impl } = stubFetch(() => jsonResponse(allocationEnvelope({ program_key: 'someone-else' })))
+    const client = makeClient(impl)
+
+    await assert.rejects(
+        client.allocate({ programKey: 'bill-service', idempotencyKey: 'restock:task-1:allocate' }),
+        (error: unknown) => isLicenseServiceError(error) && error.code === 'invalid_response' && error.category === 'invalid',
+    )
+})
+
+test('Ack / Sell / Cancel 的路径与请求体，卡序原样提交', async () => {
+    const { impl, calls } = stubFetch(() => jsonResponse({ ok: true, data: { allocation_id: 'all_1', status: 'acknowledged' } }))
+    const client = makeClient(impl)
+
+    await client.ack({
+        allocationId: 'all_1',
+        receivedCardIds: ['card_a', 'card_b'],
+        externalRef: 'ldc-shop:restock:task-1',
+        idempotencyKey: 'restock:task-1:ack',
+    })
+    assert.equal(calls[0].url, 'https://lks.test/api/v1/allocations/all_1/ack')
+    assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+        received_card_ids: ['card_a', 'card_b'],
+        external_ref: 'ldc-shop:restock:task-1',
+    })
+
+    await client.sell({ allocationId: 'all_1', cardIds: ['card_a'], idempotencyKey: 'sell:all_1:order_1' })
+    assert.equal(calls[1].url, 'https://lks.test/api/v1/allocations/all_1/sell')
+    assert.deepEqual(JSON.parse(String(calls[1].init.body)), { card_ids: ['card_a'] })
+
+    await client.cancel({
+        allocationId: 'all_1',
+        cardIds: ['card_a'],
+        reason: 'local insert failed',
+        idempotencyKey: 'restock:task-1:cancel',
+    })
+    assert.equal(calls[2].url, 'https://lks.test/api/v1/allocations/all_1/cancel')
+    assert.deepEqual(JSON.parse(String(calls[2].init.body)), { card_ids: ['card_a'], reason: 'local insert failed' })
+})
+
+test('单查接口拒绝回明文：带 key 的响应直接判契约破坏', async () => {
+    const { impl } = stubFetch(() => jsonResponse(allocationEnvelope()))
+    const client = makeClient(impl)
+
+    await assert.rejects(
+        client.getAllocation('all_1'),
+        (error: unknown) => isLicenseServiceError(error) && error.code === 'invalid_response',
+    )
+
+    const withoutKey = stubFetch(() => jsonResponse(allocationEnvelope({
+        cards: [{ id: 'card_1', masked_key: 'CS-****' }],
+    })))
+    const ok = await makeClient(withoutKey.impl).getAllocation('all_1')
+    assert.equal(ok.cards[0].key, '')
+    assert.equal(ok.cards[0].maskedKey, 'CS-****')
+})
+
+test('错误信封映射成带类别与 retryAfterMs 的 LicenseServiceError', async () => {
+    const { impl } = stubFetch(() => jsonResponse({
+        ok: false,
+        error: { code: 'allocation_expired', message: 'allocation expired', retryable: false },
+        request_id: 'req_01K',
+    }, 409, { 'Retry-After': '3' }))
+    const client = makeClient(impl)
+
+    await assert.rejects(
+        client.ack({ allocationId: 'all_1', receivedCardIds: ['card_1'], idempotencyKey: 'restock:task-1:ack' }),
+        (error: unknown) => {
+            assert.ok(isLicenseServiceError(error))
+            assert.equal(error.code, 'allocation_expired')
+            assert.equal(error.httpStatus, 409)
+            assert.equal(error.category, 'expired')
+            assert.equal(error.requestId, 'req_01K')
+            assert.equal(error.retryAfterMs, 3_000)
+            assert.equal(error.retryable, false)
+            assert.equal(error.operation, 'ack')
+            // 日志上下文不含卡密与凭据。
+            assert.equal(JSON.stringify(error.toLogContext()).includes('Bearer'), false)
+            return true
+        },
+    )
+})
+
+test('无信封的错误响应按状态码兜底，5xx 归入可重试类别', async () => {
+    const { impl } = stubFetch(() => new Response('gateway blew up', { status: 503 }))
+    const client = makeClient(impl)
+
+    await assert.rejects(
+        client.allocate({ programKey: 'bill-service', idempotencyKey: 'restock:task-1:allocate' }),
+        (error: unknown) => {
+            assert.ok(isLicenseServiceError(error))
+            assert.equal(error.code, 'temporarily_unavailable')
+            assert.equal(error.category, 'unavailable')
+            return true
+        },
+    )
+})
+
+test('HTTP 200 但信封不是 ok:true 属于确定性契约破坏，不可重试', async () => {
+    const { impl } = stubFetch(() => jsonResponse({ result: 'something else' }))
+    const client = makeClient(impl)
+
+    await assert.rejects(
+        client.allocate({ programKey: 'bill-service', idempotencyKey: 'restock:task-1:allocate' }),
+        (error: unknown) => isLicenseServiceError(error) && error.code === 'invalid_response' && error.category === 'invalid',
+    )
+})
+
+test('Revoke 走独立 Key（签在原销售 Client 上），缺失时本地失败且绝不回退销售 Key', async () => {
+    const { impl, calls } = stubFetch(() => jsonResponse({ ok: true, data: { id: 'card_1', status: 'revoked' } }))
+    const client = makeClient(impl)
+
+    const revoked = await client.revoke('card_1', { reason: 'refunded', idempotencyKey: 'revoke:card_1:order_1' })
+    assert.equal(revoked.status, 'revoked')
+    assert.equal(calls[0].url, 'https://lks.test/api/v1/cards/card_1/revoke')
+    assert.equal(headerOf(calls[0], 'Authorization'), 'Bearer cs_live_revoke')
+    assert.deepEqual(JSON.parse(String(calls[0].init.body)), { reason: 'refunded' })
+
+    const noRevokeKey = stubFetch(() => jsonResponse({ ok: true, data: { id: 'card_1', status: 'revoked' } }))
+    const bare = makeClient(noRevokeKey.impl, { revokeApiKey: null })
+    await assert.rejects(
+        bare.revoke('card_1', { reason: 'refunded', idempotencyKey: 'revoke:card_1:order_1' }),
+        (error: unknown) => isLicenseServiceError(error) && error.code === 'revoke_key_missing' && error.category === 'config',
+    )
+    assert.equal(noRevokeKey.calls.length, 0)
+})
+
+test('列表接口只把有值的查询参数拼进 URL', async () => {
+    const { impl, calls } = stubFetch(() => jsonResponse({
+        ok: true,
+        data: { items: [], next_cursor: null, has_more: false },
+    }))
+    const client = makeClient(impl)
+
+    await client.listAllocations({ externalRef: 'ldc-shop:restock:t1', limit: 50 })
+    assert.equal(
+        calls[0].url,
+        'https://lks.test/api/v1/allocations?external_ref=ldc-shop%3Arestock%3At1&limit=50',
+    )
+})
+
+test('响应体超过上限立即失败：不把超大响应拖进内存', async () => {
+    const { impl } = stubFetch(() => jsonResponse({ ok: true, data: { blob: 'x'.repeat(500) } }))
+    const client = makeClient(impl, { maxResponseBytes: 64 })
+
+    await assert.rejects(
+        client.allocate({ programKey: 'bill-service', idempotencyKey: 'restock:task-1:allocate' }),
+        (error: unknown) => isLicenseServiceError(error) && error.code === 'response_too_large',
+    )
+})
+
+test('超时与网络失败分别折算成 timeout / network_error，两者都可重试', async () => {
+    const hanging = (async (_input: RequestInfo | URL, init: RequestInit = {}) => new Promise<Response>((_resolve, reject) => {
+        const signal = init.signal as AbortSignal | undefined
+        signal?.addEventListener('abort', () => reject(signal.reason))
+    })) as unknown as typeof fetch
+    const timeoutClient = makeClient(hanging, { timeoutMs: 5 })
+    await assert.rejects(
+        timeoutClient.allocate({ programKey: 'bill-service', idempotencyKey: 'restock:task-1:allocate' }),
+        (error: unknown) => isLicenseServiceError(error) && error.code === 'timeout' && error.category === 'unavailable',
+    )
+
+    const failing = (async () => {
+        throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+    const networkClient = makeClient(failing)
+    await assert.rejects(
+        networkClient.allocate({ programKey: 'bill-service', idempotencyKey: 'restock:task-1:allocate' }),
+        (error: unknown) => isLicenseServiceError(error) && error.code === 'network_error' && error.retryable === true,
+    )
+})
+
+test('构造期就拒绝不可用配置：非 HTTPS Base URL 与空 Key 直接抛 config_error', () => {
+    const { impl } = stubFetch(() => jsonResponse({ ok: true }))
+    assert.throws(
+        () => makeClient(impl, { baseUrl: 'http://lks.test' }),
+        (error: unknown) => isLicenseServiceError(error) && error.code === 'config_error',
+    )
+    assert.throws(
+        () => makeClient(impl, { apiKey: '   ' }),
+        (error: unknown) => isLicenseServiceError(error) && error.code === 'config_error',
+    )
+})
