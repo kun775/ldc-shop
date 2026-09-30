@@ -25,7 +25,7 @@ import { resolveAffectedProductIds } from './affected-products.ts'
 // 前台库存聚合（`products.stock_count`）的**唯一**回写入口。本层是全模块唯一
 // 允许依赖它、也是唯一能依赖它的地方：子模块必须保持「纯端口」，才能被
 // `node --test` 直接加载。
-import { recalcProductAggregatesForMany } from '@/lib/db/queries'
+import { getProducts, recalcProductAggregatesForMany } from '@/lib/db/queries'
 import { LicenseServiceError, type LicenseServiceErrorCode } from './errors.ts'
 import {
     replenishLowStockProducts,
@@ -273,12 +273,13 @@ export async function getCardServiceProductStatus(
     return listCardServiceProductStatus(createD1CardServiceDatabase(), options)
 }
 
-/** 运维面板整页所需的四份数据。 */
+/** 运维面板整页数据，以及接入商品下拉框的候选项。 */
 export interface CardServiceSnapshot {
     overview: CardServiceOverview
     review: CardServiceReviewQueue
     products: CardServiceProductStatus[]
     configStatus: LicenseServiceConfigStatus
+    productOptions: Array<{ id: string; name: string }>
 }
 
 /**
@@ -289,17 +290,22 @@ export interface CardServiceSnapshot {
  * 等于凭空开一个后门。服务端页面与动作各自加上自己的鉴权后调用它。
  */
 export async function loadCardServiceSnapshot(): Promise<CardServiceSnapshot> {
-    const [overview, review, products] = await Promise.all([
+    const [overview, review, products, allProducts] = await Promise.all([
         getCardServiceOverview(),
         getCardServiceReviewQueue(),
         getCardServiceProductStatus(),
+        getProducts(),
     ])
+    const connectedProductIds = new Set(products.map((product) => product.productId))
 
     return {
         overview,
         review,
         products,
         configStatus: describeLicenseServiceConfig(),
+        productOptions: allProducts
+            .filter((product) => !product.isShared && !connectedProductIds.has(product.id))
+            .map((product) => ({ id: product.id, name: product.name })),
     }
 }
 

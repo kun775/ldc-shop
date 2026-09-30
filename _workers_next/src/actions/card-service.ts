@@ -44,7 +44,7 @@ function failure(scope: string, error: unknown): CardServiceActionResult {
     return { ok: false, errorKey: 'common.error', errorId }
 }
 
-/** 面板整页刷新所需的四份数据。全部只读本地账本，不联网。 */
+/** 面板整页数据与商品候选项。只读本地数据库，不联网。 */
 export async function loadCardServiceSnapshotAction(): Promise<CardServiceSnapshot> {
     await checkAdmin()
     return loadCardServiceSnapshot()

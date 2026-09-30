@@ -153,3 +153,9 @@
   - 实现：`internal/application/allocation_service.go:75-231`（Allocate，幂等快照与 30 天保留）、`:247-332`（Ack 与超窗内联回收）、`:348-417`（Sell）、`:433-497`（Cancel）、`:528-609`（回收实现与后台入口）、`:649-692`（重放重建）；`internal/domain/allocation/allocation.go:42-93`（状态判定与响应模型）；`internal/adapters/http/allocation_handler.go:31-42`（路由级 Scope）、`:213-259`（列表）；`internal/adapters/http/errors.go:56-61`（分配错误码映射）；`internal/application/card_revocation.go:40-115` 与 `internal/adapters/persistence/store.go:126-147`（作废的状态与归属校验）；`internal/adapters/persistence/admin_writer.go:73-99`（批量清理引用保护）、`:109-200`（单条删除守卫）；`cmd/card-worker/main.go:84-90`（分配超期回收）；`internal/config/config.go:39-42,103,111-128`（`TRUSTED_PROXIES` 与轮询间隔）；`internal/security/realip/realip.go`；`migrations/000004_allocations_expired.up.sql`；`migrations/000001_init_schema.up.sql:156`（`external_ref` 唯一约束）。
 - **商城仓库：**`src/lib/card-api.ts:102-167`（旧 GET，保留而不硬改）；`src/lib/db/schema.ts:4-80`、`src/lib/db/database-upgrade-registry.ts:4-65`、`src/lib/db/queries.ts:254-287,593-661,664-967`（升级：结构探针与升级执行器）、`src/lib/db/queries.ts:1280-1361`（数据：商品评分汇总重算，非升级）；`src/actions/checkout.ts:223-268`（库存检查）、`src/actions/checkout.ts:306-481`（本地预留）、`src/actions/checkout.ts:509-569`（零元直发）；`src/lib/order-processing.ts:382-525`（付款履约）；`src/actions/order.ts:19-75`（订单页轮询）、`src/actions/order.ts:77-185`（取消）；`src/actions/refund.ts:20-135`、`src/actions/refund-requests.ts:173-269`（退款）；`src/actions/admin.ts:382-409`、`src/actions/admin-orders.ts:53-149,279-428`（后台操作）。
 - **明确不在首期：**核销方 grant 业务解释与权益发放（服务 `docs/API.md:381-450` 为独立对接）；共享卡；重构既有历史明文卡密；跨两个数据库的原子事务。上述事项必须另行建账与补偿，不能凭接口幂等推导出跨服务强一致。
+
+## 6. 当前运维配置
+
+在商城后台「卡密服务运维」中，从商品下拉框选择已有商品，再填写服务端 Program 的 Slug。下拉框只显示尚未接入且非共享的商品，保存时使用选中商品的 ID。
+
+接入时可填写目标库存；已接入商品也可直接修改并点击「保存目标库存」，无需重新填写 Program。目标库存留空默认保有 1 张可售卡，设为 0 暂停自动补货。定时任务每分钟检查一次可售库存，只补不足部分；每个商品每轮最多补 5 张，较大的缺口在后续轮次逐步补齐。服务缺货或请求失败时保留记录，停止本轮补货。

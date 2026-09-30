@@ -38,7 +38,7 @@ import { cn } from '@/lib/utils'
 
 const SELECT_CLASS = 'h-9 rounded-md border border-border/70 bg-background px-2 text-xs text-foreground'
 
-/** 草稿里「接入新商品」这一条用的哨兵键，商品 ID 此时还没填。 */
+/** 草稿里「接入新商品」这一条用的哨兵键，商品此时还未选择。 */
 const NEW_PRODUCT_KEY = '__new__'
 const EMPTY_DRAFT: ProductDraft = { productId: '', supplyMode: 'license_service', programKey: '', targetStock: '' }
 
@@ -102,6 +102,15 @@ interface ProductDraft {
     supplyMode: string
     programKey: string
     targetStock: string
+}
+
+function draftForProduct(product: CardServiceProductStatus): ProductDraft {
+    return {
+        productId: product.productId,
+        supplyMode: product.supplyMode,
+        programKey: product.programKey ?? '',
+        targetStock: product.targetStock === null ? '' : String(product.targetStock),
+    }
 }
 
 export function CardServiceContent({
@@ -175,25 +184,24 @@ export function CardServiceContent({
     const startEdit = (product: CardServiceProductStatus) => {
         setDrafts((prev) => ({
             ...prev,
-            [product.productId]: prev[product.productId] ?? {
-                productId: product.productId,
-                supplyMode: product.supplyMode,
-                programKey: product.programKey ?? '',
-                targetStock: product.targetStock === null ? '' : String(product.targetStock),
-            },
+            [product.productId]: prev[product.productId] ?? draftForProduct(product),
         }))
         setEditingId(product.productId)
     }
 
     const patchDraft = (productId: string, patch: Partial<ProductDraft>) => {
+        const product = snapshot?.products.find((item) => item.productId === productId)
+        const base = product ? draftForProduct(product) : EMPTY_DRAFT
         setDrafts((prev) => ({
             ...prev,
-            [productId]: { ...(prev[productId] ?? EMPTY_DRAFT), ...patch },
+            [productId]: { ...(prev[productId] ?? base), ...patch },
         }))
     }
 
     const busy = refreshing || taskPending
     const newDraft: ProductDraft = drafts[NEW_PRODUCT_KEY] ?? EMPTY_DRAFT
+    const productOptions = snapshot?.productOptions ?? []
+    const selectedProductAvailable = productOptions.some((product) => product.id === newDraft.productId)
 
     const driftRows: Array<{ key: string; labelKey: string; count: number; mustBeZero: boolean }> = overview
         ? [
@@ -560,13 +568,26 @@ export function CardServiceContent({
                         <div className="text-[11px] text-muted-foreground">{t('admin.cardService.products.addDescription')}</div>
                     </div>
                     <label className="space-y-1 text-[11px] text-muted-foreground">
-                        <span className="block">{t('admin.cardService.products.productId')}</span>
-                        <Input
-                            className="h-9 w-52 font-mono text-xs"
+                        <span className="block">{t('admin.cardService.products.selectProduct')}</span>
+                        <select
+                            className={cn(SELECT_CLASS, 'w-full sm:w-72')}
                             value={newDraft.productId}
-                            placeholder={t('admin.cardService.products.productIdPlaceholder')}
+                            disabled={busy || !enabled || productOptions.length === 0}
                             onChange={(event) => patchDraft(NEW_PRODUCT_KEY, { productId: event.target.value })}
-                        />
+                        >
+                            <option value="">
+                                {t(!snapshot
+                                    ? 'admin.cardService.products.optionsUnavailable'
+                                    : productOptions.length === 0
+                                        ? 'admin.cardService.products.noAvailableProducts'
+                                        : 'admin.cardService.products.selectProductPlaceholder')}
+                            </option>
+                            {productOptions.map((product) => (
+                                <option key={product.id} value={product.id}>
+                                    {product.name} ({product.id})
+                                </option>
+                            ))}
+                        </select>
                     </label>
                     <label className="space-y-1 text-[11px] text-muted-foreground">
                         <span className="block">{t('admin.cardService.products.programKey')}</span>
@@ -583,13 +604,16 @@ export function CardServiceContent({
                             className="h-9 w-28 tabular-nums"
                             value={newDraft.targetStock}
                             placeholder={t('admin.cardService.products.targetStockPlaceholder')}
-                            inputMode="numeric"
+                            type="number"
+                            min={0}
+                            max={10000}
+                            step={1}
                             onChange={(event) => patchDraft(NEW_PRODUCT_KEY, { targetStock: event.target.value })}
                         />
                     </label>
                     <Button
                         size="sm"
-                        disabled={busy || !newDraft.productId.trim() || !newDraft.programKey.trim()}
+                        disabled={busy || !enabled || !selectedProductAvailable || !newDraft.programKey.trim()}
                         onClick={() => runTask(
                             `save:${NEW_PRODUCT_KEY}`,
                             () => saveCardServiceProgramAction({
@@ -612,6 +636,8 @@ export function CardServiceContent({
                     ) : snapshot.products.map((product) => {
                         const draft = drafts[product.productId]
                         const isEditing = editingId === product.productId
+                        const savedTargetStock = product.targetStock === null ? '' : String(product.targetStock)
+                        const targetStock = draft?.targetStock ?? savedTargetStock
                         return (
                             <div key={product.productId} className="border-b border-border/50 px-4 py-3 last:border-b-0">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -631,7 +657,7 @@ export function CardServiceContent({
                                         </div>
                                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
                                             <span>{t('admin.cardService.products.programKey')}：<span className="font-mono">{product.programKey ?? '-'}</span></span>
-                                            <span>{t('admin.cardService.products.targetStock')}：<span className="tabular-nums">{product.targetStock ?? '-'}</span></span>
+                                            <span>{t('admin.cardService.products.targetStock')}：<span className="tabular-nums">{product.targetStock ?? t('admin.cardService.products.defaultTargetStock')}</span></span>
                                             <span>{t('admin.cardService.products.localSellable')}：<span className="tabular-nums">{product.localSellableCards}</span></span>
                                             <span>{t('admin.cardService.products.remoteSellable')}：<span className="tabular-nums">{product.remoteSellableCards}</span></span>
                                             <span>{t('admin.cardService.products.inFlight')}：<span className="tabular-nums">{product.inFlightAllocations}</span></span>
@@ -662,6 +688,46 @@ export function CardServiceContent({
                                     </div>
                                 </div>
 
+                                {!isEditing ? (
+                                    <div className="mt-3 flex flex-wrap items-end gap-3">
+                                        <label className="space-y-1 text-[11px] text-muted-foreground">
+                                            <span className="block">{t('admin.cardService.products.targetStock')}</span>
+                                            <Input
+                                                className="h-9 w-36 tabular-nums"
+                                                type="number"
+                                                min={0}
+                                                max={10000}
+                                                step={1}
+                                                value={targetStock}
+                                                placeholder={t('admin.cardService.products.targetStockPlaceholder')}
+                                                disabled={busy}
+                                                onChange={(event) => patchDraft(product.productId, { targetStock: event.target.value })}
+                                            />
+                                        </label>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={busy || targetStock === savedTargetStock}
+                                            onClick={() => runTask(
+                                                `save-target:${product.productId}`,
+                                                () => saveCardServiceProgramAction({
+                                                    productId: product.productId,
+                                                    supplyMode: product.supplyMode,
+                                                    programKey: product.programKey ?? '',
+                                                    targetStock,
+                                                }),
+                                                'admin.cardService.products.saved',
+                                            )}
+                                        >
+                                            {busyKey === `save-target:${product.productId}` ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                                            {t('admin.cardService.products.saveTargetStock')}
+                                        </Button>
+                                        <p className="pb-1 text-[11px] text-muted-foreground">
+                                            {t('admin.cardService.products.targetStockHint')}
+                                        </p>
+                                    </div>
+                                ) : null}
+
                                 {isEditing && draft ? (
                                     <div className="mt-3 flex flex-wrap items-end gap-3 rounded-md border border-border/50 bg-muted/20 px-3 py-3">
                                         <label className="space-y-1 text-[11px] text-muted-foreground">
@@ -690,7 +756,10 @@ export function CardServiceContent({
                                                 className="h-9 w-28 tabular-nums"
                                                 value={draft.targetStock}
                                                 placeholder={t('admin.cardService.products.targetStockPlaceholder')}
-                                                inputMode="numeric"
+                                                type="number"
+                                                min={0}
+                                                max={10000}
+                                                step={1}
                                                 onChange={(event) => patchDraft(product.productId, { targetStock: event.target.value })}
                                             />
                                         </label>

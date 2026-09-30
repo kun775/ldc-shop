@@ -29,7 +29,7 @@ function functionBody(name: string): string {
 }
 
 test('聚合回写入口只有一个，且集中在装配层', () => {
-    assert.match(SOURCE, /import \{ recalcProductAggregatesForMany \} from '@\/lib\/db\/queries'/)
+    assert.match(SOURCE, /import \{[^}]*recalcProductAggregatesForMany[^}]*\} from '@\/lib\/db\/queries'/)
 
     // 子模块必须保持「纯端口」，否则它们就不能被 node --test 加载 —— 一旦有人
     // 为了方便把 queries 引进子模块，整条单测链会静默失效。
