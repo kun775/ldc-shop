@@ -36,6 +36,7 @@ import {
 } from './ops.ts'
 import {
     executeOrderRevokes,
+    failRevokesWithoutClient,
     loadOrderRevokePlan,
     loadRevokePlanForRemoteCards,
     revokePendingCardServiceOperations,
@@ -128,13 +129,20 @@ export {
     buildRevokeSuccessStatements,
     emptyRevokeOutcome,
     executeOrderRevokes,
+    failRevokesWithoutClient,
     listMappingsByLocalCardIds,
+    listMappingsByOrderId,
     listMappingsByRemoteCardIds,
     listPendingRevokeOperations,
     loadOrderRevokePlan,
     loadRevokePlanForRemoteCards,
     revokePendingCardServiceOperations,
 } from './revoke.ts'
+export {
+    listProtectedLocalCardIds,
+    orderHasRemoteMappings,
+    partitionDeletableLocalCardIds,
+} from './guards.ts'
 
 /** 是否具备调用中心的最小配置（Base URL + 销售 Key）。 */
 export function isLicenseServiceConfigured(env: Record<string, string | undefined> = process.env): boolean {
@@ -268,15 +276,16 @@ export async function replayPendingCardServiceRevokes(
 /**
  * 退款作废的**规划**阶段：必须在清空订单上的 `card_key`/`card_ids` **之前**调用。
  *
- * 规划只读 `card_service_cards`，返回的 `plan.cards` 是内存快照，因此退款批次
- * 把订单卡密清掉之后，仍可用它推进作废。规划结果为 `blocked` 时不做任何远端
- * 动作，把原因交给调用方呈现给管理员。
+ * 规划只读 `card_service_cards`（按订单号与本地卡 ID 双向取并集），返回的
+ * `plan.cards` 是内存快照，因此退款批次把订单卡密清掉之后，仍可用它推进作废。
+ * 规划结果为 `blocked` 时不做任何远端动作，把原因交给调用方呈现给管理员。
+ *
+ * 刻意不接收 `env`：这一步只碰本地账本，**不该**因为中心凭据没配好而挡住退款。
  */
 export async function planOrderCardRevoke(
     input: { orderId: string; localCardIds: readonly number[] },
-    env: Record<string, string | undefined> = process.env,
 ): Promise<OrderRevokePlan> {
-    return loadOrderRevokePlan(buildRevokeDeps(env).database, input)
+    return loadOrderRevokePlan(createD1CardServiceDatabase(), input)
 }
 
 /**
@@ -285,12 +294,27 @@ export async function planOrderCardRevoke(
  * 先落作废意图（幂等键 `revoke:<cardId>:<orderId>`）再逐卡调中心；中心超时/5xx
  * 只记为待重试，**不得**向管理员说成已完成。返回分类计数，`retained` 表示中心
  * 明确显示该卡仍可用、已保留为本店库存。
+ *
+ * 中心凭据缺失时**照样落账**：意图写进台账、逐卡记 `failed`，等运维配好 Key
+ * 由重放补上。退款已经结算过，这条路径不允许抛错把退款动作整个带崩。
  */
 export async function executeOrderRevokePlan(
     input: { orderId: string; cards: readonly OrderRevokeCard[]; reason: string },
     env: Record<string, string | undefined> = process.env,
 ): Promise<RevokeOutcome> {
-    return executeOrderRevokes(buildRevokeDeps(env), input)
+    const database = createD1CardServiceDatabase()
+    const resolved = resolveLicenseServiceConfig(env)
+    if (!resolved.ok) {
+        return failRevokesWithoutClient(database, {
+            orderId: input.orderId,
+            cards: input.cards,
+            errorCode: 'config_error',
+        })
+    }
+    return executeOrderRevokes(
+        { client: createLicenseServiceClient(resolved.config), database },
+        input,
+    )
 }
 
 /** 待办重放时的计划重建（按远端 card_id），供运维面板「重试作废」使用。 */

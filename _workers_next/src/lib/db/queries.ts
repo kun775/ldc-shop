@@ -32,6 +32,7 @@ import { isManualFulfillment, resolveProductStockCount } from "@/lib/product-sto
 import { RATE_LIMIT_EXPIRES_INDEX_NAME, resetRateLimitSchemaReady } from "@/lib/rate-limit";
 import { RATE_LIMIT_DDL_STATEMENTS } from "./rate-limit-schema";
 import {
+    CARD_SERVICE_CARDS_TABLE,
     CARD_SERVICE_DDL_STATEMENTS,
     CARD_SERVICE_REQUIRED_INDEX_NAMES,
 } from "./license-service-schema";
@@ -3713,9 +3714,22 @@ export async function cleanupExpiredCardsIfNeeded(throttleMs: number = 10 * 60 *
     }
 
     try {
-        await db.run(sql`DELETE FROM cards WHERE expires_at IS NOT NULL AND expires_at < ${now}`);
-    } catch (error: any) {
-        if (!isMissingTableOrColumn(error)) throw error;
+        // 有远端映射的卡不能走这条清理路径物理删除：映射是退款作废与对账的唯一
+        // 线索，中心在 Ack 之后没有归还可售的接口，删掉等于把那张卡永久留在流通里。
+        // 0038 未执行时子查询会报「no such table」，此时回退到原语句（既有行为不变）。
+        await db.run(sql`DELETE FROM cards
+            WHERE expires_at IS NOT NULL AND expires_at < ${now}
+              AND id NOT IN (SELECT local_card_id FROM ${sql.raw(CARD_SERVICE_CARDS_TABLE)})`);
+    } catch (error) {
+        if (isMissingTableOrColumn(error)) {
+            try {
+                await db.run(sql`DELETE FROM cards WHERE expires_at IS NOT NULL AND expires_at < ${now}`);
+            } catch (fallbackError) {
+                if (!isMissingTableOrColumn(fallbackError)) throw fallbackError;
+            }
+        } else {
+            throw error;
+        }
     }
 
     if (affectedProductIds.length > 0) {

@@ -16,6 +16,10 @@ import { selectReversibleCouponUsageIds } from "@/lib/coupons/refund-policy"
 import { auth } from "@/lib/auth"
 import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
 import { fetchWithTimeout } from "@/lib/runtime/fetch-with-timeout"
+import {
+    executeOrderRevokePlan,
+    planOrderCardRevoke,
+} from "@/lib/license-service"
 
 export async function markOrderRefunded(orderId: string) {
     const session = await auth()
@@ -92,6 +96,16 @@ export async function markOrderRefunded(orderId: string) {
         const uniqueIds = Array.from(new Set(parsedIds));
         const consumedAt = Date.now()
 
+        // 作废范围必须在**清空 orders.card_ids 之前**规划出来：那条列一旦被清掉，
+        // 本地卡 ID 就再也找不回来了（另一个线索是台账里的 order_id，规划会把
+        // 两边取并集）。这一步只读本地账本、不碰中心，所以中心没用也不会挡住宿主退款。
+        let revokePlan: Awaited<ReturnType<typeof planOrderCardRevoke>> | null = null
+        try {
+            revokePlan = await planOrderCardRevoke({ orderId, localCardIds: uniqueIds })
+        } catch (error) {
+            console.error('[LicenseService] Refund revoke planning failed:', error)
+        }
+
         if (order.status === 'delivered' && !product?.isShared && uniqueIds.length > 0) {
             const placeholders = uniqueIds.map(() => '?').join(', ')
             refundStatements.push({
@@ -134,6 +148,36 @@ export async function markOrderRefunded(orderId: string) {
         })
         await runAtomicD1Batch(refundStatements)
 
+        // 退款已在本地结算，现在才动远端 —— 顺序不能反：远端作废成功后本地结算
+        // 再失败，用户就会拿到一张已被吊销、钱却没退的卡。
+        //
+        // 作废结果按分类计数如实记录：`deferred`/`failed` 一律**不算**「已作废」，
+        // 它们留在操作台账里等定时任务重放，并出现在运维面板的复核清单上。
+        let revokeOutcome: Awaited<ReturnType<typeof executeOrderRevokePlan>> | null = null
+        if (revokePlan?.kind === 'revoke') {
+            try {
+                revokeOutcome = await executeOrderRevokePlan({
+                    orderId,
+                    cards: revokePlan.cards,
+                    reason: `ldc-shop:refund:${orderId}`,
+                })
+                if (revokeOutcome.deferred > 0 || revokeOutcome.failed > 0) {
+                    console.error('[LicenseService] Refund revoke incomplete:', {
+                        orderId,
+                        ...revokeOutcome,
+                    })
+                }
+            } catch (error) {
+                console.error('[LicenseService] Refund revoke execution failed:', error)
+            }
+        } else if (revokePlan?.kind === 'blocked') {
+            console.error('[LicenseService] Refund revoke needs manual handling:', {
+                orderId,
+                reason: revokePlan.reason,
+                detail: revokePlan.detail,
+            })
+        }
+
         // Mark refund request processed if table exists
         try {
             await db.update(refundRequests).set({ status: 'processed', processedAt: new Date(), updatedAt: new Date() })
@@ -174,6 +218,9 @@ export async function markOrderRefunded(orderId: string) {
                 orderId,
                 status: 'processed',
                 points: order.pointsUsed || 0,
+                // 远端作废的分类计数：面板据此判断这笔退款是否真的把远端卡处理干净了。
+                revoke: revokeOutcome,
+                revokeBlocked: revokePlan?.kind === 'blocked' ? revokePlan.reason : null,
             },
         })
 

@@ -27,6 +27,8 @@ import {
 import { logServerError, sanitizeClientErrorMessage } from "@/lib/errors/safe-error"
 import { normalizeProductCouponUsageRestriction, PRODUCT_COUPON_USAGE_RESTRICTIONS } from "@/lib/coupons/product-policy"
 import { sanitizeFooterHtml } from "@/lib/footer-html"
+import { createD1CardServiceDatabase } from "@/lib/license-service/database"
+import { partitionDeletableLocalCardIds } from "@/lib/license-service/guards"
 
 export async function checkAdmin() {
     const session = await auth()
@@ -382,31 +384,58 @@ export async function deleteCard(cardId: number) {
 export async function deleteCards(cardIds: number[]) {
     await checkAdmin()
 
-    if (!cardIds.length) return
+    if (!cardIds.length) return { deleted: 0, skippedRemoteMapped: 0 }
 
     const BATCH_SIZE = 100
     const productIds: string[] = []
+    const cardServiceDb = createD1CardServiceDatabase()
+    let deleted = 0
+    let skippedRemoteMapped = 0
+
     for (let i = 0; i < cardIds.length; i += BATCH_SIZE) {
         const batch = cardIds.slice(i, i + BATCH_SIZE)
+
+        // 有远端映射的卡一律不物理删除。中心在 Ack 之后**没有**归还可售的接口，
+        // 映射一旦消失，那张卡就再也无法被作废、也无法在退款时被追溯 ——
+        // 只能由管理员改用停售/隔离处理。0038 未执行时这个查询自动放行。
+        let deletable = batch
+        try {
+            const partitioned = await partitionDeletableLocalCardIds(cardServiceDb, batch)
+            deletable = partitioned.deletable
+            skippedRemoteMapped += partitioned.protectedIds.length
+        } catch (error) {
+            // 守卫本身出错时宁可少删：不能因为判定失败就把映射一起删掉。
+            console.error("[LicenseService] deleteCards guard failed, skipping batch:", error)
+            skippedRemoteMapped += batch.length
+            continue
+        }
+        if (!deletable.length) continue
 
         try {
             const rows = await db.select({ productId: cards.productId })
                 .from(cards)
-                .where(inArray(cards.id, batch))
+                .where(inArray(cards.id, deletable))
             productIds.push(...rows.map(r => r.productId))
         } catch {
             // best effort
         }
 
-        await db.delete(cards)
+        const removed = await db.delete(cards)
             .where(
                 and(
-                    inArray(cards.id, batch),
+                    inArray(cards.id, deletable),
                     or(isNull(cards.isUsed), eq(cards.isUsed, false)),
                     or(isNull(cards.reservedAt), lte(cards.reservedAt, new Date(Date.now() - 60 * 1000)))
                 )
             )
+            .returning({ id: cards.id })
+        deleted += removed.length
     }
+
+    if (skippedRemoteMapped > 0) {
+        console.warn(`[LicenseService] deleteCards skipped ${skippedRemoteMapped} card(s) with remote mappings`)
+    }
+
     try {
         await recalcProductAggregatesForMany(productIds)
     } catch {
@@ -419,6 +448,8 @@ export async function deleteCards(cardIds: number[]) {
     revalidatePath('/')
     updateTag('home:products')
     updateTag('home:product-categories')
+
+    return { deleted, skippedRemoteMapped }
 }
 
 export async function saveCardsApiConfig(productId: string, apiUrl: string, apiToken: string, enabled: boolean) {

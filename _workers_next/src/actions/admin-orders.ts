@@ -21,6 +21,8 @@ import {
 import { ORDER_ERROR_KEY_MAP } from "@/lib/orders/order-errors"
 import { auth } from "@/lib/auth"
 import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
+import { createD1CardServiceDatabase } from "@/lib/license-service/database"
+import { orderHasRemoteMappings } from "@/lib/license-service/guards"
 
 /**
  * 订单写操作的统一返回协议。
@@ -32,7 +34,7 @@ import { recordAuditEvent, recordServerError } from "@/lib/audit/record"
  *   由服务端完成脱敏并附带可对账的 errorId。
  */
 export type OrderActionResult =
-    | { ok: true }
+    | { ok: true; skippedRemoteMapped?: number }
     | { ok: false; errorKey: string; errorId: string }
 
 function failure(scope: string, error: unknown): OrderActionResult {
@@ -372,9 +374,23 @@ export async function updateOrderEmail(orderId: string, email: string | null): P
   }
 }
 
-async function deleteOneOrder(orderId: string) {
+async function deleteOneOrder(orderId: string): Promise<{ deleted: boolean; blockedByRemoteMapping: boolean }> {
   const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
-  if (!order) return
+  if (!order) return { deleted: false, blockedByRemoteMapping: false }
+
+  // 守卫必须在**任何副作用之前**：订单行一旦删掉，就再也说不清这笔映射属于哪笔
+  // 业务，退款与对账都只能靠人工比对；而中心在 Ack 之后没有归还可售的接口。
+  // 所以这里直接拦下，让管理员先把远端卡处理掉（作废或继续履约）。
+  try {
+    if (await orderHasRemoteMappings(createD1CardServiceDatabase(), orderId)) {
+      console.warn(`[LicenseService] deleteOneOrder skipped ${orderId}: still holds remote card mappings`)
+      return { deleted: false, blockedByRemoteMapping: true }
+    }
+  } catch (error) {
+    // 判定失败时宁可少删：不能因为查不到就当成「没有映射」。
+    console.error(`[LicenseService] deleteOneOrder guard failed for ${orderId}:`, error)
+    return { deleted: false, blockedByRemoteMapping: true }
+  }
 
   // Refund points if used
   if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
@@ -426,6 +442,7 @@ async function deleteOneOrder(orderId: string) {
 
   await deleteDeliveryFiles(orderId)
   await db.delete(orders).where(eq(orders.orderId, orderId))
+  return { deleted: true, blockedByRemoteMapping: false }
 }
 
 export async function deleteOrder(orderId: string): Promise<OrderActionResult> {
@@ -470,11 +487,14 @@ export async function deleteOrders(orderIds: string[]): Promise<OrderActionResul
     if (!ids.length) return { ok: true }
 
     const touchedProducts: string[] = []
+    let skippedRemoteMapped = 0
 
     for (const id of ids) {
       const order = await db.query.orders.findFirst({ where: eq(orders.orderId, id), columns: { productId: true } })
       if (order?.productId) touchedProducts.push(order.productId)
-      await deleteOneOrder(id)
+      // 仍持有远端映射的订单不删：跳过而不是抛错，否则一单被拦会带崩整批删除。
+      const result = await deleteOneOrder(id)
+      if (result.blockedByRemoteMapping) skippedRemoteMapped += 1
     }
 
     revalidatePath('/admin/orders')
@@ -489,7 +509,7 @@ export async function deleteOrders(orderIds: string[]): Promise<OrderActionResul
     } catch {
       // best effort
     }
-    return { ok: true }
+    return skippedRemoteMapped > 0 ? { ok: true, skippedRemoteMapped } : { ok: true }
   } catch (error) {
     return failure('admin.deleteOrders', error)
   }

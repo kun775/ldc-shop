@@ -1,21 +1,8 @@
 import { NextResponse } from "next/server";
-import { secretsEqual } from "@/lib/crypto";
+import { getCronToken, isAuthorizedCronRequest } from "@/lib/cron-auth";
 import { cancelExpiredOrders, cleanupExpiredCardsIfNeeded } from "@/lib/db/queries";
 
-const CRON_TOKEN_HEADER = "x-cron-cleanup-token";
 const CARD_CLEANUP_THROTTLE_MS = 5 * 60 * 1000;
-
-function getCronToken(): string | null {
-    const token = process.env.CRON_CLEANUP_TOKEN?.trim();
-    if (token) return token;
-    const oauthSecret = process.env.OAUTH_CLIENT_SECRET?.trim();
-    return oauthSecret || null;
-}
-
-function isAuthorized(request: Request, expectedToken: string): boolean {
-    const received = request.headers.get(CRON_TOKEN_HEADER)?.trim();
-    return !!received && secretsEqual(received, expectedToken);
-}
 
 export async function POST(request: Request) {
     const expectedToken = getCronToken();
@@ -26,7 +13,7 @@ export async function POST(request: Request) {
         );
     }
 
-    if (!isAuthorized(request, expectedToken)) {
+    if (!isAuthorizedCronRequest(request, expectedToken)) {
         return NextResponse.json(
             { success: false, error: "unauthorized" },
             { status: 401 }

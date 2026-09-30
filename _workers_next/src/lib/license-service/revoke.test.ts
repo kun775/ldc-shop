@@ -17,6 +17,7 @@ import { LicenseServiceError } from './errors.ts'
 import {
     buildRevokeIntentStatements,
     executeOrderRevokes,
+    failRevokesWithoutClient,
     listPendingRevokeOperations,
     loadOrderRevokePlan,
     loadRevokePlanForRemoteCards,
@@ -210,6 +211,45 @@ test('重放路径按远端 card_id 重建计划；查不到映射 → blocked �
         await loadRevokePlanForRemoteCards(ctx.database, { orderId: ORDER_ID, remoteCardIds: ['card_a1', 'card_gone'] }),
     )
     assert.equal(blocked.reason, 'partial_mapping')
+})
+
+test('订单 card_ids 已空但台账按 order_id 记着映射 → 仍纳入作废（不能漏）', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1', state: 'sold', orderId: ORDER_ID })
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [] }))
+    assert.deepEqual(plan.cards.map((card) => card.remoteCardId), ['card_a1'])
+})
+
+test('订单 card_ids 漏记了一张 → 与台账取并集，远端卡不会留在流通里', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedAllocation(ctx, { state: 'sold' })
+    seedCard(ctx, 7)
+    seedCard(ctx, 8)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1', state: 'sold', orderId: ORDER_ID })
+    seedMapping(ctx, { localCardId: 8, remoteCardId: 'card_a2', state: 'sold', orderId: ORDER_ID })
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    assert.deepEqual(plan.cards.map((card) => card.remoteCardId).sort(), ['card_a1', 'card_a2'])
+})
+
+test('台账里本单的映射已全部作废 → 无可作废项', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1', state: 'revoked', orderId: ORDER_ID })
+
+    const plan = await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [] })
+    assert.equal(plan.kind, 'none')
+})
+
+test('按订单号反查不会把挂在别的订单上的映射拉进来', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1', state: 'sold', orderId: OTHER_ORDER })
+
+    const plan = await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [] })
+    assert.equal(plan.kind, 'none')
 })
 
 // ---------------------------------------------------------------------------
@@ -527,4 +567,53 @@ test('重放时映射缺失 → 计入 review，绝不猜着作废', async () =>
     assert.equal(outcome.review, 1)
     assert.equal(outcome.revoked, 0)
     assert.equal(client.calls.length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// 中心凭据缺失时的降级
+// ---------------------------------------------------------------------------
+
+test('中心凭据缺失 → 意图照样落账、逐卡记 failed，绝不算作已完成', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedAllocation(ctx, { state: 'sold' })
+    seedCard(ctx, 7, { isUsed: true })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1', state: 'sold', orderId: ORDER_ID })
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    const outcome = await failRevokesWithoutClient(ctx.database, {
+        orderId: ORDER_ID,
+        cards: plan.cards,
+        errorCode: 'config_error',
+        nowMs: 1_000,
+    })
+
+    assert.equal(outcome.requested, 1)
+    assert.equal(outcome.failed, 1)
+    assert.equal(outcome.revoked, 0)
+    assert.equal(outcome.deferred, 0)
+
+    const op = operation(ctx, 'card_a1')
+    assert.equal(op?.state, 'failed')
+    assert.equal(op?.last_error_code, 'config_error')
+    // 映射保持可作废状态：Key 配好后重放仍要凭它找到远端身份。
+    assert.equal(mapped(ctx, 'card_a1')?.state, 'sold')
+})
+
+test('空作废范围不写任何台账（已作废的卡不会被重新拉进待办）', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedAllocation(ctx, { state: 'sold' })
+    seedCard(ctx, 7, { isUsed: true })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1', state: 'revoked', orderId: ORDER_ID })
+
+    const plan = await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] })
+    assert.equal(plan.kind, 'none')
+
+    const outcome = await failRevokesWithoutClient(ctx.database, {
+        orderId: ORDER_ID,
+        cards: [],
+        errorCode: 'config_error',
+        nowMs: 1_000,
+    })
+    assert.equal(outcome.requested, 0)
+    assert.equal(ctx.get('SELECT COUNT(*) AS total FROM card_service_operations')?.total, 0)
 })

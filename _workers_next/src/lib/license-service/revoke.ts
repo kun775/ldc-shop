@@ -184,6 +184,26 @@ export async function listMappingsByRemoteCardIds(
 }
 
 /**
+ * 按订单号读映射（退款路径的第二条线索）。
+ *
+ * 只依靠订单上的 `card_ids` 是不够的：那一列可能在历史操作里被部分清空，
+ * 或者订单本来就来自混合库存。台账里 `order_id` 是映射落地时写下的，
+ * 属于「我们自己记的账」，比订单列更可信 —— 两者取并集，才不会漏作废。
+ */
+export async function listMappingsByOrderId(
+    database: CardServiceDatabase,
+    orderId: string,
+): Promise<RevokeMappingRow[]> {
+    const id = (orderId || '').trim()
+    if (!id) return []
+    return queryMappingRows(
+        database,
+        `SELECT ${MAPPING_COLUMNS} FROM ${CARD_SERVICE_CARDS_TABLE} WHERE order_id = ?`,
+        [id],
+    )
+}
+
+/**
  * 台账里该 Allocation 是否已不可用（`expired`/`cancelled`/`abandoned`）。
  *
  * 查不到台账时返回 `false`：不能因为少一行台账就把作废判成「不可能完成」，
@@ -243,21 +263,29 @@ function toCard(row: RevokeMappingRow): OrderRevokeCard {
 /**
  * 退款前判定：这张订单有哪些远端卡需要作废。
  *
- * 必须在**清空 `orders.card_ids` 之前**调用 —— 本地卡 ID 是找回远端身份的唯一线索
- * （除非走 `order_id` 反查，但未交付订单的映射 `order_id` 还是空的）。
+ * 必须在**清空 `orders.card_ids` 之前**调用 —— 本地卡 ID 是找回远端身份的首选
+ * 线索。但只靠它不够：`card_ids` 可能被历史操作部分清空，所以这里同时按
+ * `order_id` 反查台账，两者取并集。任一侧多出来的卡都一并纳入作废范围，
+ * 否则那张远端卡会永久留在流通里（中心没有归还可售接口）。
  */
 export async function loadOrderRevokePlan(
     database: CardServiceDatabase,
     input: { orderId: string; localCardIds: readonly number[] },
 ): Promise<OrderRevokePlan> {
     const localIds = Array.from(new Set(input.localCardIds.filter((id) => Number.isSafeInteger(id))))
-    if (!localIds.length) return { kind: 'none' }
 
-    const rows = await listMappingsByLocalCardIds(database, localIds)
-    if (!rows.length) return { kind: 'none' }
+    const [byLocal, byOrder] = await Promise.all([
+        listMappingsByLocalCardIds(database, localIds),
+        listMappingsByOrderId(database, input.orderId),
+    ])
+    if (!byLocal.length && !byOrder.length) return { kind: 'none' }
 
-    const byLocalId = new Map(rows.map((row) => [row.localCardId, row]))
+    const byLocalId = new Map(byLocal.map((row) => [row.localCardId, row]))
     const cards: OrderRevokeCard[] = []
+    const seen = new Set<number>()
+
+    // 订单列出的每一张卡都必须能查到映射：缺一张说明这单混了本地库存或映射被
+    // 清理过，整单不做自动化处置。
     for (const localCardId of localIds) {
         const row = byLocalId.get(localCardId)
         if (!row) {
@@ -272,6 +300,18 @@ export async function loadOrderRevokePlan(
             return { kind: 'blocked', reason: classified.reason, detail: classified.detail }
         }
         cards.push(classified.card)
+        seen.add(localCardId)
+    }
+
+    // 台账里挂在本单、但订单 `card_ids` 已经看不到的卡：仍要作废。
+    for (const row of byOrder) {
+        if (seen.has(row.localCardId)) continue
+        const classified = classifyRow(row, input.orderId)
+        if (!classified.ok) {
+            return { kind: 'blocked', reason: classified.reason, detail: classified.detail }
+        }
+        cards.push(classified.card)
+        seen.add(row.localCardId)
     }
 
     if (!cards.some((card) => !card.alreadyRevoked)) return { kind: 'none' }
@@ -490,6 +530,45 @@ export function buildRevokeFailStatements(input: {
         state: 'failed',
         nextRetryAtMs: null,
     })
+}
+
+/**
+ * 中心凭据缺失时的降级路径。
+ *
+ * 退款已经把订单上的 `card_key`/`card_ids` 清掉了，所以「谁需要作废」这件事必须
+ * 立刻落账 —— 否则等运维把 Key 配上时，已经没有任何本地线索能重建作废范围。
+ * 因此这里：意图照常写入，逐卡置 `failed`（错误码写明是配置问题），
+ * **绝不算作已完成**，等 Key 配好后由重放入口继续。
+ */
+export async function failRevokesWithoutClient(
+    database: CardServiceDatabase,
+    input: { orderId: string; cards: readonly OrderRevokeCard[]; errorCode: string; nowMs?: number },
+): Promise<RevokeOutcome> {
+    const outcome = emptyRevokeOutcome()
+    const pending = input.cards.filter((card) => !card.alreadyRevoked)
+    if (!pending.length) return outcome
+
+    const nowMs = input.nowMs ?? Date.now()
+    outcome.requested = pending.length
+
+    await database.write(buildRevokeIntentStatements({
+        orderId: input.orderId,
+        cards: pending,
+        nowMs,
+    }))
+
+    for (const card of pending) {
+        await database.write(buildRevokeFailStatements({
+            orderId: input.orderId,
+            remoteCardId: card.remoteCardId,
+            errorCode: input.errorCode,
+            requestId: null,
+            nowMs,
+        }))
+        outcome.failed += 1
+    }
+
+    return outcome
 }
 
 // ---------------------------------------------------------------------------

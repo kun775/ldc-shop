@@ -1,0 +1,105 @@
+/**
+ * 删除与清理路径的保护规则（接入方案阶段 E 第 1 条）。
+ *
+ * 背景很具体：`card_service_cards` 是**唯一**记录「本地卡 → 远端 card_id +
+ * Allocation」的地方，而中心在 Ack 之后**没有归还可售的接口**。因此一旦这条映射
+ * 被物理删除：
+ *
+ *   - 那张卡再也无法被作废（退款时找不到远端身份，只能永久留在流通里）；
+ *   - 对账再也解释不清「这笔钱对应的卡去哪了」。
+ *
+ * 所以凡是会物理删除本地卡或订单的既有路径（`deleteCards`、卡片过期清理、
+ * 订单删除），都必须先问一句「这些卡/这笔订单还有远端映射吗」。本模块把这一句
+ * 抽成可单测的纯读查询 —— 三条路径共用同一份判定，不各写一遍。
+ *
+ * 注意区分两种「删除」：
+ *   - 删**卡**：有映射就跳过（映射要随卡一起留证），由管理端提示改走停售/隔离；
+ *   - 删**订单**：有映射就拒绝（订单行是退款/对账的追溯起点），由管理端提示
+ *     先处理远端卡。删除是管理端显式动作，拒绝比静默留下孤儿映射更安全。
+ */
+
+import { CARD_SERVICE_CARDS_TABLE } from '../db/license-service-schema.ts'
+import { isMissingTableError, type CardServiceDatabase } from './db-port.ts'
+
+function placeholders(count: number): string {
+    return Array.from({ length: count }, () => '?').join(', ')
+}
+
+function normalizeIds(cardIds: readonly number[]): number[] {
+    return Array.from(new Set(cardIds.filter((id) => Number.isSafeInteger(id) && id > 0)))
+}
+
+/**
+ * 在这些本地卡里，找出**仍持有远端映射**的那些 ID。
+ *
+ * 已 `revoked` 的映射同样算「持有」：作废是终态记录，删掉它等于把「这张卡已经
+ * 不能再卖了」这条事实一起删掉，后续对账会把它误判成可用库存。
+ */
+export async function listProtectedLocalCardIds(
+    database: CardServiceDatabase,
+    cardIds: readonly number[],
+): Promise<number[]> {
+    const ids = normalizeIds(cardIds)
+    if (!ids.length) return []
+
+    try {
+        const rows = await database.query<{ local_card_id?: unknown }>(
+            `SELECT local_card_id FROM ${CARD_SERVICE_CARDS_TABLE}
+             WHERE local_card_id IN (${placeholders(ids.length)})`,
+            ids,
+        )
+        return rows
+            .map((row) => Number(row.local_card_id))
+            .filter((id) => Number.isSafeInteger(id) && id > 0)
+    } catch (error) {
+        // 0038 未执行：不存在任何映射，全部可删（保持既有行为）。
+        if (isMissingTableError(error)) return []
+        throw error
+    }
+}
+
+/**
+ * 把一批待删卡分成「可删」与「有远端映射被保护」两部分。
+ *
+ * 返回两个数组而不是一个布尔，是因为调用方（管理端）需要告诉管理员
+ * 「跳过了几张、为什么」——静默少删会让管理员以为删除成功了。
+ */
+export async function partitionDeletableLocalCardIds(
+    database: CardServiceDatabase,
+    cardIds: readonly number[],
+): Promise<{ deletable: number[]; protectedIds: number[] }> {
+    const ids = normalizeIds(cardIds)
+    if (!ids.length) return { deletable: [], protectedIds: [] }
+
+    const protectedIds = await listProtectedLocalCardIds(database, ids)
+    const protectedSet = new Set(protectedIds)
+    return {
+        deletable: ids.filter((id) => !protectedSet.has(id)),
+        protectedIds,
+    }
+}
+
+/**
+ * 这笔订单是否仍持有远端映射。
+ *
+ * 用于拒绝物理删除订单：订单行是退款、作废与对账的追溯起点，映射本身虽然独立
+ * 存表，但丢掉订单会让「这笔映射属于哪笔业务」只能靠人工比对。
+ */
+export async function orderHasRemoteMappings(
+    database: CardServiceDatabase,
+    orderId: string,
+): Promise<boolean> {
+    const id = (orderId || '').trim()
+    if (!id) return false
+
+    try {
+        const rows = await database.query<{ local_card_id?: unknown }>(
+            `SELECT local_card_id FROM ${CARD_SERVICE_CARDS_TABLE} WHERE order_id = ? LIMIT 1`,
+            [id],
+        )
+        return rows.length > 0
+    } catch (error) {
+        if (isMissingTableError(error)) return false
+        throw error
+    }
+}
