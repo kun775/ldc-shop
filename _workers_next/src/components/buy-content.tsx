@@ -79,6 +79,7 @@ interface BuyContentProps {
     canReview?: boolean
     reviewOrderId?: string
     emailConfigured?: boolean
+    defaultEmail?: string
     variants?: (ProductVariantRow & { stockCount: number; lockedCount: number })[]
 }
 
@@ -93,6 +94,7 @@ export function BuyContent({
     canReview = false,
     reviewOrderId,
     emailConfigured = false,
+    defaultEmail = '',
     variants = []
 }: BuyContentProps) {
     const { t } = useI18n()
@@ -890,6 +892,7 @@ export function BuyContent({
                                                         quantity={quantity}
                                                         autoOpen={warningConfirmed && !!displayProduct.purchaseWarning}
                                                         emailConfigured={emailConfiguredState}
+                                                        defaultEmail={defaultEmail}
                                                         answers={hasQuestions ? questionAnswers : undefined}
                                                         checkoutFieldValues={checkoutFieldValues}
                                                         checkoutFieldsIncomplete={checkoutFieldsIncomplete}

@@ -2,7 +2,7 @@ import { notFound } from "next/navigation"
 import { auth } from "@/lib/auth"
 import { BuyContent } from "@/components/buy-content"
 import { BuyRestricted } from "@/components/buy-restricted"
-import { getProduct, getProductVisibility, getLiveCardStats, getProductVariants, type ProductVariantRow } from "@/lib/db/queries"
+import { getProduct, getProductVisibility, getLiveCardStats, getProductVariants, getLoginUserEmail, type ProductVariantRow } from "@/lib/db/queries"
 import { INFINITE_STOCK } from "@/lib/constants"
 
 interface BuyPageProps {
@@ -60,7 +60,10 @@ export default async function BuyPage({ params }: BuyPageProps) {
         }
     }
 
-    const liveStats = await getLiveCardStats([product.id]).catch(() => new Map())
+    const [liveStats, defaultEmail] = await Promise.all([
+        getLiveCardStats([product.id]).catch(() => new Map()),
+        session?.user?.id ? getLoginUserEmail(session.user.id).catch(() => null) : Promise.resolve(null),
+    ])
     const stat = liveStats.get(product.id) ?? { unused: 0, available: 0, locked: 0 }
     const liveAvailable = product.fulfillmentMode === 'manual'
         ? Math.max(0, Number(product.stock || 0))
@@ -81,6 +84,7 @@ export default async function BuyPage({ params }: BuyPageProps) {
             canReview={false}
             reviewOrderId={undefined}
             emailConfigured={false}
+            defaultEmail={defaultEmail || ''}
             variants={variantsWithStock.length > 1 ? variantsWithStock : undefined}
         />
     )

@@ -27,6 +27,7 @@ interface BuyButtonProps {
     quantity?: number
     autoOpen?: boolean
     emailConfigured?: boolean
+    defaultEmail?: string
     answers?: string[]
     checkoutFieldValues?: Record<string, string>
     checkoutFieldsIncomplete?: boolean
@@ -44,6 +45,7 @@ export function BuyButton({
     quantity = 1,
     autoOpen = false,
     emailConfigured = false,
+    defaultEmail = '',
     answers,
     checkoutFieldValues,
     checkoutFieldsIncomplete = false,
@@ -58,7 +60,8 @@ export function BuyButton({
     const [usePoints, setUsePoints] = useState(false)
     const [pointsLoading, setPointsLoading] = useState(false)
     const [hasAutoOpened, setHasAutoOpened] = useState(false)
-    const [email, setEmail] = useState('')
+    const [email, setEmail] = useState(defaultEmail)
+    const emailInputRef = useRef<HTMLInputElement>(null)
     const [couponsEnabled, setCouponsEnabled] = useState(false)
     const [couponInput, setCouponInput] = useState('')
     const [appliedCodes, setAppliedCodes] = useState<string[]>([])
@@ -346,13 +349,30 @@ export function BuyButton({
                             <div className="relative">
                                 <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                                 <Input
+                                    ref={emailInputRef}
                                     id="checkout-email"
                                     type="email"
                                     placeholder="name@example.com"
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)}
-                                    className="h-10 rounded-xl pl-9 text-sm"
+                                    disabled={loading}
+                                    className="h-10 rounded-xl pl-9 pr-11 text-sm"
                                 />
+                                {email && (
+                                    <button
+                                        type="button"
+                                        aria-label={t('common.clear')}
+                                        title={t('common.clear')}
+                                        disabled={loading}
+                                        onClick={() => {
+                                            setEmail('')
+                                            emailInputRef.current?.focus()
+                                        }}
+                                        className="absolute right-1 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                                    >
+                                        <X className="h-4 w-4" aria-hidden="true" />
+                                    </button>
+                                )}
                             </div>
                         </div>
 
