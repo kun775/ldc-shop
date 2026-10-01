@@ -142,6 +142,8 @@ export async function importData(formData: FormData) {
             processedAt: 'processed_at',
             // Settings
             updatedAt: 'updated_at',
+            programKey: 'program_key',
+            encryptedApiKey: 'encrypted_api_key',
             // Notification / message tables
             titleKey: 'title_key',
             contentKey: 'content_key',

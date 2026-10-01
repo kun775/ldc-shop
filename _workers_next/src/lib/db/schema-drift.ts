@@ -1,4 +1,5 @@
 import { collectErrorText } from "./error-utils.ts"
+import { CARD_SERVICE_CREDENTIALS_SCHEMA_PROBES } from "./license-service-credentials-schema.ts"
 import { CARD_SERVICE_SCHEMA_DRIFT_PROBES } from "./license-service-schema.ts"
 
 /**
@@ -90,6 +91,7 @@ export const SCHEMA_DRIFT_PROBES: readonly string[] = [
     ...POINT_LEDGER_HISTORY_SCHEMA_DRIFT_PROBES,
     ...RATE_LIMIT_SCHEMA_DRIFT_PROBES,
     ...CARD_SERVICE_SCHEMA_DRIFT_PROBES,
+    ...CARD_SERVICE_CREDENTIALS_SCHEMA_PROBES,
 ]
 
 /**

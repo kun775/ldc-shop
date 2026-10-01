@@ -170,7 +170,7 @@ export const CARD_SERVICE_OPERATIONS_CREATE_INDEX_STATEMENTS: readonly string[] 
  *   - 没有配置行的商品走 `CARD_SERVICE_DEFAULT_SUPPLY_MODE` 兜底，
  *     因此既有商品无需任何数据回填。
  *
- * `program_key` 不是密钥（密钥在 Worker Secret 里），故可明文存库；
+ * `program_key` 不是密钥，故可明文存库；商品 Key 由 0039 独立加密保存。
  * `target_stock` 供阶段 C/E 的补货调度读取，本阶段只建列不使用。
  */
 export const CARD_SERVICE_PRODUCT_CONFIG_CREATE_TABLE_STATEMENT = `CREATE TABLE IF NOT EXISTS ${CARD_SERVICE_PRODUCT_CONFIG_TABLE} (

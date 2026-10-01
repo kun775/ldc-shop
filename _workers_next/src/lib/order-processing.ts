@@ -401,7 +401,7 @@ async function sellRemoteCardsForOrder(
             reason: "config_error",
             errorCode: "config_error",
             retryable: false,
-            detail: "LICENSE_SERVICE_BASE_URL / LICENSE_SERVICE_API_KEY is not configured",
+            detail: "License service base URL or product credential encryption is not configured",
         })
     }
 

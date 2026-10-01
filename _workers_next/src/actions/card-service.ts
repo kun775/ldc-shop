@@ -7,8 +7,8 @@
  * Server Action 的返回值不会被 Next.js 替换，因此必须由服务端自己脱敏，
  * 否则 `e.message` 会带着 SQL / 内部路径流到浏览器。
  *
- * 所有动作都先过 `checkAdmin()`，并且**不回显任何密钥**（密钥在 Worker Secret 里，
- * 面板只展示「配没配」）。
+ * 所有动作都先过 `checkAdmin()`，并且**不回显任何密钥**。
+ * 商品 Key 加密存库，面板只展示「配没配」。
  */
 
 import { revalidatePath } from 'next/cache'
@@ -20,7 +20,7 @@ import {
     isCardServiceSupplyMode,
     type CardServiceSupplyMode,
 } from '@/lib/db/license-service-schema'
-import { saveCardServiceProductConfig } from '@/lib/license-service/product-config'
+import { saveCardServiceProductConnection } from '@/lib/license-service/product-connection'
 import {
     executeOrderRevokePlan,
     loadCardServiceSnapshot,
@@ -60,6 +60,7 @@ export async function saveCardServiceProgramAction(input: {
     productId: string
     supplyMode: string
     programKey: string
+    apiKey?: string
     targetStock: string
 }): Promise<CardServiceActionResult> {
     try {
@@ -94,18 +95,24 @@ export async function saveCardServiceProgramAction(input: {
         // 准入闸门放在服务端**唯一**的写入口（`saveCardServiceProductConfig`）里：
         // 商品必须存在、不能是共享商品、切离中心供应时不能还有未结清的远端卡。
         // 前端禁用按钮只是提示，不是校验。
-        const saved = await saveCardServiceProductConfig(createD1CardServiceDatabase(), {
+        const saved = await saveCardServiceProductConnection(createD1CardServiceDatabase(), {
             productId,
             supplyMode,
             programKey: programKey || null,
             targetStock,
+            apiKey: input.apiKey,
         })
         if (!saved.ok) {
-            const errorKey = saved.reason === 'product_not_found'
-                ? 'admin.cardService.errorProductNotFound'
-                : saved.reason === 'shared_product'
-                    ? 'admin.cardService.errorSharedProduct'
-                    : 'admin.cardService.errorUnsettledRemoteCards'
+            const errorKeys = {
+                product_not_found: 'admin.cardService.errorProductNotFound',
+                shared_product: 'admin.cardService.errorSharedProduct',
+                unsettled_remote_cards: 'admin.cardService.errorUnsettledRemoteCards',
+                api_key_required: 'admin.cardService.errorApiKeyRequired',
+                invalid_api_key: 'admin.cardService.errorApiKey',
+                credential_storage_not_ready: 'admin.cardService.errorCredentialStorage',
+                encryption_secret_missing: 'admin.cardService.errorEncryptionSecret',
+            }
+            const errorKey = errorKeys[saved.reason]
             return { ok: false, errorKey, errorId: logServerError('admin.cardService.saveProgram', new Error(saved.reason)) }
         }
 
@@ -114,7 +121,7 @@ export async function saveCardServiceProgramAction(input: {
             actorType: 'admin',
             targetId: productId,
             source: 'admin.cardService',
-            metadata: { productId, supplyMode, programKey: programKey || null, targetStock },
+            metadata: { productId, supplyMode, programKey: programKey || null, targetStock, apiKeyUpdated: Boolean(input.apiKey?.trim()) },
         })
 
         revalidatePath('/admin/card-service')

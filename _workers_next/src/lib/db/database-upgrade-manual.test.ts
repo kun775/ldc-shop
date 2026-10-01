@@ -83,7 +83,7 @@ test('0037 stays on manual registered path regardless of schema version, not on 
     const ensure = functionSource(source, 'export async function ensureDatabaseInitialized()', 'async function ensureProductsColumns()')
     const preparation = functionSource(source, 'async function prepareDatabaseForManualUpgrade()', 'export async function ensureDatabaseInitialized()')
 
-    assert.match(source, /const CURRENT_SCHEMA_VERSION = 38;/)
+    assert.match(source, /const CURRENT_SCHEMA_VERSION = 39;/)
     assert.match(runner, /async '0037_product_review_aggregates_rebuild'\(\)\s*\{\s*await rebuildProductReviewAggregates\(\)/)
     assert.match(manual, /await runRegisteredDatabaseUpgrades\(\)/)
     assert.match(manual, /status\.pending === 0 && status\.running === 0/)
@@ -177,4 +177,19 @@ test('0037 single SQLite statement rolls back all product updates when one row f
         { id: 'a', rating: 99, review_count: 99 },
         { id: 'b', rating: 88, review_count: 88 },
     ])
+})
+
+
+test('0039 商品凭据升级独立于 0038，普通请求不执行 DDL', () => {
+    const source = readSource('./queries.ts')
+    const runner = functionSource(source, 'async function runRegisteredDatabaseUpgrades()', 'export async function getDatabaseUpgradeStatus()')
+    assert.match(runner, /async '0039_license_service_product_credentials'\(\) \{\s*await ensureCardServiceCredentialsStructureObjects\(\);/)
+    const ensure = functionSource(source, 'export async function ensureDatabaseInitialized()', 'async function ensureProductsColumns()')
+    assert.doesNotMatch(ensure, /ensureCardServiceCredentialsStructureObjects/)
+    const body = functionSource(source, 'async function ensureCardServiceCredentialsStructureObjects()', '// ensureStructuralSchema')
+    assert.match(body, /CARD_SERVICE_CREDENTIALS_DDL_STATEMENTS/)
+    assert.doesNotMatch(body, /setSetting|ALTER TABLE|DELETE FROM/)
+    assert.match(source, /'0039_license_service_product_credentials': cardServiceCredentials/)
+    const item = DATABASE_UPGRADE_DEFINITIONS.find((d) => d.id === '0039_license_service_product_credentials')
+    assert.equal(item?.verifiesStructure, true)
 })

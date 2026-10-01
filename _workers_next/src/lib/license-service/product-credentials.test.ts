@@ -1,0 +1,243 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { CARD_SERVICE_DDL_STATEMENTS } from '../db/license-service-schema.ts'
+import { CARD_SERVICE_CREDENTIALS_TABLE, CARD_SERVICE_CREDENTIALS_DDL_STATEMENTS, CARD_SERVICE_CREDENTIALS_SCHEMA_PROBES } from '../db/license-service-credentials-schema.ts'
+import { encryptProductApiKey, decryptProductApiKey, describeProductLicenseServiceConfig, listProductCredentialIdentities } from './credentials.ts'
+import { saveCardServiceProductConnection } from './product-connection.ts'
+import { loadCardServiceProductConfig } from './product-config.ts'
+import { createProductLicenseServiceClient } from './product-client.ts'
+import { createLicenseServiceClient, type AllocateInput, type LicenseServiceClientOptions } from './client.ts'
+import { createSqliteCardServiceDatabase, createFakeLicenseServiceClient, makeAllocationDetail, type SqliteTestContext } from './test-support.ts'
+import { restockProductCards, loadCardServiceAllocation } from './restock.ts'
+import { replenishLowStockProducts } from './replenish.ts'
+import { resolveAllocationWithRemoteState } from './reconcile.ts'
+import { executeOrderRemoteSales } from './delivery.ts'
+import { executeOrderRevokes } from './revoke.ts'
+import { LicenseServiceError } from './errors.ts'
+
+const ENV = { AUTH_SECRET: 'test-only-auth-secret', LICENSE_SERVICE_BASE_URL: 'https://lks.test', LICENSE_SERVICE_API_KEY: 'must-never-use-global-key' }
+const NOW = Date.parse('2026-10-01T08:00:00Z')
+function setup() {
+    const ctx = createSqliteCardServiceDatabase()
+    ctx.exec("INSERT INTO products(id) VALUES ('p1'), ('p2')")
+    return ctx
+}
+async function save(ctx: SqliteTestContext, productId: string, programKey: string, apiKey?: string, targetStock = 1) {
+    return saveCardServiceProductConnection(ctx.database, { productId, supplyMode: 'license_service', programKey, apiKey, targetStock }, ENV, NOW)
+}
+function fakeFactory() {
+    const events: Array<{ key: string; method: string; resource: string }> = []
+    let sequence = 0
+    const factory = (options: LicenseServiceClientOptions) => createFakeLicenseServiceClient({
+        allocate: async (raw) => {
+            const input = raw as AllocateInput
+            events.push({ key: options.apiKey, method: 'allocate', resource: input.programKey })
+            sequence += 1
+            return makeAllocationDetail({ allocationId: `alloc_${sequence}`, programKey: input.programKey, externalRef: input.externalRef,
+                cards: [{ id: `remote_${sequence}`, key: `CARD-${sequence}`, maskedKey: null }], expiresAtMs: NOW + 30 * 60_000 })
+        },
+        ack: async (raw) => {
+            const input = raw as { allocationId: string }
+            events.push({ key: options.apiKey, method: 'ack', resource: input.allocationId })
+            return { allocationId: input.allocationId, status: 'acknowledged' }
+        },
+        sell: async (raw) => {
+            const input = raw as { allocationId: string }
+            events.push({ key: options.apiKey, method: 'sell', resource: input.allocationId })
+            return { allocationId: input.allocationId, status: 'sold' }
+        },
+        getAllocation: async (id) => {
+            events.push({ key: options.apiKey, method: 'getAllocation', resource: id })
+            return makeAllocationDetail({ allocationId: id, status: 'acknowledged', expiresAtMs: NOW + 30 * 60_000 })
+        },
+        getCardStatus: async (id) => {
+            events.push({ key: options.apiKey, method: 'getCardStatus', resource: id })
+            return { cardId: id, programId: 'program', maskedKey: null, status: 'active', allocationStatus: 'acknowledged',
+                usageLimit: null, usageHeld: null, usageCommitted: null, remaining: null, createdAtMs: null }
+        },
+        revoke: async (id) => {
+            events.push({ key: options.apiKey, method: 'revoke', resource: id })
+            return { cardId: id, status: 'revoked' }
+        },
+    })
+    return { events, factory }
+}
+
+test('商品 Key 加密随机化，密文绑定商品和 Program，篡改或错误 Secret 不泄露 Key', async () => {
+    const one = await encryptProductApiKey('key-p1', 'p1', 'program-a', ENV)
+    const two = await encryptProductApiKey('key-p1', 'p1', 'program-a', ENV)
+    assert.notEqual(one, two)
+    assert.ok(!one.includes('key-p1'))
+    assert.equal(await decryptProductApiKey(one, 'p1', 'program-a', ENV), 'key-p1')
+    for (const [cipher, product, program, env] of [
+        [one, 'p2', 'program-a', ENV], [one, 'p1', 'program-b', ENV],
+        [one, 'p1', 'program-a', { ...ENV, AUTH_SECRET: 'wrong' }], ['v1.invalid.invalid', 'p1', 'program-a', ENV],
+    ] as const) {
+        await assert.rejects(() => decryptProductApiKey(cipher, product, program, env), (error: unknown) =>
+            error instanceof LicenseServiceError && error.code === 'config_error' && !JSON.stringify(error).includes('key-p1'))
+    }
+})
+
+test('连接状态依赖中心地址与加密 Secret，商品 Key 不受全局 Key 影响', () => {
+    const withoutGlobal = { AUTH_SECRET: ENV.AUTH_SECRET, LICENSE_SERVICE_BASE_URL: ENV.LICENSE_SERVICE_BASE_URL }
+    assert.equal(describeProductLicenseServiceConfig(withoutGlobal).configured, true)
+    assert.equal(describeProductLicenseServiceConfig({ LICENSE_SERVICE_BASE_URL: ENV.LICENSE_SERVICE_BASE_URL, LICENSE_SERVICE_API_KEY: 'global' }).configured, false)
+    assert.ok(!JSON.stringify(describeProductLicenseServiceConfig(ENV)).includes(ENV.AUTH_SECRET))
+})
+
+test('首次接入和新 Program 缺少 Key 时拒绝保存，原映射和库存目标保持原值', async () => {
+    const ctx = setup()
+    assert.deepEqual(await save(ctx, 'p1', 'program-a'), { ok: false, reason: 'api_key_required' })
+    assert.equal((await loadCardServiceProductConfig(ctx.database, 'p1')).configured, false)
+    assert.deepEqual(await save(ctx, 'p1', 'program-a', 'key-a'), { ok: true })
+    assert.deepEqual(await save(ctx, 'p1', 'program-b', undefined, 9), { ok: false, reason: 'api_key_required' })
+    assert.equal((await loadCardServiceProductConfig(ctx.database, 'p1')).programKey, 'program-a')
+    assert.equal((await loadCardServiceProductConfig(ctx.database, 'p1')).targetStock, 1)
+})
+
+test('空 Key 保留同商品同 Program 的凭据，修改目标库存不覆盖 Key；新 Program 保留历史 Key', async () => {
+    const ctx = setup()
+    await save(ctx, 'p1', 'program-a', 'key-a')
+    const original = ctx.get(`SELECT encrypted_api_key FROM ${CARD_SERVICE_CREDENTIALS_TABLE}`)?.encrypted_api_key
+    assert.deepEqual(await save(ctx, 'p1', 'program-a', '  ', 5), { ok: true })
+    assert.equal(ctx.get(`SELECT encrypted_api_key FROM ${CARD_SERVICE_CREDENTIALS_TABLE}`)?.encrypted_api_key, original)
+    assert.deepEqual(await save(ctx, 'p1', 'program-b', 'key-b'), { ok: true })
+    assert.equal(ctx.all(`SELECT * FROM ${CARD_SERVICE_CREDENTIALS_TABLE}`).length, 2)
+    assert.deepEqual(await save(ctx, 'p1', 'program-a'), { ok: true })
+    const status = await listProductCredentialIdentities(ctx.database)
+    assert.equal(status.ready, true)
+    assert.ok(!JSON.stringify(status).includes('encrypted_api_key'))
+    assert.ok(!JSON.stringify(status).includes('key-a'))
+})
+
+test('同名 Program 在不同商品上的 Key 独立，缺少 Key 不借用另一商品或全局凭据', async () => {
+    const ctx = setup()
+    await save(ctx, 'p1', 'same-program', 'key-p1')
+    assert.deepEqual(await save(ctx, 'p2', 'same-program'), { ok: false, reason: 'api_key_required' })
+    const f = fakeFactory()
+    const client = createProductLicenseServiceClient(ctx.database, ENV, f.factory)
+    await assert.rejects(() => client.allocate({ productId: 'p2', programKey: 'same-program', idempotencyKey: 'restock:missing:allocate' }),
+        (error: unknown) => error instanceof LicenseServiceError && error.code === 'config_error')
+    assert.equal(f.events.length, 0)
+    await save(ctx, 'p2', 'same-program', 'key-p2')
+    const fresh = createProductLicenseServiceClient(ctx.database, ENV, f.factory)
+    await fresh.allocate({ productId: 'p1', programKey: 'same-program', idempotencyKey: 'restock:p1:allocate' })
+    await fresh.allocate({ productId: 'p2', programKey: 'same-program', idempotencyKey: 'restock:p2:allocate' })
+    assert.deepEqual(f.events.map((e) => e.key), ['key-p1', 'key-p2'])
+})
+
+test('Program 和 Key 同批次保存；凭据写入失败时配置更新原子回滚', async () => {
+    const ctx = setup()
+    await save(ctx, 'p1', 'program-a', 'key-a')
+    ctx.exec(`CREATE TRIGGER reject_credentials BEFORE INSERT ON ${CARD_SERVICE_CREDENTIALS_TABLE} BEGIN SELECT RAISE(ABORT, 'test write rejected'); END`)
+    await assert.rejects(() => save(ctx, 'p1', 'program-b', 'key-b'), /test write rejected/)
+    assert.equal((await loadCardServiceProductConfig(ctx.database, 'p1')).programKey, 'program-a')
+    assert.equal(ctx.all(`SELECT * FROM ${CARD_SERVICE_CREDENTIALS_TABLE}`).length, 1)
+})
+
+test('0039 未执行、加密 Secret 缺失与非法 Key 都明确拒绝且不写配置', async () => {
+    const ctx = setup()
+    assert.deepEqual(await save(ctx, 'p1', 'program-a', 'key\nline'), { ok: false, reason: 'invalid_api_key' })
+    assert.deepEqual(await save(ctx, 'p1', 'program-a', 'x'.repeat(4097)), { ok: false, reason: 'invalid_api_key' })
+    assert.deepEqual(await saveCardServiceProductConnection(ctx.database, { productId: 'p1', supplyMode: 'license_service', programKey: 'a', apiKey: 'key', targetStock: 1 }, {}),
+        { ok: false, reason: 'encryption_secret_missing' })
+    ctx.exec(`DROP TABLE ${CARD_SERVICE_CREDENTIALS_TABLE}`)
+    assert.deepEqual(await save(ctx, 'p1', 'program-a', 'key'), { ok: false, reason: 'credential_storage_not_ready' })
+    assert.deepEqual(await listProductCredentialIdentities(ctx.database), { ready: false, identities: [] })
+    assert.equal((await loadCardServiceProductConfig(ctx.database, 'p1')).configured, false)
+})
+
+test('新增凭据迁移幂等且探针可运行，升级 0038 不会隐式建立凭据表', () => {
+    const ctx = setup()
+    ctx.exec(`DROP TABLE ${CARD_SERVICE_CREDENTIALS_TABLE}`)
+    for (const ddl of CARD_SERVICE_DDL_STATEMENTS) ctx.exec(ddl)
+    assert.equal(ctx.all("SELECT name FROM sqlite_master WHERE name = 'card_service_credentials'").length, 0)
+    for (let round = 0; round < 2; round += 1) for (const ddl of CARD_SERVICE_CREDENTIALS_DDL_STATEMENTS) ctx.exec(ddl)
+    for (const probe of CARD_SERVICE_CREDENTIALS_SCHEMA_PROBES) assert.deepEqual(ctx.all(probe), [])
+    const keys = ctx.all(`PRAGMA table_info(${CARD_SERVICE_CREDENTIALS_TABLE})`).filter((c) => Number(c.pk) > 0).map((c) => c.name)
+    assert.deepEqual(keys, ['product_id', 'program_key'])
+})
+
+test('两个商品低水位补货分别使用对应 Key 完成 Allocate 和 Ack', async () => {
+    const ctx = setup()
+    await save(ctx, 'p1', 'program-a', 'key-a')
+    await save(ctx, 'p2', 'program-b', 'key-b')
+    const f = fakeFactory()
+    const summary = await replenishLowStockProducts({ database: ctx.database,
+        client: createProductLicenseServiceClient(ctx.database, ENV, f.factory), now: () => NOW })
+    assert.equal(summary.restocked, 2)
+    assert.deepEqual(f.events.map(({ key, method }) => [key, method]), [['key-a', 'allocate'], ['key-a', 'ack'], ['key-b', 'allocate'], ['key-b', 'ack']])
+    assert.equal(ctx.all('SELECT * FROM cards').length, 2)
+})
+
+test('更换 Program 后新补货用新 Key，旧卡销售、状态查询和退款作废仍用旧 Key', async () => {
+    const ctx = setup()
+    await save(ctx, 'p1', 'program-a', 'key-a')
+    const f = fakeFactory()
+    const deps = () => ({ database: ctx.database, client: createProductLicenseServiceClient(ctx.database, ENV, f.factory), now: () => NOW })
+    const old = await restockProductCards(deps(), { productId: 'p1' })
+    assert.equal(old.status, 'restocked')
+    if (old.status !== 'restocked') return
+    await save(ctx, 'p1', 'program-b', 'key-b')
+    assert.equal((await restockProductCards(deps(), { productId: 'p1' })).status, 'restocked')
+    const row = await loadCardServiceAllocation(ctx.database, old.allocationId)
+    assert.ok(row)
+    assert.equal(await executeOrderRemoteSales(deps(), { orderId: 'order-old', groups: [{ allocationId: old.allocationId,
+        externalRef: row.externalRef, localCardIds: old.localCardIds, remoteCardIds: old.remoteCardIds, alreadySold: false }] }).then((r) => r.status), 'confirmed')
+    await deps().client.getAllocation(old.allocationId)
+    await deps().client.getCardStatus(old.remoteCardIds[0])
+    const result = await executeOrderRevokes(deps(), { orderId: 'order-old', reason: 'test refund', cards: [{
+        localCardId: old.localCardIds[0], remoteCardId: old.remoteCardIds[0], allocationId: old.allocationId, state: 'sold', alreadyRevoked: false,
+    }] })
+    assert.equal(result.revoked, 1)
+    assert.deepEqual(f.events.map(({ key, method }) => [key, method]), [
+        ['key-a', 'allocate'], ['key-a', 'ack'], ['key-b', 'allocate'], ['key-b', 'ack'],
+        ['key-a', 'sell'], ['key-a', 'getAllocation'], ['key-a', 'getCardStatus'], ['key-a', 'revoke'],
+    ])
+})
+
+test('Ack 超时留下的旧 Program 在更换 Program 后可用原 Key 对账入库', async () => {
+    const ctx = setup()
+    await save(ctx, 'p1', 'program-a', 'key-a')
+    const f = fakeFactory()
+    let failAck = true
+    const client = createProductLicenseServiceClient(ctx.database, ENV, (options) => {
+        const c = f.factory(options)
+        const ack = c.ack.bind(c)
+        c.ack = async (input) => {
+            if (failAck) throw new LicenseServiceError({ code: 'timeout' })
+            return ack(input)
+        }
+        return c
+    })
+    const deps = { database: ctx.database, client, now: () => NOW, policy: { maxAttempts: 1 } }
+    const pending = await restockProductCards(deps, { productId: 'p1' })
+    assert.equal(pending.status, 'deferred')
+    if (pending.status !== 'deferred') return
+    await save(ctx, 'p1', 'program-b', 'key-b')
+    failAck = false
+    const row = await loadCardServiceAllocation(ctx.database, pending.allocationId)
+    assert.ok(row)
+    assert.equal(await resolveAllocationWithRemoteState(deps, row), 'acknowledged')
+    assert.ok(f.events.every((e) => e.key === 'key-a'))
+    assert.equal(ctx.all('SELECT * FROM cards').length, 1)
+})
+
+test('真实请求头分别使用商品 Key，本地 productId 不改变中心接口请求体', async () => {
+    const ctx = setup()
+    await save(ctx, 'p1', 'program-a', 'key-a')
+    await save(ctx, 'p2', 'program-b', 'key-b')
+    const captured: Array<{ auth: string | null; body: Record<string, unknown> }> = []
+    const fetchImpl = (async (_url: RequestInfo | URL, init: RequestInit = {}) => {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        captured.push({ auth: new Headers(init.headers).get('Authorization'), body })
+        return Response.json({ ok: true, data: { allocation_id: `allocation-${captured.length}`, program_id: 'program-id', program_key: body.program_key,
+            external_ref: '', quantity: 1, status: 'allocated', cards: [{ id: 'card-id', key: 'CARD-KEY', masked_key: null }],
+            expires_at: '2026-10-01T08:30:00Z', created_at: '2026-10-01T08:00:00Z', acknowledged_at: null } })
+    }) as typeof fetch
+    const client = createProductLicenseServiceClient(ctx.database, ENV, (options) => createLicenseServiceClient({ ...options, fetchImpl }))
+    await client.allocate({ productId: 'p1', programKey: 'program-a', idempotencyKey: 'restock:p1:allocate' })
+    await client.allocate({ productId: 'p2', programKey: 'program-b', idempotencyKey: 'restock:p2:allocate' })
+    assert.deepEqual(captured.map((c) => c.auth), ['Bearer key-a', 'Bearer key-b'])
+    assert.deepEqual(captured.map((c) => Object.keys(c.body).sort()), [['program_key', 'quantity'], ['program_key', 'quantity']])
+})

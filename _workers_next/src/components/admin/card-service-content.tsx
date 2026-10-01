@@ -40,7 +40,7 @@ const SELECT_CLASS = 'h-9 rounded-md border border-border/70 bg-background px-2 
 
 /** 草稿里「接入新商品」这一条用的哨兵键，商品此时还未选择。 */
 const NEW_PRODUCT_KEY = '__new__'
-const EMPTY_DRAFT: ProductDraft = { productId: '', supplyMode: 'license_service', programKey: '', targetStock: '' }
+const EMPTY_DRAFT: ProductDraft = { productId: '', supplyMode: 'license_service', programKey: '', apiKey: '', targetStock: '' }
 
 function formatDateTime(value: number | null) {
     if (!value) return '-'
@@ -101,6 +101,7 @@ interface ProductDraft {
     productId: string
     supplyMode: string
     programKey: string
+    apiKey: string
     targetStock: string
 }
 
@@ -109,6 +110,7 @@ function draftForProduct(product: CardServiceProductStatus): ProductDraft {
         productId: product.productId,
         supplyMode: product.supplyMode,
         programKey: product.programKey ?? '',
+        apiKey: '',
         targetStock: product.targetStock === null ? '' : String(product.targetStock),
     }
 }
@@ -133,7 +135,7 @@ export function CardServiceContent({
     const overview = snapshot?.overview ?? null
     const review = snapshot?.review ?? null
     const configStatus = snapshot?.configStatus ?? null
-    const enabled = overview?.enabled ?? false
+    const enabled = (overview?.enabled ?? false) && (snapshot?.credentialStorageReady ?? false)
 
     const refresh = () => {
         startRefresh(async () => {
@@ -170,8 +172,10 @@ export function CardServiceContent({
                 }
                 const next = await loadCardServiceSnapshotAction()
                 setSnapshot(next)
-                setDrafts({})
-                setEditingId(null)
+                if (result.ok) {
+                    setDrafts({})
+                    setEditingId(null)
+                }
             } catch (error) {
                 console.error('[CardService] action failed:', error)
                 toast.error(t('common.error'))
@@ -270,9 +274,9 @@ export function CardServiceContent({
                         <div className="mt-0.5 break-all font-mono text-xs text-foreground">{!configStatus ? t('admin.cardService.config.unknown') : configStatus.baseUrl ?? t('admin.cardService.config.notSet')}</div>
                     </div>
                     <div className="rounded-md border border-border/50 px-3 py-2">
-                        <div className="text-[11px] text-muted-foreground">{t('admin.cardService.config.apiKey')}</div>
+                        <div className="text-[11px] text-muted-foreground">{t('admin.cardService.config.encryption')}</div>
                         <div className="mt-0.5 text-xs font-medium text-foreground">
-                            {!configStatus ? t('admin.cardService.config.unknown') : configStatus.apiKeyPresent ? t('admin.cardService.config.present') : t('admin.cardService.config.missing')}
+                            {!configStatus ? t('admin.cardService.config.unknown') : configStatus.encryptionReady ? t('admin.cardService.config.present') : t('admin.cardService.config.missing')}
                         </div>
                     </div>
                 </div>
@@ -285,7 +289,7 @@ export function CardServiceContent({
                 <p className="text-[11px] text-muted-foreground">{t('admin.cardService.config.secretNote')}</p>
             </section>
 
-            {overview && !enabled ? (
+            {overview && !overview.enabled ? (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
                     {t('admin.cardService.config.disabled')}
                 </div>
@@ -554,6 +558,12 @@ export function CardServiceContent({
                 ) : null}
             </section>
 
+            {snapshot && !snapshot.credentialStorageReady ? (
+                <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                    {t('admin.cardService.errorCredentialStorage')}
+                </p>
+            ) : null}
+
             {/* 商品维度：Program 映射、目标库存、库存水位与补货入口。 */}
             <section className="space-y-3">
                 <div className="space-y-1">
@@ -600,6 +610,19 @@ export function CardServiceContent({
                         />
                     </label>
                     <label className="space-y-1 text-[11px] text-muted-foreground">
+                        <span className="block">{t('admin.cardService.products.apiKey')}</span>
+                        <Input
+                            className="h-9 w-52 font-mono text-xs"
+                            type="password"
+                            autoComplete="new-password"
+                            maxLength={4096}
+                            value={newDraft.apiKey}
+                            placeholder={t('admin.cardService.products.apiKeyPlaceholder')}
+                            disabled={busy}
+                            onChange={(event) => patchDraft(NEW_PRODUCT_KEY, { apiKey: event.target.value })}
+                        />
+                    </label>
+                    <label className="space-y-1 text-[11px] text-muted-foreground">
                         <span className="block">{t('admin.cardService.products.targetStock')}</span>
                         <Input
                             className="h-9 w-28 tabular-nums"
@@ -614,13 +637,14 @@ export function CardServiceContent({
                     </label>
                     <Button
                         size="sm"
-                        disabled={busy || !enabled || !selectedProductAvailable || !newDraft.programKey.trim()}
+                        disabled={busy || !enabled || !selectedProductAvailable || !newDraft.programKey.trim() || !newDraft.apiKey.trim()}
                         onClick={() => runTask(
                             `save:${NEW_PRODUCT_KEY}`,
                             () => saveCardServiceProgramAction({
                                 productId: newDraft.productId.trim(),
                                 supplyMode: 'license_service',
                                 programKey: newDraft.programKey,
+                                apiKey: newDraft.apiKey,
                                 targetStock: newDraft.targetStock,
                             }),
                             'admin.cardService.products.added',
@@ -661,6 +685,7 @@ export function CardServiceContent({
                                         </div>
                                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
                                             <span>{t('admin.cardService.products.programKey')}：<span className="font-mono">{product.programKey ?? '-'}</span></span>
+                                            <span>{t('admin.cardService.products.apiKey')}：{t(product.apiKeyPresent ? 'admin.cardService.config.present' : 'admin.cardService.config.missing')}</span>
                                             <span>{t('admin.cardService.products.targetStock')}：<span className="tabular-nums">{product.targetStock ?? t('admin.cardService.products.defaultTargetStock')}</span></span>
                                             <span>{t('admin.cardService.products.sold')}：<span className="tabular-nums">{product.soldCount}</span></span>
                                             <span>{t('admin.cardService.products.localSellable')}：<span className="tabular-nums">{product.localSellableCards}</span></span>
@@ -678,7 +703,7 @@ export function CardServiceContent({
                                         <Button
                                             variant="outline"
                                             size="sm"
-                                            disabled={busy}
+                                            disabled={busy || !enabled || !product.apiKeyPresent}
                                             onClick={() => runTask(
                                                 `restock:${product.productId}`,
                                                 () => restockCardServiceProductAction(product.productId),
@@ -756,6 +781,22 @@ export function CardServiceContent({
                                             />
                                         </label>
                                         <label className="space-y-1 text-[11px] text-muted-foreground">
+                                            <span className="block">{t('admin.cardService.products.apiKey')}</span>
+                                            <Input
+                                                className="h-9 w-52 font-mono text-xs"
+                                                type="password"
+                                                autoComplete="new-password"
+                                                maxLength={4096}
+                                                value={draft.apiKey}
+                                                placeholder={t(draft.programKey === product.programKey && product.apiKeyPresent
+                                                    ? 'admin.cardService.products.apiKeyKeepPlaceholder'
+                                                    : 'admin.cardService.products.apiKeyPlaceholder')}
+                                                disabled={busy}
+                                                onChange={(event) => patchDraft(product.productId, { apiKey: event.target.value })}
+                                            />
+                                        </label>
+                                        <p className="max-w-sm pb-1 text-[11px] text-muted-foreground">{t('admin.cardService.products.apiKeyHint')}</p>
+                                        <label className="space-y-1 text-[11px] text-muted-foreground">
                                             <span className="block">{t('admin.cardService.products.targetStock')}</span>
                                             <Input
                                                 className="h-9 w-28 tabular-nums"
@@ -778,6 +819,7 @@ export function CardServiceContent({
                                                         productId: product.productId,
                                                         supplyMode: draft.supplyMode,
                                                         programKey: draft.programKey,
+                                                        apiKey: draft.apiKey,
                                                         targetStock: draft.targetStock,
                                                     }),
                                                     'admin.cardService.products.saved',

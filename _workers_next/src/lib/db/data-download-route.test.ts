@@ -302,3 +302,35 @@ test('缺表在发出 200 前失败，流中断后无结束标志且读取抛错
         return true
     })
 })
+
+
+test('0039 商品凭据密文进入全量 JSON 和 SQL 备份，恢复后仍能解密；未升级不阻断导出', async () => {
+    const { encryptProductApiKey, decryptProductApiKey } = await import('../license-service/credentials.ts')
+    const env = { AUTH_SECRET: 'backup-test-secret' }
+    const encrypted = await encryptProductApiKey('private-product-key', 'p1', 'program-a', env)
+    const { sqlite, request } = setup()
+    sqlite.prepare('INSERT INTO card_service_credentials (product_id, program_key, encrypted_api_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .run('p1', 'program-a', encrypted, 1000, 1000)
+    const json = await request('json')
+    assert.equal(json.status, 200)
+    const text = await json.text()
+    assert.ok(!text.includes('private-product-key'))
+    assert.equal(JSON.parse(text).card_service_credentials[0].encryptedApiKey, encrypted)
+    const sqlResponse = await request('sql')
+    assert.equal(sqlResponse.status, 200)
+    const sqlText = await sqlResponse.text()
+    assert.ok(!sqlText.includes('private-product-key'))
+    const insert = sqlText.split('\n').find((line) => line.startsWith('INSERT OR IGNORE INTO card_service_credentials'))
+    assert.ok(insert)
+    const restored = new DatabaseSync(':memory:')
+    restored.exec('CREATE TABLE card_service_credentials (product_id TEXT, program_key TEXT, encrypted_api_key TEXT, created_at INTEGER, updated_at INTEGER)')
+    restored.exec(insert)
+    const row = restored.prepare('SELECT encrypted_api_key FROM card_service_credentials').get() as { encrypted_api_key: string }
+    assert.equal(await decryptProductApiKey(row.encrypted_api_key, 'p1', 'program-a', env), 'private-product-key')
+    restored.close()
+    sqlite.exec('DROP TABLE card_service_credentials')
+    const absent = await request('json')
+    assert.equal(absent.status, 200)
+    assert.ok(absent.headers.get('X-Export-Missing-Optional-Tables')?.includes('card_service_credentials'))
+    assert.equal((await absent.json()).card_service_credentials, null)
+})

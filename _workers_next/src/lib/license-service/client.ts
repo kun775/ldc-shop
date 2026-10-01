@@ -58,6 +58,8 @@ export interface LicenseServiceClientOptions {
 }
 
 export interface AllocateInput {
+    /** 仅本地凭据路由使用，不发送给中心。 */
+    productId?: string
     programKey: string
     quantity?: number
     externalRef?: string

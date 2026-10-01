@@ -36,6 +36,7 @@ import {
     CARD_SERVICE_DDL_STATEMENTS,
     CARD_SERVICE_REQUIRED_INDEX_NAMES,
 } from "./license-service-schema";
+import { CARD_SERVICE_CREDENTIALS_DDL_STATEMENTS, CARD_SERVICE_CREDENTIALS_SCHEMA_PROBES } from "./license-service-credentials-schema";
 import { executeDatabaseUpgrades, ensureDatabaseMigrationsTable, readDatabaseUpgradeStatus } from "./database-upgrades";
 import { supportsRegisteredDatabaseUpgrades, type DatabaseUpgradeHealth } from "./database-upgrade-registry";
 import { isMissingRelationError } from "./schema-errors";
@@ -50,7 +51,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 38;
+const CURRENT_SCHEMA_VERSION = 39;
 const dbInitializationState = createAsyncOnceState();
 const databaseUpgradePreparationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
@@ -280,6 +281,17 @@ async function verifyCardServiceStructure(): Promise<boolean> {
     }
 }
 
+async function verifyCardServiceCredentialsStructure(): Promise<boolean> {
+    for (const probe of CARD_SERVICE_CREDENTIALS_SCHEMA_PROBES) {
+        try {
+            await db.run(sql.raw(probe));
+        } catch (error: unknown) {
+            if (isSchemaDriftError(error)) return false;
+        }
+    }
+    return true;
+}
+
 async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth> {
     const [
         baseline,
@@ -292,6 +304,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         reviewOrderId,
         rateLimit,
         cardService,
+        cardServiceCredentials,
     ] = await Promise.all([
         verifyBaselineDatabaseStructure(),
         verifyPointLedgerStructure(),
@@ -303,6 +316,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         verifyReviewOrderIdStructure(),
         verifyRateLimitStructure(),
         verifyCardServiceStructure(),
+        verifyCardServiceCredentialsStructure(),
     ]);
     return {
         '0028_database_upgrade_registry': baseline,
@@ -316,6 +330,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         '0036_rate_limit_counters': rateLimit,
         '0037_product_review_aggregates_rebuild': true, // 纯数据修复，没有结构探针。
         '0038_license_service_ledger': cardService,
+        '0039_license_service_product_credentials': cardServiceCredentials,
     };
 }
 
@@ -607,6 +622,12 @@ async function ensureCardServiceStructureObjects() {
     }
 }
 
+async function ensureCardServiceCredentialsStructureObjects() {
+    for (const statement of CARD_SERVICE_CREDENTIALS_DDL_STATEMENTS) {
+        await db.run(sql.raw(statement));
+    }
+}
+
 // ensureStructuralSchema 确保所有表、列与索引等结构对象存在（全部幂等）。
 // 只能从管理员手动升级路径调用，普通页面访问不得触发此函数。
 //
@@ -691,6 +712,9 @@ async function runRegisteredDatabaseUpgrades() {
                 // 与 0030/0036 同一理由 —— 不复用 ensureStructuralSchema，
                 // 避免「只为建几张新表」在 D1 上重跑全部结构 DDL。
                 await ensureCardServiceStructureObjects();
+            },
+            async '0039_license_service_product_credentials'() {
+                await ensureCardServiceCredentialsStructureObjects();
             },
         },
         verifyStructures: verifyDatabaseUpgradeStructures,
@@ -1012,6 +1036,7 @@ async function prepareDatabaseForManualUpgrade() {
         await ensureCouponTables();
         await ensureManualStockTriggers();
         await ensureCardServiceStructureObjects();
+        await ensureCardServiceCredentialsStructureObjects();
         await ensureUserPointLedgerSchema({ force: true });
         await ensureDatabaseMigrationsTable();
         await backfillProductAggregates();

@@ -722,6 +722,7 @@ export async function restockProductCards(
     try {
         allocation = await runWithRetry(
             () => deps.client.allocate({
+                productId: intent.productId,
                 programKey: intent.programKey,
                 quantity: intent.quantity,
                 externalRef: intent.externalRef,

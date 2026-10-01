@@ -31,6 +31,7 @@ import {
   cardServiceCards,
   cardServiceOperations,
   cardServiceProductConfigs,
+  cardServiceCredentials,
 } from "@/lib/db/schema"
 import { and, desc, eq, getTableColumns, getTableName, gt, inArray, lt, notInArray, or, sql } from "drizzle-orm"
 import { integer, primaryKey, sqliteTable, text, type AnySQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core"
@@ -193,6 +194,7 @@ const FULL_EXPORT_TABLES: ExportTableSpec[] = [
   { table: cardServiceCards, keys: ["localCardId"], optional: true },
   { table: cardServiceOperations, keys: ["operationKey"], optional: true },
   { table: cardServiceProductConfigs, keys: ["productId"], optional: true },
+  { table: cardServiceCredentials, keys: ["productId", "programKey"], optional: true },
   { table: auditEvents, keys: ["id"] },
   { table: platformErrorLogs, keys: ["id"] },
   { table: rateLimitCounters, keys: ["bucket", "subject", "window_start"], optional: true },

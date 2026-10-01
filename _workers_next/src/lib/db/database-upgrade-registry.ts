@@ -68,6 +68,12 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
         description: '新增 card_service_allocations / card_service_staged_cards / card_service_cards / card_service_operations / card_service_product_configs 五张表，建立远端补货任务、不可售暂存、本地卡映射、待重试操作与商品供应模式的持久化基础。',
         verifiesStructure: true,
     },
+    {
+        id: '0039_license_service_product_credentials',
+        name: '卡密中心商品独立凭据',
+        description: '新增商品与 Program 的加密 API Key 存储；保留历史 Program 凭据，补货、销售、对账和作废按商品分别认证。',
+        verifiesStructure: true,
+    },
 ] as const
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']

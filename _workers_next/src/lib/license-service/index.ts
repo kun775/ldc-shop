@@ -1,7 +1,7 @@
 /**
  * 通用卡密服务接入的对外入口（阶段 C）。
  *
- * 这一层只做「装配」：把 `process.env` 里的凭据、D1 绑定与业务参数拼成
+ * 这一层只做「装配」：把商品独立凭据、D1 绑定与业务参数拼成
  * 各子模块需要的依赖。业务逻辑一律在纯模块里（`client.ts` / `contract.ts` /
  * `restock.ts` / `reconcile.ts`），因此本文件不做源码级单测，改由这些模块的
  * 单测覆盖。
@@ -11,14 +11,9 @@
  * 定时任务在缺配置时直接跳过。
  */
 
-import { createLicenseServiceClient, type LicenseServiceClient } from './client.ts'
-import {
-    LICENSE_SERVICE_CONFIG_FAILURE_MESSAGES,
-    describeLicenseServiceConfig,
-    resolveLicenseServiceConfig,
-    type LicenseServiceConfig,
-    type LicenseServiceConfigStatus,
-} from './config.ts'
+import type { LicenseServiceClient } from './client.ts'
+import { createProductLicenseServiceClient } from './product-client.ts'
+import { describeProductLicenseServiceConfig, listProductCredentialIdentities, type ProductLicenseServiceConfigStatus } from './credentials.ts'
 import { createD1CardServiceDatabase } from './database.ts'
 import type { CardServiceDatabase } from './db-port.ts'
 import { resolveAffectedProductIds } from './affected-products.ts'
@@ -26,7 +21,7 @@ import { resolveAffectedProductIds } from './affected-products.ts'
 // 允许依赖它、也是唯一能依赖它的地方：子模块必须保持「纯端口」，才能被
 // `node --test` 直接加载。
 import { getProducts, recalcProductAggregatesForMany } from '@/lib/db/queries'
-import { LicenseServiceError, type LicenseServiceErrorCode } from './errors.ts'
+import type { LicenseServiceErrorCode } from './errors.ts'
 import {
     replenishLowStockProducts,
     type ReplenishOptions,
@@ -155,9 +150,9 @@ export {
     partitionDeletableLocalCardIds,
 } from './guards.ts'
 
-/** 是否具备调用中心的最小配置（Base URL + API Key）。 */
+/** 是否具备中心地址与凭据加密配置；具体商品 Key 在请求时按归属解析。 */
 export function isLicenseServiceConfigured(env: Record<string, string | undefined> = process.env): boolean {
-    return resolveLicenseServiceConfig(env).ok
+    return describeProductLicenseServiceConfig(env).configured
 }
 
 /**
@@ -197,19 +192,8 @@ async function recalcStockForRevokedCards(
     await recalcStorefrontStock(productIds)
 }
 
-function requireLicenseServiceConfig(env: Record<string, string | undefined>): LicenseServiceConfig {
-    const resolved = resolveLicenseServiceConfig(env)
-    if (!resolved.ok) {
-        throw new LicenseServiceError({
-            code: 'config_error',
-            cause: LICENSE_SERVICE_CONFIG_FAILURE_MESSAGES[resolved.reason],
-        })
-    }
-    return resolved.config
-}
-
 export function getLicenseServiceClient(env: Record<string, string | undefined> = process.env): LicenseServiceClient {
-    return createLicenseServiceClient(requireLicenseServiceConfig(env))
+    return createProductLicenseServiceClient(createD1CardServiceDatabase(), env)
 }
 
 /** 组装补货/对账所需的依赖。 */
@@ -237,7 +221,7 @@ export function buildOrderSaleDeps(env: Record<string, string | undefined> = pro
 /**
  * 组装退款作废所需的依赖。
  *
- * 与销售、补货共用 `LICENSE_SERVICE_API_KEY`，该 Key 需包含 `cards:revoke` 权限。
+ * 按卡的历史商品和 Program 读取 Key，该 Key 需包含 `cards:revoke` 权限。
  * 凭据缺失不会在这里抛错，纯本地订单的退款不应被中心配置问题挡住。
  * 远端作废失败由 `executeOrderRevokes` 留在运维面板的复核清单里。
  */
@@ -278,7 +262,8 @@ export interface CardServiceSnapshot {
     overview: CardServiceOverview
     review: CardServiceReviewQueue
     products: CardServiceProductStatus[]
-    configStatus: LicenseServiceConfigStatus
+    configStatus: ProductLicenseServiceConfigStatus
+    credentialStorageReady: boolean
     productOptions: Array<{ id: string; name: string }>
 }
 
@@ -290,19 +275,24 @@ export interface CardServiceSnapshot {
  * 等于凭空开一个后门。服务端页面与动作各自加上自己的鉴权后调用它。
  */
 export async function loadCardServiceSnapshot(): Promise<CardServiceSnapshot> {
-    const [overview, review, products, allProducts] = await Promise.all([
+    const [overview, review, products, allProducts, credentials] = await Promise.all([
         getCardServiceOverview(),
         getCardServiceReviewQueue(),
         getCardServiceProductStatus(),
         getProducts(),
+        listProductCredentialIdentities(createD1CardServiceDatabase()),
     ])
     const connectedProductIds = new Set(products.map((product) => product.productId))
 
     return {
         overview,
         review,
-        products,
-        configStatus: describeLicenseServiceConfig(),
+        products: products.map((product) => ({
+            ...product,
+            apiKeyPresent: credentials.identities.some((item) => item.product_id === product.productId && item.program_key === product.programKey),
+        })),
+        configStatus: describeProductLicenseServiceConfig(),
+        credentialStorageReady: credentials.ready,
         productOptions: allProducts
             .filter((product) => !product.isShared && !connectedProductIds.has(product.id))
             .map((product) => ({ id: product.id, name: product.name })),
@@ -404,13 +394,8 @@ export async function executeOrderRevokePlan(
     env: Record<string, string | undefined> = process.env,
 ): Promise<RevokeOutcome> {
     const database = createD1CardServiceDatabase()
-    const resolved = resolveLicenseServiceConfig(env)
-    const outcome = resolved.ok
-        ? await executeOrderRevokes(
-            { client: createLicenseServiceClient(resolved.config), database },
-            input,
-        )
-        // 缺凭据也要落账（意图 + 隔离），因此同样改了本地卡池 → 同样要重算。
+    const outcome = isLicenseServiceConfigured(env)
+        ? await executeOrderRevokes({ client: createProductLicenseServiceClient(database, env), database }, input)
         : await failRevokesWithoutClient(database, {
             orderId: input.orderId,
             cards: input.cards,

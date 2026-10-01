@@ -16,6 +16,7 @@
  */
 
 import { createRequire } from 'node:module'
+import { CARD_SERVICE_CREDENTIALS_DDL_STATEMENTS } from '../db/license-service-credentials-schema.ts'
 import { CARD_SERVICE_DDL_STATEMENTS } from '../db/license-service-schema.ts'
 import type {
     CardServiceDatabase,
@@ -115,7 +116,7 @@ export interface SqliteTestContext {
 export function createSqliteCardServiceDatabase(): SqliteTestContext {
     const sqlite = new DatabaseSync(':memory:')
     for (const statement of CORE_TABLE_STATEMENTS) sqlite.exec(statement)
-    for (const statement of CARD_SERVICE_DDL_STATEMENTS) sqlite.exec(statement)
+    for (const statement of [...CARD_SERVICE_DDL_STATEMENTS, ...CARD_SERVICE_CREDENTIALS_DDL_STATEMENTS]) sqlite.exec(statement)
 
     let pendingWriteError: Error | null = null
 

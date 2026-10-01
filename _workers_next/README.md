@@ -195,6 +195,8 @@ npx wrangler r2 bucket create ldc-shop-files
 > ⚠️ **重要**: 若 GitHub 用户需要管理员权限，`ADMIN_USERS` 中**必须**填写 `gh_GitHub用户名`（例如 `gh_octocat`），不能只写原始 GitHub 用户名。
 > ⚠️ **重要**: DEX 登录仅用于后台管理员（见下方「DEX 单点登录」）。
 
+**卡密中心（可选）：** 配置 `LICENSE_SERVICE_BASE_URL` 后，在后台执行数据库升级项 `0039`，再为每个商品分别填写 Program 和对应的 API Key。商品 Key 加密保存，不再共用全局 Key；配置、历史卡处理和备份恢复见 [商品独立 API Key](docs/CARD_SERVICE_PRODUCT_KEYS.md)。
+
 **回调地址配置：**
 
 假设你的 Workers 域名是 `https://ldc-shop.xxx.workers.dev`：

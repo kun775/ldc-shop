@@ -164,6 +164,8 @@ export interface CardServiceProductStatus {
     soldCount: number
     supplyMode: CardServiceSupplyMode
     programKey: string | null
+    /** 由装配层填充，只显示配置状态，不携带凭据。 */
+    apiKeyPresent?: boolean
     targetStock: number | null
     /** 本地可售卡（未使用、未预留）。 */
     localSellableCards: number

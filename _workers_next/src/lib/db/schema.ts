@@ -435,3 +435,12 @@ export const cardServiceProductConfigs = sqliteTable('card_service_product_confi
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
 });
+
+// 只保存密文；按商品和 Program 保留历史凭据，用于旧卡销售及作废。
+export const cardServiceCredentials = sqliteTable('card_service_credentials', {
+    productId: text('product_id').notNull(),
+    programKey: text('program_key').notNull(),
+    encryptedApiKey: text('encrypted_api_key').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+}, (table) => [primaryKey({ columns: [table.productId, table.programKey] })]);

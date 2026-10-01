@@ -15,6 +15,7 @@ import {
     type CardServiceSupplyMode,
 } from '../db/license-service-schema.ts'
 import { isMissingTableError, type CardServiceDatabase } from './db-port.ts'
+import { buildSaveCredentialStatement } from './credentials.ts'
 
 export interface CardServiceProductConfig {
     productId: string
@@ -109,7 +110,7 @@ export async function countUnsettledRemoteMappings(
 
 export type CardServiceConfigSaveResult =
     | { ok: true }
-    | { ok: false; reason: 'product_not_found' | 'shared_product' | 'unsettled_remote_cards' }
+    | { ok: false; reason: 'product_not_found' | 'shared_product' | 'unsettled_remote_cards' | 'api_key_required' | 'invalid_api_key' | 'credential_storage_not_ready' | 'encryption_secret_missing' }
 
 /**
  * 读取单个商品的供应配置。
@@ -166,6 +167,7 @@ export async function saveCardServiceProductConfig(
         supplyMode: CardServiceSupplyMode
         programKey?: string | null
         targetStock?: number | null
+        encryptedApiKey?: string
     },
     nowMs: number = Date.now(),
 ): Promise<CardServiceConfigSaveResult> {
@@ -197,7 +199,9 @@ export async function saveCardServiceProductConfig(
             nowMs,
             nowMs,
         ],
-    }])
+    }, ...(config.encryptedApiKey && config.programKey
+        ? [buildSaveCredentialStatement(config.productId, config.programKey, config.encryptedApiKey, nowMs)]
+        : [])])
 
     return { ok: true }
 }
