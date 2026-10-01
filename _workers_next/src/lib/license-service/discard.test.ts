@@ -147,11 +147,11 @@ for (const [label, sql] of [
     ['订单已交付', "UPDATE orders SET status = 'delivered'"],
     ['订单有交付时间', 'UPDATE orders SET delivered_at = 2'],
     ['订单存有卡密', "UPDATE orders SET card_key = 'delivered-key'"],
-    ['订单存有卡ID', "UPDATE orders SET card_ids = '[2]'"],
-    ['另一个订单引用逗号分隔卡ID', `INSERT INTO orders (order_id, product_id, product_name, amount, card_ids)
-        VALUES ('another', 'product', 'Product', '1', '12,2,31')`],
-    ['另一个订单引用卡ID', `INSERT INTO orders (order_id, product_id, product_name, amount, card_ids)
-        VALUES ('another', 'product', 'Product', '1', '[2]')`],
+    ['已交付订单存有卡ID', "UPDATE orders SET status = 'delivered', card_ids = '[2]'"],
+    ['另一个订单引用逗号分隔卡ID', `INSERT INTO orders (order_id, product_id, product_name, amount, status, card_ids)
+        VALUES ('another', 'product', 'Product', '1', 'delivered', '12,2,31')`],
+    ['另一个订单引用卡ID', `INSERT INTO orders (order_id, product_id, product_name, amount, status, card_ids)
+        VALUES ('another', 'product', 'Product', '1', 'delivered', '[2]')`],
     ['另一个订单引用明文卡', `INSERT INTO orders (order_id, product_id, product_name, amount, card_key)
         VALUES ('another', 'product', 'Product', '1', 'KEY-2')`],
     ['预留给另一个正在履约的订单', `INSERT INTO orders (order_id, product_id, product_name, amount, status)
@@ -192,6 +192,7 @@ for (const [label, sql] of [
 test('删除途中失败：整批回滚卡密、映射、任务和丢弃标记', async () => {
     const ctx = createSqliteCardServiceDatabase()
     seed(ctx)
+    ctx.exec("UPDATE orders SET card_ids = '1,2'")
     ctx.exec(`CREATE TRIGGER stop_delete BEFORE DELETE ON card_service_cards
         BEGIN SELECT RAISE(ABORT, 'simulated deletion failure'); END`)
     const before = snapshot(ctx)
@@ -247,3 +248,16 @@ test('丢弃后旧 Sell 计划不能重建待办或再次调用中心', async ()
     assert.equal(client.calls.length, 0)
     assert.deepEqual(snapshot(ctx), before)
 })
+
+for (const cardIds of ['1,2', '[1,2]', '1,3,2']) {
+    test(`未交付预留引用 ${cardIds}：丢弃失败批次并保留其他卡ID`, async () => {
+        const ctx = createSqliteCardServiceDatabase()
+        seed(ctx)
+        ctx.exec(`UPDATE orders SET amount = '0', trade_no = 'POINTS_REDEMPTION', card_ids = '${cardIds}'`)
+        const before = ctx.get('SELECT * FROM orders')!
+        assert.equal((await discardFailedAllocation(ctx.database, 'failed')).ok, true)
+        assert.deepEqual({ ...ctx.get('SELECT * FROM orders') }, { ...before, card_ids: cardIds.includes('3') ? '3' : null })
+        const plan = await loadOrderRemoteSalePlan(ctx.database, { orderId: 'order', localCardIds: [] })
+        assert.notEqual(plan.kind, 'blocked')
+    })
+}

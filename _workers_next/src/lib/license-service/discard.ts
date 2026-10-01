@@ -7,7 +7,7 @@ export type DiscardFailedAllocationResult =
 /**
  * 管理员确认后整批丢弃 not_found 的失败 Ack / Sell。
  * 原子批次先重新校验并认领分配，后续删除只接受本次随机标记，避免读取后
- * 订单开始履约或卡已交付时误删。保留分配终态以阻止旧任务重新入库，订单不变。
+ * 订单开始履约或卡已交付时误删。保留分配终态以阻止旧任务重新入库，清理未交付订单的失效预留引用。
  */
 export async function discardFailedAllocation(
     database: CardServiceDatabase,
@@ -51,27 +51,46 @@ export async function discardFailedAllocation(
                           OR m.product_id <> a.product_id OR c.product_id <> a.product_id
                           OR COALESCE(c.is_used, 0) <> 0 OR c.used_at IS NOT NULL))
                   AND NOT EXISTS (SELECT 1 FROM orders o
-                      WHERE (
-                          (o.status IN ('processing', 'delivered') OR o.delivered_at IS NOT NULL
-                            OR COALESCE(o.card_key, '') <> '' OR COALESCE(o.card_ids, '') NOT IN ('', '[]'))
-                          AND (o.order_id IN (SELECT op.order_id FROM card_service_operations op
-                                  WHERE op.operation IN ('ack', 'sell') AND op.resource_id = a.allocation_id)
-                              OR o.order_id IN (SELECT c.reserved_order_id FROM cards c
-                                  JOIN card_service_cards m ON m.local_card_id = c.id
-                                  WHERE m.allocation_id = a.allocation_id))
-                      ) OR EXISTS (SELECT 1 FROM card_service_cards m
-                          WHERE m.allocation_id = a.allocation_id AND (
-                              instr(',' || replace(COALESCE(o.card_ids, ''), ' ', '') || ',',
-                                    ',' || m.local_card_id || ',') > 0
-                              OR EXISTS (SELECT 1 FROM json_each(
-                                  CASE WHEN json_valid(o.card_ids) THEN o.card_ids ELSE '[]' END) j
-                                  WHERE CAST(j.value AS TEXT) = CAST(m.local_card_id AS TEXT))))
-                        OR EXISTS (SELECT 1 FROM cards c
-                          JOIN card_service_cards m ON m.local_card_id = c.id
-                          WHERE m.allocation_id = a.allocation_id AND c.card_key <> ''
-                            AND instr(char(10) || COALESCE(o.card_key, '') || char(10),
-                                      char(10) || c.card_key || char(10)) > 0))`,
+                      WHERE (o.status IN ('processing', 'delivered') OR o.delivered_at IS NOT NULL
+                              OR COALESCE(o.card_key, '') <> '')
+                        AND (o.order_id IN (SELECT op.order_id FROM card_service_operations op
+                                WHERE op.operation IN ('ack', 'sell') AND op.resource_id = a.allocation_id)
+                            OR o.order_id IN (SELECT c.reserved_order_id FROM cards c
+                                JOIN card_service_cards m ON m.local_card_id = c.id
+                                WHERE m.allocation_id = a.allocation_id)
+                            OR EXISTS (SELECT 1 FROM card_service_cards m
+                                WHERE m.allocation_id = a.allocation_id AND (
+                                    instr(',' || replace(COALESCE(o.card_ids, ''), ' ', '') || ',',
+                                          ',' || m.local_card_id || ',') > 0
+                                    OR EXISTS (SELECT 1 FROM json_each(
+                                        CASE WHEN json_valid(o.card_ids) THEN o.card_ids ELSE '[]' END) j
+                                        WHERE CAST(j.value AS TEXT) = CAST(m.local_card_id AS TEXT))))
+                            OR EXISTS (SELECT 1 FROM cards c
+                                JOIN card_service_cards m ON m.local_card_id = c.id
+                                WHERE m.allocation_id = a.allocation_id AND c.card_key <> ''
+                                  AND instr(char(10) || COALESCE(o.card_key, '') || char(10),
+                                            char(10) || c.card_key || char(10)) > 0)))`,
             params: [marker, nowMs, target.allocation_id, target.product_id, operationKey],
+        },
+        {
+            sql: `UPDATE orders AS o SET card_ids = (
+                SELECT group_concat(j.value, ',') FROM json_each(
+                    CASE WHEN json_valid(o.card_ids) AND substr(trim(o.card_ids), 1, 1) = '['
+                        THEN o.card_ids
+                        WHEN json_valid('[' || COALESCE(o.card_ids, '') || ']')
+                        THEN '[' || COALESCE(o.card_ids, '') || ']' ELSE '[]' END) j
+                WHERE CAST(j.value AS TEXT) NOT IN (
+                    SELECT CAST(local_card_id AS TEXT) FROM card_service_cards WHERE allocation_id = ?))
+                WHERE o.status NOT IN ('processing', 'delivered') AND o.delivered_at IS NULL
+                  AND COALESCE(o.card_key, '') = '' AND ${fence}
+                  AND EXISTS (SELECT 1 FROM json_each(
+                    CASE WHEN json_valid(o.card_ids) AND substr(trim(o.card_ids), 1, 1) = '['
+                        THEN o.card_ids
+                        WHEN json_valid('[' || COALESCE(o.card_ids, '') || ']')
+                        THEN '[' || COALESCE(o.card_ids, '') || ']' ELSE '[]' END) j
+                    JOIN card_service_cards m ON CAST(j.value AS TEXT) = CAST(m.local_card_id AS TEXT)
+                    WHERE m.allocation_id = ?)`,
+            params: [target.allocation_id, ...fenceParams, target.allocation_id],
         },
         {
             sql: `DELETE FROM cards WHERE id IN (
@@ -107,7 +126,7 @@ export async function discardFailedAllocation(
         ok: true,
         allocationId: target.allocation_id,
         productId: target.product_id,
-        deletedCards: results[1]?.changes ?? 0,
-        deletedStagedCards: results[2]?.changes ?? 0,
+        deletedCards: results[2]?.changes ?? 0,
+        deletedStagedCards: results[3]?.changes ?? 0,
     }
 }
