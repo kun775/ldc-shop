@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server"
-import { getSetting } from "@/lib/db/queries"
+import { db } from "@/lib/db"
+import { settings } from "@/lib/db/schema"
+import { inArray } from "drizzle-orm"
 import { buildDefaultLogoSvg } from "@/lib/default-logo"
 import { resolveEffectiveShopLogo } from "@/lib/shop-logo"
 
@@ -59,17 +61,14 @@ export async function GET(request: Request) {
   let shopName = ""
   let instanceId = ""
   try {
-    const [logo, logoSource, updatedAt, name, registryInstanceId] = await Promise.all([
-      getSetting("shop_logo"),
-      getSetting("shop_logo_source"),
-      getSetting("shop_logo_updated_at"),
-      getSetting("shop_name"),
-      getSetting("registry_instance_id"),
-    ])
-    target = resolveEffectiveShopLogo(logo, logoSource).effectiveLogo
-    logoUpdatedAt = updatedAt
-    shopName = (name || "").trim()
-    instanceId = (registryInstanceId || "").trim()
+    // 只读取图标需要的五项配置，不加载业务查询/迁移模块。
+    const rows = await db.select({ key: settings.key, value: settings.value }).from(settings)
+      .where(inArray(settings.key, ["shop_logo", "shop_logo_source", "shop_logo_updated_at", "shop_name", "registry_instance_id"]))
+    const values = Object.fromEntries(rows.map((row) => [row.key, row.value]))
+    target = resolveEffectiveShopLogo(values.shop_logo, values.shop_logo_source).effectiveLogo
+    logoUpdatedAt = values.shop_logo_updated_at ?? null
+    shopName = (values.shop_name || "").trim()
+    instanceId = (values.registry_instance_id || "").trim()
   } catch {
     // Best effort: fall back to the deterministic generated logo.
   }
@@ -77,7 +76,6 @@ export async function GET(request: Request) {
   const requestHost = new URL(request.url).host
   const generatedSeed = [instanceId, shopName, requestHost].filter(Boolean).join("|") || "ldc-shop"
   const generatedKey = `generated:${generatedSeed}`
-  const decoded = target.startsWith("data:") ? decodeImageDataUrl(target) : null
 
   // Redirect remote custom logos so the browser fetches them directly. This preserves the
   // administrator-selected favicon without turning the Worker into a server-side fetch proxy.
@@ -96,14 +94,15 @@ export async function GET(request: Request) {
     }
   }
 
+  // 命中时直接复用解码结果；完整原值作为身份，避免同长度图片串缓存。
+  const cacheKey = `data:${logoUpdatedAt || ""}:${target}`
+  const now = Date.now()
+  if (target.startsWith("data:") && cached && cached.url === cacheKey && cached.expiresAt > now) {
+    return withCacheHeaders(cached.body, cached.contentType)
+  }
+  const decoded = target.startsWith("data:") ? decodeImageDataUrl(target) : null
   if (!decoded) {
     return renderGeneratedLogo(generatedSeed, generatedKey)
-  }
-
-  const cacheKey = `data:${logoUpdatedAt || ""}:${target.length}`
-  const now = Date.now()
-  if (cached && cached.url === cacheKey && cached.expiresAt > now) {
-    return withCacheHeaders(cached.body, cached.contentType)
   }
 
   cached = {

@@ -72,6 +72,17 @@ async function runScheduledCrons(env, ctx) {
 
 export default {
     async fetch(request, env, ctx) {
+        // 图标别名直接跳转，避免为一次别名解析加载 Next 服务端处理器。
+        if (request.method === "GET" || request.method === "HEAD") {
+            const url = new URL(request.url);
+            if (url.pathname === "/favicon.ico") {
+                url.pathname = "/favicon";
+                return new Response(null, {
+                    status: 307,
+                    headers: { Location: url.toString(), "Cache-Control": "public, max-age=86400" },
+                });
+            }
+        }
         return nextWorker.fetch(request, env, ctx);
     },
     async scheduled(event, env, ctx) {
