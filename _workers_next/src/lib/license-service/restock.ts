@@ -444,7 +444,7 @@ export function buildMaterializeStatements(input: {
         {
             sql: `UPDATE ${CARD_SERVICE_ALLOCATIONS_TABLE}
                 SET state = 'acknowledged', acked_at = ?, last_error_code = NULL, updated_at = ?
-                WHERE allocation_id = ?`,
+                WHERE allocation_id = ? AND COALESCE(last_error_code, '') <> 'manually_discarded'`,
             params: [nowMs, nowMs, allocationId],
         },
         {
@@ -476,7 +476,7 @@ export function buildDiscardAllocationStatements(input: {
         {
             sql: `UPDATE ${CARD_SERVICE_ALLOCATIONS_TABLE}
                 SET state = ?, last_error_code = ?, updated_at = ?
-                WHERE allocation_id = ?`,
+                WHERE allocation_id = ? AND COALESCE(last_error_code, '') <> 'manually_discarded'`,
             params: [state, errorCode, nowMs, allocationId],
         },
         {
@@ -502,7 +502,7 @@ export function buildDeferAckStatements(input: {
         {
             sql: `UPDATE ${CARD_SERVICE_ALLOCATIONS_TABLE}
                 SET last_error_code = ?, updated_at = ?
-                WHERE allocation_id = ?`,
+                WHERE allocation_id = ? AND COALESCE(last_error_code, '') <> 'manually_discarded'`,
             params: [input.errorCode, input.nowMs, input.allocationId],
         },
         {
@@ -540,7 +540,7 @@ export function buildFailAckStatements(input: {
         {
             sql: `UPDATE ${CARD_SERVICE_ALLOCATIONS_TABLE}
                 SET last_error_code = ?, updated_at = ?
-                WHERE allocation_id = ?`,
+                WHERE allocation_id = ? AND COALESCE(last_error_code, '') <> 'manually_discarded'`,
             params: [input.errorCode, input.nowMs, input.allocationId],
         },
         {
@@ -647,12 +647,16 @@ export async function ackAndMaterializeAllocation(
     }
 
     const nowMs = now()
-    await deps.database.write(buildMaterializeStatements({
+    const results = await deps.database.write(buildMaterializeStatements({
         allocationId: row.allocationId,
         productId: row.productId,
         ackOperationKey: row.ackKey,
         nowMs,
     }))
+    // 远端响应晚于手动丢弃时，写回被终态守卫挡住，不能报告已补货。
+    if (!results[3]?.changes) {
+        return { status: 'expired', allocationId: row.allocationId, errorCode: 'allocation_cancelled' }
+    }
 
     return {
         status: 'acknowledged',

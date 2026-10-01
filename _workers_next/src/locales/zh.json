@@ -1153,7 +1153,12 @@
                 "retryDelivery": "重试履约",
                 "retryRevoke": "重试作废",
                 "retryDeliveryDone": "已重试履约",
-                "retryRevokeDone": "已重试作废"
+                "retryRevokeDone": "已重试作废",
+                "discard": "手动丢弃",
+                "discardTitle": "丢弃整个失败批次？",
+                "discardDescription": "批次：{{allocationId}}。确认 Program 和 Key 正确、该批次在卡密中心已不存在后再丢弃。此操作永久删除该批次的本地卡密、暂存和重试记录，保留订单。已交付、已使用或正在履约的卡不可丢弃。补充有效库存后，可重新重试履约。",
+                "discardDone": "已丢弃失败批次，关联订单已保留",
+                "discardBlocked": "无法丢弃：记录已变化、不是 not_found 失败批次，或存在已使用、已交付、正在履约的卡。请刷新后核查。"
             },
             "retryByOrder": {
                 "title": "按订单号重试履约",

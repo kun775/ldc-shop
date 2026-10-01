@@ -13,9 +13,11 @@ import {
     RefreshCw,
     RotateCcw,
     Truck,
+    Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
+    discardCardServiceFailedAllocationAction,
     loadCardServiceSnapshotAction,
     restockCardServiceProductAction,
     retryCardServiceDeliveryAction,
@@ -26,6 +28,7 @@ import {
 } from '@/actions/card-service'
 import { AdminPageShell } from '@/components/admin/admin-page-shell'
 import { Badge } from '@/components/ui/badge'
+import { useConfirm } from '@/components/confirm-dialog-provider'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useI18n } from '@/lib/i18n/context'
@@ -123,6 +126,7 @@ export function CardServiceContent({
     initialErrorId?: string | null
 }) {
     const { t } = useI18n()
+    const { confirm } = useConfirm()
     const [snapshot, setSnapshot] = useState(initialSnapshot)
     const [pageErrorId, setPageErrorId] = useState(initialErrorId)
     const [refreshing, startRefresh] = useTransition()
@@ -427,6 +431,9 @@ export function CardServiceContent({
                     ) : review.failedOperations.map((row: PendingOperationDetail) => {
                         const isSell = row.operation === 'sell'
                         const isRevoke = row.operation === 'revoke'
+                        const canDiscard = (isSell || row.operation === 'ack')
+                            && row.lastErrorCode === 'not_found'
+                            && (row.state === 'failed' || row.state === 'abandoned')
                         const taskKey = `${row.operationKey}`
                         return (
                             <div key={row.operationKey} className="flex flex-col gap-3 border-b border-border/50 px-4 py-3 last:border-b-0 md:flex-row md:items-start md:justify-between">
@@ -469,6 +476,34 @@ export function CardServiceContent({
                                                 ? <Loader2 className="h-4 w-4 animate-spin" />
                                                 : <Truck className="h-4 w-4" />}
                                             {t('admin.cardService.review.retryDelivery')}
+                                        </Button>
+                                    ) : null}
+                                    {canDiscard ? (
+                                        <Button
+                                            variant="destructive"
+                                            size="sm"
+                                            disabled={busy}
+                                            onClick={async () => {
+                                                const accepted = await confirm({
+                                                    title: t('admin.cardService.review.discardTitle'),
+                                                    description: t('admin.cardService.review.discardDescription', { allocationId: row.resourceId }),
+                                                    variant: 'destructive',
+                                                    icon: 'trash',
+                                                    confirmText: t('admin.cardService.review.discard'),
+                                                    cancelText: t('common.cancel'),
+                                                })
+                                                if (!accepted) return
+                                                runTask(
+                                                    `discard:${taskKey}`,
+                                                    () => discardCardServiceFailedAllocationAction(row.operationKey),
+                                                    'admin.cardService.review.discardDone',
+                                                )
+                                            }}
+                                        >
+                                            {busyKey === `discard:${taskKey}`
+                                                ? <Loader2 className="h-4 w-4 animate-spin" />
+                                                : <Trash2 className="h-4 w-4" />}
+                                            {t('admin.cardService.review.discard')}
                                         </Button>
                                     ) : null}
                                     {isRevoke && row.orderId ? (

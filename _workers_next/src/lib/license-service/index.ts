@@ -56,6 +56,8 @@ import {
     type RestockResult,
 } from './restock.ts'
 import type { OrderSaleDeps } from './delivery.ts'
+import { discardFailedAllocation } from './discard.ts'
+import type { DiscardFailedAllocationResult } from './discard.ts'
 
 export type { ReplenishOptions, ReplenishSummary } from './replenish.ts'
 export type { ReconcileSummary, ReconcileOutcome } from './reconcile.ts'
@@ -432,6 +434,13 @@ export function planOrderRevokeBatchStatements(input: {
         query: statement.sql,
         ...(statement.params ? { bindings: statement.params } : {}),
     }))
+}
+
+/** 手动丢弃只访问本地数据库；清理卡池后统一刷新商品库存。 */
+export async function discardCardServiceFailedAllocation(operationKey: string): Promise<DiscardFailedAllocationResult> {
+    const result = await discardFailedAllocation(createD1CardServiceDatabase(), operationKey)
+    if (result.ok) await recalcStorefrontStock([result.productId])
+    return result
 }
 
 /** 配置错误码集合；保留旧版 revoke_key_missing，以识别账本中的历史失败。 */

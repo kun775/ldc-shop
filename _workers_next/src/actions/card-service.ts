@@ -22,6 +22,7 @@ import {
 } from '@/lib/db/license-service-schema'
 import { saveCardServiceProductConnection } from '@/lib/license-service/product-connection'
 import {
+    discardCardServiceFailedAllocation,
     executeOrderRevokePlan,
     loadCardServiceSnapshot,
     reloadRevokePlan,
@@ -180,6 +181,34 @@ export async function retryCardServiceDeliveryAction(orderId: string): Promise<C
             : { ok: false, errorKey: 'admin.cardService.retryDeliveryPending', errorId: '' }
     } catch (error) {
         return failure('admin.cardService.retryDelivery', error)
+    }
+}
+
+/** 经管理员确认，删除 not_found 失败批次的本地卡密及待办，保留订单。 */
+export async function discardCardServiceFailedAllocationAction(operationKey: string): Promise<CardServiceActionResult> {
+    try {
+        await checkAdmin()
+        const key = typeof operationKey === 'string' ? operationKey.trim() : ''
+        if (!key || key.length > 512) return { ok: false, errorKey: 'admin.cardService.review.discardBlocked', errorId: '' }
+        const result = await discardCardServiceFailedAllocation(key)
+        if (!result.ok) return { ok: false, errorKey: 'admin.cardService.review.discardBlocked', errorId: '' }
+
+        await recordAuditEvent({
+            eventName: 'cardService.allocation.discarded',
+            actorType: 'admin',
+            targetId: result.allocationId,
+            source: 'admin.cardService',
+            metadata: { operationKey: key, allocationId: result.allocationId, productId: result.productId,
+                deletedCards: result.deletedCards, deletedStagedCards: result.deletedStagedCards },
+        })
+        revalidatePath('/admin/card-service')
+        revalidatePath('/admin/cards')
+        revalidatePath('/admin/products')
+        revalidatePath('/admin/orders')
+        revalidatePath('/')
+        return { ok: true }
+    } catch (error) {
+        return failure('admin.cardService.discard', error)
     }
 }
 

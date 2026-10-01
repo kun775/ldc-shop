@@ -1153,7 +1153,12 @@
                 "retryDelivery": "Retry fulfillment",
                 "retryRevoke": "Retry revoke",
                 "retryDeliveryDone": "Fulfillment retried",
-                "retryRevokeDone": "Revoke retried"
+                "retryRevokeDone": "Revoke retried",
+                "discard": "Discard manually",
+                "discardTitle": "Discard this entire failed batch?",
+                "discardDescription": "Batch: {{allocationId}}. Check the Program and Key and confirm that the batch no longer exists in the card service. This permanently deletes its local cards, staged cards and retry records, while keeping orders. Used, delivered or currently fulfilling cards cannot be discarded. Restock valid cards before retrying fulfillment.",
+                "discardDone": "Failed batch discarded; associated orders kept",
+                "discardBlocked": "Cannot discard: the record changed, is not a not_found failure, or has used, delivered or currently fulfilling cards. Refresh and review."
             },
             "retryByOrder": {
                 "title": "Retry fulfillment by order ID",

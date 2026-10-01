@@ -482,13 +482,16 @@ export function buildSellIntentStatements(input: {
         sql: `INSERT OR IGNORE INTO ${CARD_SERVICE_OPERATIONS_TABLE}
             (operation_key, operation, resource_id, order_id, state, attempts,
              next_retry_at, request_id, last_error_code, created_at, updated_at)
-            VALUES (?, '${CARD_SERVICE_OPERATION_SELL}', ?, ?, 'pending', 0, NULL, NULL, NULL, ?, ?)`,
+            SELECT ?, '${CARD_SERVICE_OPERATION_SELL}', ?, ?, 'pending', 0, NULL, NULL, NULL, ?, ?
+            WHERE NOT EXISTS (SELECT 1 FROM ${CARD_SERVICE_ALLOCATIONS_TABLE}
+                WHERE allocation_id = ? AND last_error_code = 'manually_discarded')`,
         params: [
             buildSellIdempotencyKey(group.allocationId, input.orderId),
             group.allocationId,
             input.orderId,
             input.nowMs,
             input.nowMs,
+            group.allocationId,
         ],
     }))
 }
@@ -742,6 +745,16 @@ export async function executeOrderRemoteSales(
     }))
 
     for (const group of pending) {
+        // 旧计划晚于手动丢弃时，不重建任务，也不再销售已移除的批次。
+        const discarded = await deps.database.query(
+            `SELECT 1 FROM ${CARD_SERVICE_ALLOCATIONS_TABLE}
+             WHERE allocation_id = ? AND last_error_code = 'manually_discarded' LIMIT 1`,
+            [group.allocationId],
+        )
+        if (discarded.length) {
+            return { status: 'blocked', reason: 'allocation_unusable', allocationId: group.allocationId,
+                errorCode: 'manually_discarded', category: null, error: null }
+        }
         try {
             await runWithRetry(
                 () => deps.client.sell({
