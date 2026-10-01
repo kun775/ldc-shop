@@ -241,7 +241,11 @@ export function AdminRefundsContent({ requests }: { requests: RefundRequestRow[]
                         tradeNo: r.tradeNo,
                         amount: r.amount,
                         status: r.orderStatus,
-                        cardKey: r.cardKey
+                        pointsUsed: r.pointsUsed,
+                        userId: r.orderUserId,
+                        paidAt: r.paidAt,
+                        deliveredAt: r.deliveredAt,
+                        createdAt: r.orderCreatedAt
                       }} />
                     )}
                   </div>

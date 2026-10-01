@@ -43,8 +43,9 @@ export default async function AdminOrdersPage(props: {
     }
     if (q) {
         const like = `%${q}%`
+        const orderIdLike = `%${q.replace(/^(?:POINTS_REDEMPTION|ZERO_PRICE):(.+)$/, '$1')}%`
         whereParts.push(or(
-            sql`${orders.orderId} LIKE ${like}`,
+            sql`${orders.orderId} LIKE ${orderIdLike}`,
             sql`${orders.productName} LIKE ${like}`,
             sql`COALESCE(${orders.username}, '') LIKE ${like}`,
             sql`COALESCE(${orders.email}, '') LIKE ${like}`,

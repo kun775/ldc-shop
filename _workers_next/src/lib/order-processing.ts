@@ -1,3 +1,4 @@
+import { buildZeroPriceTradeNo, getOrderDisplayTradeNo } from '@/lib/orders/trade-number'
 import { randomUUID } from "crypto"
 import { db } from "@/lib/db"
 import { orders, cards, products, loginUsers as users } from "@/lib/db/schema"
@@ -723,7 +724,7 @@ export async function completePaidOrderDelivery(orderId: string): Promise<Automa
         return { orderStatus: "processing", delivered: false, cardKeys: "", deliveryNote: "" }
     }
 
-    const tradeNo = existing.tradeNo || "POINTS_REDEMPTION"
+    const tradeNo = getOrderDisplayTradeNo(existing) || buildZeroPriceTradeNo(orderId, existing.pointsUsed ?? 0)
     try {
         const delivery = await deliverAutomatedCardOrder(existing, claimId, tradeNo)
         if (delivery.delivered) {

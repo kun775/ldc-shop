@@ -349,3 +349,15 @@ test('0038 已建表但缺 product_id 列时不误伤（按缺列放行），不
 
     assert.equal(await productHasUnsettledCardServiceLedger(missingColumnDatabase, PRODUCT_ID), false)
 })
+
+for (const pending of [false, true]) {
+    test(`已作废映射的订单：${pending ? '仍有作废待办时拒绝删除' : '无待办时可删除'}`, async () => {
+        const ctx = createSqliteCardServiceDatabase()
+        seedCard(ctx, 1)
+        seedMapping(ctx, { localCardId: 1, remoteCardId: 'remote-1', state: 'revoked', orderId: 'ORDER-1' })
+        if (pending) seedOperation(ctx, 'ORDER-1', 'failed', 'revoke')
+        assert.equal(await orderHasRemoteMappings(ctx.database, 'ORDER-1'), false)
+        assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'ORDER-1'), pending)
+        assert.deepEqual(await listProtectedLocalCardIds(ctx.database, [1]), [1])
+    })
+}

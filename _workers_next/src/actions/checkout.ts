@@ -1,5 +1,6 @@
 'use server'
 
+import { buildZeroPriceTradeNo } from '@/lib/orders/trade-number'
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { products, cards, orders, loginUsers } from "@/lib/db/schema"
@@ -521,7 +522,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         username: normalizedUsername,
                         status: 'paid',
                         paidAt: new Date(),
-                        tradeNo: 'POINTS_REDEMPTION',
+                        tradeNo: buildZeroPriceTradeNo(orderId, pointsToUse),
                         pointsUsed: pointsToUse,
                         quantity: qty,
                         manualStockQuantity: qty,
@@ -551,7 +552,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         deliveryNote: automaticDeliveryNote || null,
                         paidAt: new Date(),
                         deliveredAt: new Date(),
-                        tradeNo: 'POINTS_REDEMPTION',
+                        tradeNo: buildZeroPriceTradeNo(orderId, pointsToUse),
                         pointsUsed: pointsToUse,
                         quantity: qty,
                         manualStockQuantity: 0,
@@ -579,7 +580,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         cardIds: cardIdsValue,
                         deliveryNote: null,
                         paidAt: new Date(),
-                        tradeNo: 'POINTS_REDEMPTION',
+                        tradeNo: buildZeroPriceTradeNo(orderId, pointsToUse),
                         pointsUsed: pointsToUse,
                         quantity: qty,
                         manualStockQuantity: 0,
@@ -686,7 +687,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                             amount: pointsToUse.toString() + ' (积分)',
                             username: normalizedUsername,
                             email: contactInfo || user?.email,
-                            tradeNo: 'POINTS_REDEMPTION',
+                            tradeNo: buildZeroPriceTradeNo(orderId, pointsToUse),
                             checkoutFieldValues: checkoutFieldValuesJson
                         });
                         console.log('[Checkout] Points payment notification sent successfully');

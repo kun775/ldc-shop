@@ -80,10 +80,10 @@ export async function partitionDeletableLocalCardIds(
 }
 
 /**
- * 这笔订单是否仍持有远端映射。
+ * 这笔订单是否仍持有未作废的远端映射。
  *
  * 用于拒绝物理删除订单：订单行是退款、作废与对账的追溯起点，映射本身虽然独立
- * 存表，但丢掉订单会让「这笔映射属于哪笔业务」只能靠人工比对。
+ * 存表，已作废且无待办时可以删除订单；其余映射丢掉订单会让「这笔映射属于哪笔业务」只能靠人工比对。
  */
 export async function orderHasRemoteMappings(
     database: CardServiceDatabase,
@@ -94,7 +94,7 @@ export async function orderHasRemoteMappings(
 
     try {
         const rows = await database.query<{ local_card_id?: unknown }>(
-            `SELECT local_card_id FROM ${CARD_SERVICE_CARDS_TABLE} WHERE order_id = ? LIMIT 1`,
+            `SELECT local_card_id FROM ${CARD_SERVICE_CARDS_TABLE} WHERE order_id = ? AND COALESCE(state, '') <> 'revoked' LIMIT 1`,
             [id],
         )
         return rows.length > 0

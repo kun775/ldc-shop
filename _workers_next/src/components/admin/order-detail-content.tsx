@@ -1,5 +1,6 @@
 'use client'
 
+import { getOrderDisplayTradeNo } from '@/lib/orders/trade-number'
 import Link from "next/link"
 import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
@@ -463,7 +464,7 @@ export function AdminOrderDetailContent({ order }: { order: any }) {
 
             <div className="space-y-1">
               <div className="text-sm text-muted-foreground">{t('admin.orders.tradeNo')}</div>
-              {order.tradeNo ? <CopyButton text={order.tradeNo} /> : <div className="text-muted-foreground">-</div>}
+              {order.tradeNo ? <CopyButton text={getOrderDisplayTradeNo(order) || ''} /> : <div className="text-muted-foreground">-</div>}
             </div>
 
             {!isManual && (

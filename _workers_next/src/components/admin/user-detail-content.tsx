@@ -1,5 +1,6 @@
 'use client'
 
+import { getOrderDisplayTradeNo } from '@/lib/orders/trade-number'
 import Link from "next/link"
 import { useState } from "react"
 import { toggleBlock } from "@/actions/admin-users"
@@ -304,7 +305,7 @@ export function AdminUserDetailContent(props: {
                                         <div>{t("admin.users.orderDetail.email")}: {order.email || "-"}</div>
                                         <div className="space-y-1">
                                             <div>{t("admin.users.orderDetail.tradeNo")}</div>
-                                            {order.tradeNo ? <CopyButton text={order.tradeNo} truncate maxLength={28} /> : <div>-</div>}
+                                            {order.tradeNo ? <CopyButton text={getOrderDisplayTradeNo(order) || ''} truncate maxLength={28} /> : <div>-</div>}
                                         </div>
                                         <div className="space-y-1">
                                             <div>{t("admin.users.orderDetail.cardKey")}</div>

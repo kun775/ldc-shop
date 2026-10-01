@@ -10,6 +10,8 @@
  *   3. 本目录的 order-definition-codes.test.ts。
  */
 export const ORDER_ERROR_CODES = {
+    refundNotAllowed: 'admin.orders.refundNotAllowed',
+    deleteBlocked: 'admin.orders.deleteBlocked',
     deliveryContentRequired: 'admin.orders.deliveryContentRequired',
     deliveryNoteTooLong: 'admin.orders.deliveryNoteTooLong',
     deliveryTooManyFiles: 'admin.orders.deliveryTooManyFiles',
@@ -27,6 +29,8 @@ export type OrderErrorCode = (typeof ORDER_ERROR_CODES)[keyof typeof ORDER_ERROR
  * 无法预先映射，交由客户端 fallback（common.error + errorId）处理。
  */
 export const ORDER_ERROR_KEY_MAP: Record<string, string> = {
+    [ORDER_ERROR_CODES.refundNotAllowed]: ORDER_ERROR_CODES.refundNotAllowed,
+    [ORDER_ERROR_CODES.deleteBlocked]: ORDER_ERROR_CODES.deleteBlocked,
     [ORDER_ERROR_CODES.deliveryContentRequired]: 'admin.orders.deliveryContentRequired',
     [ORDER_ERROR_CODES.deliveryNoteTooLong]: 'admin.orders.deliveryNoteTooLong',
     [ORDER_ERROR_CODES.deliveryTooManyFiles]: 'admin.orders.deliveryTooManyFiles',

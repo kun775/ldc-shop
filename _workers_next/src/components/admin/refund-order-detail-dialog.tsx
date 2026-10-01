@@ -1,5 +1,6 @@
 'use client'
 
+import { getOrderDisplayTradeNo } from '@/lib/orders/trade-number'
 import Link from "next/link"
 import { AlertCircle, ArrowUpRight } from "lucide-react"
 import { useI18n } from "@/lib/i18n/context"
@@ -143,7 +144,7 @@ export function RefundOrderDetailDialog({
                 <span className="break-all">{order.email || '-'}</span>
               </DetailItem>
               <DetailItem label={t('admin.orders.tradeNo')}>
-                {order.tradeNo ? <CopyButton text={order.tradeNo} compact /> : '-'}
+                {order.tradeNo ? <CopyButton text={getOrderDisplayTradeNo(order) || ''} compact /> : '-'}
               </DetailItem>
               <DetailItem label={t('admin.orders.fulfillmentTitle')}>
                 {order.fulfillmentMode === 'manual'

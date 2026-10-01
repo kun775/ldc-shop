@@ -34,7 +34,7 @@ import { orderHasUnsettledCardServiceLedger } from "@/lib/license-service/guards
  *   由服务端完成脱敏并附带可对账的 errorId。
  */
 export type OrderActionResult =
-    | { ok: true; skippedRemoteMapped?: number }
+    | { ok: true; skippedRemoteMapped?: number; deletedCount?: number; skippedOrderIds?: string[] }
     | { ok: false; errorKey: string; errorId: string }
 
 function failure(scope: string, error: unknown): OrderActionResult {
@@ -396,8 +396,10 @@ async function deleteOneOrder(orderId: string): Promise<{ deleted: boolean; bloc
     return { deleted: false, blockedByRemoteMapping: true }
   }
 
-  // Refund points if used
-  if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
+  if (order.status === 'processing') return { deleted: false, blockedByRemoteMapping: true }
+
+  // 已退款订单已通过退款积分账本结算，不以删除事件再次返还。
+  if (order.status !== 'refunded' && order.userId && order.pointsUsed && order.pointsUsed > 0) {
     await ensurePointLedgerUserRecord({
       userId: order.userId,
       username: order.username ?? null,
@@ -445,8 +447,8 @@ async function deleteOneOrder(orderId: string): Promise<{ deleted: boolean; bloc
   }
 
   await deleteDeliveryFiles(orderId)
-  await db.delete(orders).where(eq(orders.orderId, orderId))
-  return { deleted: true, blockedByRemoteMapping: false }
+  const deleted = await db.delete(orders).where(eq(orders.orderId, orderId)).returning({ orderId: orders.orderId })
+  return { deleted: deleted.length > 0, blockedByRemoteMapping: false }
 }
 
 export async function deleteOrder(orderId: string): Promise<OrderActionResult> {
@@ -458,7 +460,9 @@ export async function deleteOrder(orderId: string): Promise<OrderActionResult> {
       where: eq(orders.orderId, orderId),
       columns: { productId: true, userId: true }
     })
-    await deleteOneOrder(orderId)
+    const result = await deleteOneOrder(orderId)
+    if (result.blockedByRemoteMapping) return { ok: false, errorKey: 'admin.orders.deleteBlocked', errorId: '' }
+    if (!result.deleted) return { ok: false, errorKey: 'admin.orders.orderMissing', errorId: '' }
 
     revalidatePath('/admin/orders')
     revalidatePath('/admin/users')
@@ -487,17 +491,21 @@ export async function deleteOrder(orderId: string): Promise<OrderActionResult> {
 export async function deleteOrders(orderIds: string[]): Promise<OrderActionResult> {
   try {
     await checkAdmin()
-    const ids = (orderIds || []).map((s) => String(s).trim()).filter(Boolean)
-    if (!ids.length) return { ok: true }
+    const ids = [...new Set((orderIds || []).map((s) => String(s).trim()).filter(Boolean))]
+    if (!ids.length) return { ok: true, deletedCount: 0, skippedOrderIds: [] }
 
     const touchedProducts: string[] = []
     let skippedRemoteMapped = 0
+    let deletedCount = 0
+    const skippedOrderIds: string[] = []
 
     for (const id of ids) {
       const order = await db.query.orders.findFirst({ where: eq(orders.orderId, id), columns: { productId: true } })
       if (order?.productId) touchedProducts.push(order.productId)
       // 仍持有远端映射的订单不删：跳过而不是抛错，否则一单被拦会带崩整批删除。
       const result = await deleteOneOrder(id)
+      if (result.deleted) deletedCount += 1
+      else skippedOrderIds.push(id)
       if (result.blockedByRemoteMapping) skippedRemoteMapped += 1
     }
 
@@ -513,7 +521,7 @@ export async function deleteOrders(orderIds: string[]): Promise<OrderActionResul
     } catch {
       // best effort
     }
-    return skippedRemoteMapped > 0 ? { ok: true, skippedRemoteMapped } : { ok: true }
+    return { ok: true, deletedCount, skippedRemoteMapped, skippedOrderIds }
   } catch (error) {
     return failure('admin.deleteOrders', error)
   }

@@ -1,5 +1,6 @@
 'use client'
 
+import { getOrderDisplayTradeNo } from '@/lib/orders/trade-number'
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useI18n } from "@/lib/i18n/context"
 import Link from "next/link"
@@ -235,8 +236,16 @@ export function AdminOrdersContent({
             const result = await deleteOrders(selectedIds)
             if (!mountedRef.current) return
             if (result.ok) {
-                toast.success(t('common.success'))
-                setSelected({})
+                const skipped = result.skippedOrderIds ?? []
+                const deleted = result.deletedCount ?? 0
+                if (skipped.length) {
+                    const message = deleted > 0
+                        ? t('admin.orders.deletePartial', { deleted, skipped: skipped.length })
+                        : t('admin.orders.deleteBlocked')
+                    if (deleted > 0) toast.warning(message)
+                    else toast.error(message)
+                } else if (deleted > 0) toast.success(t('common.success'))
+                setSelected(Object.fromEntries(skipped.map((id) => [id, true])))
                 router.refresh()
             } else if (result.errorId) {
                 toast.error(`${t(result.errorKey)} · ${t('common.errorIdLabel')} ${result.errorId}`)
@@ -574,7 +583,7 @@ export function AdminOrdersContent({
                                                     {order.tradeNo ? (
                                                         <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                                                             <span className="shrink-0 text-muted-foreground/55">{t('admin.orders.tradeNo')}</span>
-                                                            <CopyButton text={order.tradeNo} compact />
+                                                            <CopyButton text={getOrderDisplayTradeNo(order) || ''} compact />
                                                         </div>
                                                     ) : null}
                                                 </div>
