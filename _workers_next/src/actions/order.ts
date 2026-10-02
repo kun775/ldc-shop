@@ -41,7 +41,7 @@ export async function checkOrderStatus(orderId: string) {
         return { success: false, error: 'Unauthorized' }
     }
 
-    if (order.status === 'paid' || order.status === 'delivered') {
+    if (order.status === 'paid' || order.status === 'processing' || order.status === 'delivered') {
         return { success: true, status: order.status }
     }
 
@@ -61,7 +61,7 @@ export async function checkOrderStatus(orderId: string) {
 
             revalidatePath(`/order/${orderId}`)
             if (fulfillment.status === 'processing') {
-                return { success: false, status: 'pending' }
+                return { success: true, status: 'processing' }
             }
             return { success: true, status: fulfillment.orderStatus || 'paid' }
         }
@@ -69,6 +69,14 @@ export async function checkOrderStatus(orderId: string) {
         return { success: false, status: 'pending' }
 
     } catch (e: any) {
+        // 发货异常可能发生在付款落库之后，不能再把已付款订单报告为未支付。
+        const latest = await withOrderColumnFallback(() => db.query.orders.findFirst({
+            where: eq(orders.orderId, orderId), columns: { status: true },
+        })).catch(() => null)
+        if (latest && ['paid', 'processing', 'delivered'].includes(latest.status || '')) {
+            revalidatePath(`/order/${orderId}`)
+            return { success: true, status: latest.status }
+        }
         console.error("Check order status failed", e)
         return { success: false, error: sanitizeClientErrorMessage(e?.message, 'common.error') }
     }

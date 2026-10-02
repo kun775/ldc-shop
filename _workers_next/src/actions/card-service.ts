@@ -29,6 +29,7 @@ import {
     restockProductCard,
     type CardServiceSnapshot,
 } from '@/lib/license-service'
+import { CARD_SERVICE_MAX_OPERATION_ATTEMPTS } from '@/lib/license-service/operation-queue'
 import { completePaidOrderDelivery } from '@/lib/order-processing'
 
 export type CardServiceActionResult =
@@ -172,6 +173,13 @@ export async function retryCardServiceDeliveryAction(orderId: string): Promise<C
         const id = (orderId || '').trim()
         if (!id) return { ok: false, errorKey: 'admin.cardService.errorOrderId', errorId: logServerError('admin.cardService.retryDelivery', new Error('missing order id')) }
 
+        const blocked = await createD1CardServiceDatabase().query(
+            `SELECT 1 FROM card_service_operations WHERE operation = 'sell' AND order_id = ?
+                AND (state = 'abandoned' OR (state IN ('pending', 'failed')
+                    AND (attempts >= ? OR last_error_code = 'not_found'))) LIMIT 1`,
+            [id, CARD_SERVICE_MAX_OPERATION_ATTEMPTS],
+        )
+        if (blocked.length) return { ok: false, errorKey: 'admin.cardService.retryDeliveryStopped', errorId: '' }
         const outcome = await completePaidOrderDelivery(id)
         revalidatePath('/admin/card-service')
         revalidatePath(`/admin/orders/${id}`)
@@ -191,7 +199,7 @@ export async function discardCardServiceFailedAllocationAction(operationKey: str
         const key = typeof operationKey === 'string' ? operationKey.trim() : ''
         if (!key || key.length > 512) return { ok: false, errorKey: 'admin.cardService.review.discardBlocked', errorId: '' }
         const result = await discardCardServiceFailedAllocation(key)
-        if (!result.ok) return { ok: false, errorKey: 'admin.cardService.review.discardBlocked', errorId: '' }
+        if (!result.ok) return { ok: false, errorKey: `admin.cardService.review.discardBlockedReasons.${result.blockedBy}`, errorId: '' }
 
         await recordAuditEvent({
             eventName: 'cardService.allocation.discarded',

@@ -1,3 +1,4 @@
+import { FULFILLMENT_CLAIM_TTL_MS } from "./orders/fulfillment-lease.ts"
 import { buildZeroPriceTradeNo, getOrderDisplayTradeNo } from '@/lib/orders/trade-number'
 import { randomUUID } from "crypto"
 import { db } from "@/lib/db"
@@ -35,7 +36,6 @@ import { isManualFulfillment, parseFulfillmentMode } from "@/lib/fulfillment"
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const FULFILLMENT_CLAIM_STATUS = "processing"
-const FULFILLMENT_CLAIM_TTL_MS = 10 * 60 * 1000
 
 type FulfillmentResult = {
     success: true
@@ -490,9 +490,9 @@ async function restoreClaimAfterFailure(
                 status: asPaid ? "paid" : (order.status || "pending"),
                 paidAt: asPaid ? asPaid.paidAt : order.paidAt,
                 tradeNo: asPaid ? asPaid.tradeNo : order.tradeNo,
-                currentPaymentId: order.currentPaymentId,
-                fulfillmentClaimId: order.fulfillmentClaimId,
-                fulfillmentClaimedAt: order.fulfillmentClaimedAt,
+                currentPaymentId: asPaid ? null : order.currentPaymentId,
+                fulfillmentClaimId: null,
+                fulfillmentClaimedAt: null,
             })
             .where(and(
                 eq(orders.orderId, order.orderId),
@@ -561,7 +561,7 @@ export async function processOrderFulfillment(
     }
 
     // 支付已确认、交付未完成时的回落目标（见 restoreClaimAfterFailure）。
-    let paidFallback: { paidAt: Date; tradeNo: string } | null = null
+    const paidFallback = { paidAt: now, tradeNo }
 
     try {
         if (isPaymentOrder(existing.productId)) {
@@ -614,7 +614,6 @@ export async function processOrderFulfillment(
 
         // 自动化发卡：远端 Sell 未确认前一律不得交付，失败时订单回落到 `paid`
         //（而不是 `pending`），由回调重试或对账重放推进。
-        paidFallback = { paidAt: now, tradeNo }
         const delivery = await deliverAutomatedCardOrder(existing, claimId, tradeNo)
 
         if (!delivery.delivered) {
@@ -632,7 +631,7 @@ export async function processOrderFulfillment(
         console.log(`[Fulfill] Order ${orderId} delivered successfully`)
         return { success: true, status: "processed", orderStatus: "delivered" }
     } catch (error) {
-        await restoreClaimAfterFailure(existing, claimId, paidFallback ?? undefined)
+        await restoreClaimAfterFailure(existing, claimId, paidFallback)
         throw error
     }
 }

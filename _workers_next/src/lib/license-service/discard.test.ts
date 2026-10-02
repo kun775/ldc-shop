@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { orderHasUnsettledCardServiceLedger } from './guards.ts'
 import { discardFailedAllocation } from './discard.ts'
-import { buildSellIntentStatements, executeOrderRemoteSales, loadOrderRemoteSalePlan } from './delivery.ts'
+import { buildDeliverOrderStatements, buildSellIntentStatements, executeOrderRemoteSales, loadOrderRemoteSalePlan } from './delivery.ts'
 import { listCardServiceReviewQueue } from './ops.ts'
 import {
     ackAndMaterializeAllocation,
@@ -101,7 +102,7 @@ test('Sell not_found：整批清理本地卡、暂存、映射与待办，保留
     if (plan.kind === 'remote') assert.equal(plan.groups[0].allocationId, 'other')
 
     const after = snapshot(ctx)
-    assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked' })
+    assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked', blockedBy: 'recordChanged' })
     assert.deepEqual(snapshot(ctx), after)
 })
 
@@ -130,7 +131,7 @@ for (const [label, sql] of [
         seed(ctx)
         ctx.exec(sql)
         const before = snapshot(ctx)
-        assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked' })
+        assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked', blockedBy: 'recordChanged' })
         assert.deepEqual(snapshot(ctx), before)
     })
 }
@@ -140,7 +141,7 @@ for (const [label, sql] of [
     ['批次有销售时间', 'UPDATE card_service_allocations SET sold_at = 2'],
     ['映射已售', "UPDATE card_service_cards SET state = 'sold' WHERE local_card_id = 2"],
     ['映射已作废', "UPDATE card_service_cards SET state = 'revoked' WHERE local_card_id = 2"],
-    ['映射已关联订单', "UPDATE card_service_cards SET order_id = 'order' WHERE local_card_id = 2"],
+    ['映射指向不存在订单', "UPDATE card_service_cards SET order_id = 'missing' WHERE local_card_id = 2"],
     ['卡已使用', 'UPDATE cards SET is_used = 1 WHERE id = 2'],
     ['卡有使用时间', 'UPDATE cards SET used_at = 2 WHERE id = 2'],
     ['订单正在履约', "UPDATE orders SET status = 'processing'"],
@@ -166,7 +167,13 @@ for (const [label, sql] of [
         seed(ctx)
         ctx.exec(sql)
         const before = snapshot(ctx)
-        assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked' })
+        assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked', blockedBy: (() => {
+                if (['批次已售', '批次有销售时间', '映射已售', '卡已使用', '卡有使用时间'].includes(label)) return 'soldOrUsed'
+                if (['映射已作废', '映射指向不存在订单', '卡归属异常', '暂存归属异常'].includes(label)) return 'ownership'
+                if (label === '其他待执行任务') return 'pendingOperation'
+                if (['订单正在履约', '预留给另一个正在履约的订单'].includes(label)) return 'missingPayment'
+                return 'delivered'
+            })() })
         assert.deepEqual(snapshot(ctx), before)
     })
 }
@@ -181,7 +188,8 @@ for (const [label, sql] of [
         const ctx = createSqliteCardServiceDatabase()
         seed(ctx)
         const database = beforeWrite(ctx, () => ctx.exec(sql))
-        assert.deepEqual(await discardFailedAllocation(database, 'failed'), { ok: false, reason: 'blocked' })
+        assert.deepEqual(await discardFailedAllocation(database, 'failed'), { ok: false, reason: 'blocked',
+            blockedBy: label === '开始履约' ? 'missingPayment' : label === '卡刚使用' ? 'soldOrUsed' : 'recordChanged' })
         assert.equal(ctx.all('SELECT * FROM cards').length, 2)
         assert.equal(ctx.all('SELECT * FROM card_service_staged_cards').length, 1)
         assert.equal(ctx.get('SELECT state FROM card_service_allocations')?.state, 'acknowledged')
@@ -261,3 +269,43 @@ for (const cardIds of ['1,2', '[1,2]', '1,3,2']) {
         assert.notEqual(plan.kind, 'blocked')
     })
 }
+
+for (const claimedAt of ['NULL', '1']) {
+    test(`复现零元订单：过期/缺失锁 ${claimedAt} 与 364 次失败可丢弃，随后通过删单检查`, async () => {
+        const ctx = createSqliteCardServiceDatabase(); seed(ctx)
+        ctx.exec(`UPDATE orders SET amount = '0', points_used = 21000, trade_no = 'POINTS_REDEMPTION:order',
+            status = 'processing', paid_at = 123, fulfillment_claim_id = 'stale', fulfillment_claimed_at = ${claimedAt}, card_ids = '1,2';
+            UPDATE card_service_operations SET attempts = 364 WHERE operation_key = 'failed';
+            UPDATE card_service_cards SET order_id = 'order' WHERE local_card_id = 2`)
+        assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'order'), true)
+        assert.equal((await discardFailedAllocation(ctx.database, 'failed')).ok, true)
+        const order = ctx.get('SELECT * FROM orders')!
+        assert.equal(order.status, 'paid'); assert.equal(order.card_ids, null)
+        assert.equal(order.fulfillment_claim_id, null); assert.equal(order.fulfillment_claimed_at, null)
+        assert.equal(order.paid_at, 123); assert.equal(order.points_used, 21000)
+        assert.equal(order.trade_no, 'POINTS_REDEMPTION:order')
+        assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'order'), false)
+        // 旧请求即使后来拿到 Sell 成功，也失去了原认领，不能交付或复活映射。
+        const late = await ctx.database.write(buildDeliverOrderStatements({ orderId: 'order', claimId: 'stale', tradeNo: 'POINTS_REDEMPTION:order', cardKey: 'KEY-1', localCardIds: [1], deliveryNote: null, nowMs: Date.now(), remoteGroups: [{ allocationId: 'batch', localCardIds: [1] }] }))
+        assert.equal(late[0].changes, 0); assert.equal(ctx.get('SELECT status FROM orders')?.status, 'paid')
+        const removed = await ctx.database.write([{ sql: "DELETE FROM orders WHERE order_id = ? AND status <> 'processing'", params: ['order'] }])
+        assert.equal(removed[0].changes, 1)
+    })
+}
+
+test('有效履约锁仍阻止丢弃，并给出明确原因', async () => {
+    const ctx = createSqliteCardServiceDatabase(); seed(ctx)
+    ctx.exec(`UPDATE orders SET status = 'processing', paid_at = 123, fulfillment_claim_id = 'live', fulfillment_claimed_at = ${Date.now()}`)
+    const before = snapshot(ctx)
+    assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked', blockedBy: 'fulfilling' })
+    assert.deepEqual(snapshot(ctx), before)
+})
+
+test('读取后过期锁被另一请求续领：原子校验仍拒绝丢弃', async () => {
+    const ctx = createSqliteCardServiceDatabase(); seed(ctx)
+    ctx.exec("UPDATE orders SET status = 'processing', paid_at = 123, fulfillment_claim_id = 'stale', fulfillment_claimed_at = 1")
+    const database = beforeWrite(ctx, () => ctx.exec(`UPDATE orders SET fulfillment_claim_id = 'live', fulfillment_claimed_at = ${Date.now()}`))
+    assert.deepEqual(await discardFailedAllocation(database, 'failed'), { ok: false, reason: 'blocked', blockedBy: 'fulfilling' })
+    assert.equal(ctx.all('SELECT * FROM cards').length, 2)
+    assert.equal(ctx.get('SELECT fulfillment_claim_id FROM orders')?.fulfillment_claim_id, 'live')
+})

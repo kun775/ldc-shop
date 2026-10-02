@@ -33,9 +33,10 @@ import {
 } from '../db/license-service-schema.ts'
 import type { LicenseServiceClient } from './client.ts'
 import { isMissingTableError, type CardServiceDatabase, type CardServiceStatement } from './db-port.ts'
-import { toLicenseServiceError, type LicenseServiceError, type LicenseServiceErrorCategory } from './errors.ts'
+import { toLicenseServiceError, LicenseServiceError, type LicenseServiceErrorCategory } from './errors.ts'
 import { buildSellIdempotencyKey } from './idempotency.ts'
 import {
+    CARD_SERVICE_MAX_OPERATION_ATTEMPTS,
     CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL,
     CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL,
     buildOperationFailureClauses,
@@ -428,8 +429,10 @@ export async function listPendingSellOperations(
     let rows: Array<Record<string, unknown>>
     try {
         const params: unknown[] = [CARD_SERVICE_OPERATION_SELL]
-        const filters = ["operation = ? AND state IN ('pending', 'failed')"]
-        // 定时重放要遵守退避；人工重试传 `respectBackoff: false` 跳过它。
+        const filters = [`operation = ? AND state IN ('pending', 'failed')
+            AND attempts < ${CARD_SERVICE_MAX_OPERATION_ATTEMPTS}
+            AND COALESCE(last_error_code, '') <> 'not_found'`]
+        // 队列读取可跳过退避筛选，但执行核心仍强制遵守退避与总预算。
         if (options.respectBackoff) {
             filters.push(CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL)
             params.push(options.nowMs ?? Date.now())
@@ -507,31 +510,23 @@ function buildSellOperationStateStatements(input: {
 }): CardServiceStatement[] {
     const key = buildSellIdempotencyKey(input.allocationId, input.orderId)
 
-    if (input.state === 'failed') {
-        // 不可重试失败走统一的重试预算（退避 + 尝试上限 → `abandoned`），
-        // 因此这里**不用** `nextRetryAtMs`（它只对可重试的 `pending` 有意义）。
-        const failure = buildOperationFailureClauses(input.nowMs)
-        return [{
-            sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
-                SET state = ${failure.state}, attempts = attempts + 1, next_retry_at = ${failure.nextRetryAt},
-                    request_id = ?, last_error_code = ?, updated_at = ?
-                WHERE operation_key = ?`,
-            params: [input.requestId, input.errorCode, input.nowMs, key],
-        }]
-    }
-
+    const failure = buildOperationFailureClauses(input.nowMs)
+    const terminal = input.errorCode === 'not_found'
+    const state = terminal ? "'abandoned'"
+        : input.state === 'pending' ? failure.state.replace("'failed'", "'pending'") : failure.state
+    const nextRetryAt = terminal ? 'NULL'
+        : input.state === 'pending'
+            ? `CASE WHEN attempts + 1 >= ${CARD_SERVICE_MAX_OPERATION_ATTEMPTS} THEN NULL
+                ELSE MAX(${failure.nextRetryAt}, ?) END`
+            : failure.nextRetryAt
     return [{
         sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
-            SET state = ?, attempts = attempts + 1, next_retry_at = ?,
+            SET state = ${state}, attempts = attempts + 1, next_retry_at = ${nextRetryAt},
                 request_id = ?, last_error_code = ?, updated_at = ?
-            WHERE operation_key = ?`,
+            WHERE operation_key = ? AND state IN ('pending', 'failed')`,
         params: [
-            input.state,
-            input.nextRetryAtMs,
-            input.requestId,
-            input.errorCode,
-            input.nowMs,
-            key,
+            ...(input.state === 'pending' && !terminal ? [input.nextRetryAtMs ?? input.nowMs] : []),
+            input.requestId, input.errorCode, input.nowMs, key,
         ],
     }]
 }
@@ -552,7 +547,7 @@ export function buildSellDeferStatements(input: {
     })
 }
 
-/** 不可重试失败：待办置 `failed`（含退避与尝试上限），等待人工核查（不是「已完成」）。 */
+/** not_found 立即停止；其他失败遵守退避与总预算，终态不可被晚到的写回复活。 */
 export function buildSellFailStatements(input: {
     orderId: string
     allocationId: string
@@ -703,7 +698,7 @@ function resolveNow(deps: OrderSaleDeps) {
 function retryOptions(deps: OrderSaleDeps): RunWithRetryOptions {
     return {
         operation: 'sell',
-        policy: deps.policy,
+        policy: { ...deps.policy, maxAttempts: 1 },
         sleep: deps.sleep,
         random: deps.random,
         now: deps.now,
@@ -755,6 +750,35 @@ export async function executeOrderRemoteSales(
             return { status: 'blocked', reason: 'allocation_unusable', allocationId: group.allocationId,
                 errorCode: 'manually_discarded', category: null, error: null }
         }
+
+        const [operation] = await deps.database.query<{
+            state: string; attempts: number; next_retry_at: number | null; last_error_code: string | null
+        }>(`SELECT state, attempts, next_retry_at, last_error_code
+            FROM ${CARD_SERVICE_OPERATIONS_TABLE} WHERE operation_key = ?`,
+            [buildSellIdempotencyKey(group.allocationId, input.orderId)])
+        if (!operation || !['pending', 'failed'].includes(operation.state)
+            || operation.attempts >= CARD_SERVICE_MAX_OPERATION_ATTEMPTS || operation.last_error_code === 'not_found') {
+            // 清理旧版本留下的超预算/永久失败待办，但不改变 done / abandoned 终态。
+            if (operation && ['pending', 'failed'].includes(operation.state)) {
+                await deps.database.write([{
+                    sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE} SET state = 'abandoned', next_retry_at = NULL
+                        WHERE operation_key = ? AND state IN ('pending', 'failed')
+                          AND (attempts >= ? OR last_error_code = 'not_found')`,
+                    params: [buildSellIdempotencyKey(group.allocationId, input.orderId), CARD_SERVICE_MAX_OPERATION_ATTEMPTS],
+                }])
+            }
+            return { status: 'blocked', reason: 'service_error', allocationId: group.allocationId,
+                errorCode: operation?.last_error_code || 'retry_exhausted', category: null, error: null }
+        }
+        if (operation.next_retry_at != null && operation.next_retry_at > now()) {
+            return { status: 'deferred', error: new LicenseServiceError({
+                code: 'retry_deferred', httpStatus: 503, retryable: true,
+                retryAfterMs: operation.next_retry_at - now(),
+            }) }
+        }
+    }
+
+    for (const group of pending) {
         try {
             await runWithRetry(
                 () => deps.client.sell({
@@ -774,7 +798,7 @@ export async function executeOrderRemoteSales(
                 const probe = await probeRemoteAllocationStatus(deps, group.allocationId)
                 if (!probe.ok) {
                     const deferred = probe.error
-                    await deps.database.write(buildSellDeferStatements({
+                    await deps.database.write((deferred.category === 'unavailable' ? buildSellDeferStatements : buildSellFailStatements)({
                         orderId: input.orderId,
                         allocationId: group.allocationId,
                         errorCode: deferred.code,
@@ -782,7 +806,9 @@ export async function executeOrderRemoteSales(
                         nextRetryAtMs: now() + (deferred.retryAfterMs ?? 0),
                         nowMs: now(),
                     }))
-                    return { status: 'deferred', error: deferred }
+                    return deferred.category === 'unavailable'
+                        ? { status: 'deferred', error: deferred }
+                        : blockedFromError(deferred, group.allocationId, 'service_error')
                 }
 
                 const remoteStatus = probe.status

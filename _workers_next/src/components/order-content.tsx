@@ -112,7 +112,7 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
 
     const currentStep = (() => {
         if (order.status === 'delivered') return 4
-        if (order.status === 'paid') return 3
+        if (order.status === 'paid' || order.status === 'processing') return 3
         if (order.status === 'pending') return 2
         return 1
     })()
@@ -146,6 +146,7 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
     const getStatusBadgeVariant = (status: string) => {
         switch (status) {
             case 'delivered': return 'default'
+            case 'processing':
             case 'paid': return 'secondary'
             case 'refunded': return 'destructive'
             case 'cancelled': return 'secondary'
@@ -159,6 +160,7 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
 
     const getStatusMessage = (status: string) => {
         switch (status) {
+            case 'processing': return t('order.fulfillmentInProgress')
             case 'paid': return isPayment ? t('payment.paidMessage') : (isManual ? t('order.waitingManualDelivery') : t('order.stockDepleted'))
             case 'cancelled': return t('order.cancelledMessage')
             case 'refunded': return t('order.orderRefunded')
@@ -171,14 +173,14 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
 
     // Check status on mount and polling
     useEffect(() => {
-        if (order.status !== 'pending') return
+        if (order.status !== 'pending' && order.status !== 'processing') return
 
         let mounted = true
         const check = async () => {
             try {
                 const result = await checkOrderStatus(order.orderId)
-                if (result.success && (result.status === 'paid' || result.status === 'delivered') && mounted) {
-                    toast.success(t('order.paymentSuccess'))
+                if (result.success && ['paid', 'processing', 'delivered'].includes(result.status || '') && result.status !== order.status && mounted) {
+                    if (order.status === 'pending') toast.success(t('order.paymentSuccess'))
                     router.refresh()
                 }
             } catch (e) {
@@ -237,11 +239,12 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                             <span className={cn(
                                 "font-medium normal-case tracking-normal",
                                 order.status === 'delivered' ? "text-emerald-600 dark:text-emerald-400" :
-                                order.status === 'paid' ? "text-blue-600 dark:text-blue-400" :
+                                (order.status === 'paid' || order.status === 'processing') ? "text-blue-600 dark:text-blue-400" :
                                 order.status === 'pending' ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground"
                             )}>
                                 {order.status === 'delivered' ? t('order.progress.statusDelivered') :
                                  order.status === 'paid' ? (isManual ? t('order.progress.statusPaidManual') : t('order.progress.statusPaidAuto')) :
+                                 order.status === 'processing' ? t('order.status.processing') :
                                  order.status === 'pending' ? t('order.progress.statusPending') : getStatusText(order.status)}
                             </span>
                         </div>
@@ -249,7 +252,7 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                             {[
                                 { step: 1, label: t('order.progress.stepSubmit'), desc: t('order.progress.descGenerated') },
                                 { step: 2, label: t('order.progress.stepVerify'), desc: order.status === 'pending' ? t('order.progress.descPendingPayment') : t('order.progress.descPaid') },
-                                { step: 3, label: isManual ? t('order.progress.stepManual') : t('order.progress.stepAuto'), desc: order.status === 'delivered' ? t('order.progress.descCompleted') : order.status === 'paid' ? t('order.progress.descInProgress') : t('order.progress.descQueued') },
+                                { step: 3, label: isManual ? t('order.progress.stepManual') : t('order.progress.stepAuto'), desc: order.status === 'delivered' ? t('order.progress.descCompleted') : (order.status === 'paid' || order.status === 'processing') ? t('order.progress.descInProgress') : t('order.progress.descQueued') },
                                 { step: 4, label: t('order.progress.stepInspect'), desc: order.status === 'delivered' ? t('order.progress.descDelivered') : t('order.progress.descAwaitingInspect') }
                             ].map((s) => {
                                 const isDone = currentStep > s.step || (currentStep === 4 && s.step === 4)

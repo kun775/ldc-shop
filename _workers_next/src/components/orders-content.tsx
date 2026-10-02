@@ -48,6 +48,7 @@ export function OrdersContent({ orders, productVariantLabels = {}, productImages
     const statusOptions = [
         { key: 'all', label: t('common.all') },
         { key: 'pending', label: t('order.status.pending') },
+        { key: 'processing', label: t('order.status.processing') },
         { key: 'paid', label: t('order.status.paid') },
         { key: 'delivered', label: t('order.status.delivered') },
         { key: 'refunded', label: t('order.status.refunded') },

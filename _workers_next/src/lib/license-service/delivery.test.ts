@@ -10,6 +10,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+    buildSellDeferStatements,
+    buildSellFailStatements,
     buildDeliverOrderStatements,
     executeOrderRemoteSales,
     listOrderRemoteCardRows,
@@ -321,7 +323,7 @@ test('429 → deferred：保留待办与下次重试时间，不交付', async (
     const operation = ctx.get('SELECT * FROM card_service_operations WHERE operation_key = ?', [`sell:${ALLOC_A}:${ORDER_ID}`])
     assert.equal(operation?.state, 'pending')
     assert.equal(operation?.attempts, 1)
-    assert.equal(operation?.next_retry_at, 3_000)
+    assert.equal(operation?.next_retry_at, 61_000)
     assert.equal(operation?.last_error_code, 'rate_limited')
 })
 
@@ -651,3 +653,61 @@ test('可售行却带着别的订单号（账本被改过）→ 拒绝交付', a
     assert.equal(results[0].changes, 0)
     assert.equal(ctx.get('SELECT status FROM orders WHERE order_id = ?', [ORDER_ID])?.status, 'processing')
 })
+
+for (const state of ['pending', 'failed', 'abandoned']) {
+    test(`历史 ${state} 待办尝试 364 次：执行核心停止且不增加次数`, async () => {
+        const ctx = createSqliteCardServiceDatabase()
+        seedOrder(ctx); seedCard(ctx, 1); seedAllocation(ctx)
+        seedMapping(ctx, { localCardId: 1, remoteCardId: 'card_a' })
+        ctx.exec(`INSERT INTO card_service_operations
+            (operation_key, operation, resource_id, order_id, state, attempts, last_error_code, created_at, updated_at)
+            VALUES ('sell:${ALLOC_A}:${ORDER_ID}', 'sell', '${ALLOC_A}', '${ORDER_ID}', '${state}', 364, 'timeout', 0, 0)`)
+        const plan = planOf(await loadOrderRemoteSalePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [1] }))
+        const { deps, client } = depsOf(ctx, {})
+        for (let i = 0; i < 3; i++) assert.equal((await executeOrderRemoteSales(deps, { orderId: ORDER_ID, groups: plan.groups })).status, 'blocked')
+        assert.equal(client.calls.length, 0)
+        const op = ctx.get('SELECT * FROM card_service_operations')!
+        assert.equal(op.state, 'abandoned'); assert.equal(op.attempts, 364)
+        assert.equal((await listPendingSellOperations(ctx.database)).length, 0)
+    })
+}
+
+test('not_found 首次失败即停止，多次点击不再请求且不能被晚到失败写回复活', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedOrder(ctx); seedCard(ctx, 1); seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 1, remoteCardId: 'card_a' })
+    const plan = planOf(await loadOrderRemoteSalePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [1] }))
+    const { deps, client } = depsOf(ctx, { sell: async () => { throw new LicenseServiceError({ code: 'not_found', httpStatus: 404 }) } })
+    for (let i = 0; i < 5; i++) assert.equal((await executeOrderRemoteSales(deps, { orderId: ORDER_ID, groups: plan.groups })).status, 'blocked')
+    assert.equal(client.callCount('sell'), 1)
+    const before = ctx.get('SELECT * FROM card_service_operations')
+    assert.equal(before?.state, 'abandoned'); assert.equal(before?.attempts, 1)
+    await ctx.database.write(buildSellDeferStatements({ orderId: ORDER_ID, allocationId: ALLOC_A, errorCode: 'timeout', requestId: null, nowMs: 9999, nextRetryAtMs: 10000 }))
+    await ctx.database.write(buildSellFailStatements({ orderId: ORDER_ID, allocationId: ALLOC_A, errorCode: 'other', requestId: null, nowMs: 9999 }))
+    assert.deepEqual(ctx.get('SELECT * FROM card_service_operations'), before)
+})
+
+for (const transient of [false, true]) {
+    test(`${transient ? '临时' : '拒绝'}错误遵守退避且最多请求 12 次`, async () => {
+        const ctx = createSqliteCardServiceDatabase()
+        seedOrder(ctx); seedCard(ctx, 1); seedAllocation(ctx)
+        seedMapping(ctx, { localCardId: 1, remoteCardId: 'card_a' })
+        const plan = planOf(await loadOrderRemoteSalePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [1] }))
+        const { deps, client } = depsOf(ctx, { sell: async () => { throw new LicenseServiceError({ code: transient ? 'temporarily_unavailable' : 'contract_error', httpStatus: transient ? 503 : 400, retryable: transient }) } }, { policy: { maxAttempts: 3 } })
+        let clock = 1000; deps.now = () => clock
+        for (let i = 0; i < 12; i++) {
+            await executeOrderRemoteSales(deps, { orderId: ORDER_ID, groups: plan.groups })
+            assert.equal(client.callCount('sell'), i + 1)
+            const op = ctx.get('SELECT * FROM card_service_operations')!
+            if (i < 11) {
+                const result = await executeOrderRemoteSales(deps, { orderId: ORDER_ID, groups: plan.groups })
+                assert.equal(result.status, 'deferred'); assert.equal(client.callCount('sell'), i + 1)
+                assert.ok(Number(op.next_retry_at) >= clock + 60000)
+                clock = Number(op.next_retry_at)
+            }
+        }
+        assert.equal(ctx.get('SELECT state FROM card_service_operations')?.state, 'abandoned')
+        await executeOrderRemoteSales(deps, { orderId: ORDER_ID, groups: plan.groups })
+        assert.equal(client.callCount('sell'), 12)
+    })
+}

@@ -1,5 +1,7 @@
 'use client'
 
+import { CARD_SERVICE_MAX_OPERATION_ATTEMPTS } from '@/lib/license-service/operation-queue'
+
 import { useState, useTransition } from 'react'
 import Link from 'next/link'
 import {
@@ -461,7 +463,7 @@ export function CardServiceContent({
                                     </div>
                                 </div>
                                 <div className="flex shrink-0 flex-wrap gap-2">
-                                    {isSell && row.orderId ? (
+                                    {isSell && row.orderId && row.state !== 'abandoned' && row.lastErrorCode !== 'not_found' && row.attempts < CARD_SERVICE_MAX_OPERATION_ATTEMPTS ? (
                                         <Button
                                             variant="outline"
                                             size="sm"

@@ -315,7 +315,9 @@
         "notFound": "Order not found",
         "paymentSuccess": "Payment successful!",
         "goReview": "Write a Review",
+        "fulfillmentInProgress": "Payment confirmed; delivery is being processed.",
         "status": {
+            "processing": "Paid · Fulfilling",
             "pending": "Pending",
             "paid": "Paid",
             "delivered": "Delivered",
@@ -1163,7 +1165,16 @@
                 "discardTitle": "Discard this entire failed batch?",
                 "discardDescription": "Batch: {{allocationId}}. Check the Program and Key and confirm that the batch no longer exists in the card service. This permanently deletes its local cards, staged cards and retry records, while keeping orders. Used, delivered or currently fulfilling cards cannot be discarded. Restock valid cards before retrying fulfillment.",
                 "discardDone": "Failed batch discarded; associated orders kept",
-                "discardBlocked": "Cannot discard: the record changed, is not a not_found failure, or has used, delivered or currently fulfilling cards. Refresh and review."
+                "discardBlocked": "Cannot discard: the record changed, is not a not_found failure, or has used, delivered or currently fulfilling cards. Refresh and review.",
+                "discardBlockedReasons": {
+                    "recordChanged": "The record changed or is no longer a not_found failure. Refresh the review list.",
+                    "soldOrUsed": "The batch contains sold or used cards. Handle the refund or revocation first.",
+                    "delivered": "An associated order has delivery records or card keys and cannot be discarded.",
+                    "fulfilling": "An order holds an active fulfillment lease. Wait for completion or expiry (up to ten minutes).",
+                    "pendingOperation": "This batch still has pending operations. Reconcile them first.",
+                    "ownership": "Card ownership or state is inconsistent. Review the associated order and product.",
+                    "missingPayment": "The fulfillment lease expired but payment confirmation is missing. Verify payment first."
+                }
             },
             "retryByOrder": {
                 "title": "Retry fulfillment by order ID",
@@ -1236,6 +1247,7 @@
             "errorUnsettledRemoteCards": "This product still has unsettled remote cards (allocated or sold). Finish reconciliation or revocation before switching the supply mode.",
             "errorOrderId": "Missing order ID",
             "errorRevokeTarget": "Missing revoke target",
+            "retryDeliveryStopped": "Fulfillment retries have stopped. Discard missing batches and replenish valid stock first.",
             "retryDeliveryPending": "Fulfillment is still incomplete; retry from the review list later",
             "retryRevokeBlocked": "The ledger does not meet the revoke conditions; review manually",
             "retryRevokePending": "Revoke is still incomplete; retry later"

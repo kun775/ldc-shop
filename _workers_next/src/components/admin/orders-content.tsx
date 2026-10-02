@@ -147,6 +147,7 @@ export function AdminOrdersContent({
     const statusOptions = [
         { key: 'all', label: t('common.all'), icon: <Inbox className="h-3.5 w-3.5" /> },
         { key: 'pending', label: t('order.status.pending'), icon: <Clock className="h-3.5 w-3.5 text-amber-500" /> },
+        { key: 'processing', label: t('order.status.processing'), icon: <PackageCheck className="h-3.5 w-3.5 text-blue-500" /> },
         { key: 'paid', label: t('order.status.paid'), icon: <PackageCheck className="h-3.5 w-3.5 text-blue-500" /> },
         { key: 'delivered', label: t('order.status.delivered'), icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> },
         { key: 'refunded', label: t('order.status.refunded'), icon: <RotateCcw className="h-3.5 w-3.5 text-purple-500" /> },
@@ -160,6 +161,12 @@ export function AdminOrdersContent({
                     label: t('order.status.delivered'),
                     badgeClass: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
                     icon: <CheckCircle2 className="h-3 w-3" />
+                }
+            case 'processing':
+                return {
+                    label: t('order.status.processing'),
+                    badgeClass: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
+                    icon: <PackageCheck className="h-3 w-3" />
                 }
             case 'paid':
                 return {
