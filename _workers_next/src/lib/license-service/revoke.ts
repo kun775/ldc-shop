@@ -477,13 +477,17 @@ export function buildRevokeIntentStatements(input: {
             sql: `INSERT OR IGNORE INTO ${CARD_SERVICE_OPERATIONS_TABLE}
                 (operation_key, operation, resource_id, order_id, state, attempts,
                  next_retry_at, request_id, last_error_code, created_at, updated_at)
-                VALUES (?, '${CARD_SERVICE_OPERATION_REVOKE}', ?, ?, 'pending', 0, NULL, NULL, NULL, ?, ?)`,
+                SELECT ?, '${CARD_SERVICE_OPERATION_REVOKE}', ?, ?, 'pending', 0, NULL, NULL, NULL, ?, ?
+                WHERE EXISTS (SELECT 1 FROM ${CARD_SERVICE_CARDS_TABLE} m WHERE m.remote_card_id = ?
+                    AND NOT EXISTS (SELECT 1 FROM ${CARD_SERVICE_ALLOCATIONS_TABLE} a
+                        WHERE a.allocation_id = m.allocation_id AND a.last_error_code = 'manually_discarded'))`,
             params: [
                 operationKey(card.remoteCardId, input.orderId),
                 card.remoteCardId,
                 input.orderId,
                 input.nowMs,
                 input.nowMs,
+                card.remoteCardId,
             ],
         })
 
@@ -937,6 +941,17 @@ export function classifyAcknowledgedProbe(input: {
     return { kind: 'retain' }
 }
 
+/** 手动丢弃后的旧作废计划不能重新落账或继续请求已移除的卡。 */
+async function hasActiveRevokeMapping(database: CardServiceDatabase, remoteCardId: string): Promise<boolean> {
+    const rows = await database.query(
+        `SELECT 1 FROM ${CARD_SERVICE_CARDS_TABLE} m WHERE m.remote_card_id = ?
+            AND NOT EXISTS (SELECT 1 FROM ${CARD_SERVICE_ALLOCATIONS_TABLE} a
+                WHERE a.allocation_id = m.allocation_id AND a.last_error_code = 'manually_discarded')`,
+        [remoteCardId],
+    )
+    return rows.length > 0
+}
+
 async function revokeOneCard(
     deps: RevokeDeps,
     input: { orderId: string; card: OrderRevokeCard; reason: string },
@@ -944,6 +959,10 @@ async function revokeOneCard(
 ): Promise<void> {
     const now = resolveNow(deps)
     const { card, orderId, reason } = input
+    if (!(await hasActiveRevokeMapping(deps.database, card.remoteCardId))) {
+        outcome.failed += 1
+        return
+    }
 
     // 未交付的卡先问中心，再按**明确确认**的事实决定：作废 / 保留库存 / 延后 / 人工复核。
     if (card.state === 'acknowledged') {
@@ -1018,6 +1037,11 @@ async function revokeOneCard(
         // `exhausted`，放回库存只会制造发不出的订单）。两者都必须作废。
     }
 
+    // 探测期间管理员可能已清理该批次；再次核对，避免晚到请求继续作废。
+    if (card.state === 'acknowledged' && !(await hasActiveRevokeMapping(deps.database, card.remoteCardId))) {
+        outcome.failed += 1
+        return
+    }
     try {
         await runWithRetry(
             () => deps.client.revoke(card.remoteCardId, {

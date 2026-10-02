@@ -433,7 +433,7 @@ export function CardServiceContent({
                     ) : review.failedOperations.map((row: PendingOperationDetail) => {
                         const isSell = row.operation === 'sell'
                         const isRevoke = row.operation === 'revoke'
-                        const canDiscard = (isSell || row.operation === 'ack')
+                        const canDiscard = (isSell || isRevoke || row.operation === 'ack')
                             && row.lastErrorCode === 'not_found'
                             && (row.state === 'failed' || row.state === 'abandoned')
                         const taskKey = `${row.operationKey}`
@@ -488,7 +488,9 @@ export function CardServiceContent({
                                             onClick={async () => {
                                                 const accepted = await confirm({
                                                     title: t('admin.cardService.review.discardTitle'),
-                                                    description: t('admin.cardService.review.discardDescription', { allocationId: row.resourceId }),
+                                                    description: isRevoke
+                                                        ? t('admin.cardService.review.discardRevokeDescription', { cardId: row.resourceId })
+                                                        : t('admin.cardService.review.discardDescription', { allocationId: row.resourceId }),
                                                     variant: 'destructive',
                                                     icon: 'trash',
                                                     confirmText: t('admin.cardService.review.discard'),
@@ -508,7 +510,7 @@ export function CardServiceContent({
                                             {t('admin.cardService.review.discard')}
                                         </Button>
                                     ) : null}
-                                    {isRevoke && row.orderId ? (
+                                    {isRevoke && row.orderId && !canDiscard ? (
                                         <Button
                                             variant="outline"
                                             size="sm"

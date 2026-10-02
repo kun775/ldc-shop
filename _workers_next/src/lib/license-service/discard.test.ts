@@ -13,6 +13,7 @@ import {
     loadCardServiceAllocation,
 } from './restock.ts'
 import { createFakeLicenseServiceClient, createSqliteCardServiceDatabase, type SqliteTestContext } from './test-support.ts'
+import { buildRefundRevokeStatements, buildRevokeIntentStatements, executeOrderRevokes } from './revoke.ts'
 import type { CardServiceDatabase } from './db-port.ts'
 
 function seed(ctx: SqliteTestContext, operation = 'sell') {
@@ -308,4 +309,157 @@ test('读取后过期锁被另一请求续领：原子校验仍拒绝丢弃', as
     assert.deepEqual(await discardFailedAllocation(database, 'failed'), { ok: false, reason: 'blocked', blockedBy: 'fulfilling' })
     assert.equal(ctx.all('SELECT * FROM cards').length, 2)
     assert.equal(ctx.get('SELECT fulfillment_claim_id FROM orders')?.fulfillment_claim_id, 'live')
+})
+
+/** 复现 Sell not_found 后退款：退款原子批次先结算订单，再把卡隔离成 is_used = 1。 */
+async function seedRefunded(ctx: SqliteTestContext, mappingState = 'acknowledged', retainHistory = false) {
+    seed(ctx)
+    ctx.exec(`UPDATE orders SET amount = '0', points_used = 21000, paid_at = 123, card_ids = '1,2';
+        UPDATE card_service_operations SET attempts = 1 WHERE operation_key = 'failed'`)
+    if (mappingState !== 'acknowledged') {
+        ctx.exec(`UPDATE card_service_cards SET state = '${mappingState}', order_id = 'order', sold_at = 123;
+            UPDATE card_service_allocations SET state = 'sold', sold_at = 123`)
+    }
+    await ctx.database.write([
+        { sql: `UPDATE orders SET status = 'refunded',
+            card_key = ${retainHistory ? "'KEY-1' || char(10) || 'KEY-2'" : 'NULL'},
+            card_ids = ${retainHistory ? "'1,2'" : 'NULL'}, delivered_at = ${retainHistory ? '123' : 'NULL'}` },
+        ...buildRefundRevokeStatements({ orderId: 'order', nowMs: 456, cards: [1, 2].map(id => ({
+            remoteCardId: 'remote-' + id, localCardId: id, allocationId: 'batch',
+            state: mappingState, alreadyRevoked: mappingState === 'revoked',
+        })) }),
+    ])
+}
+
+for (const state of ['acknowledged', 'sold', 'revoked']) {
+    for (const retainHistory of [false, true]) {
+        test(`已退款 ${state} 批次（保留交付历史=${retainHistory}）：本地清理旧卡及全部待办，不改变退款记录`, async () => {
+            const ctx = createSqliteCardServiceDatabase()
+            await seedRefunded(ctx, state, retainHistory)
+            const before = ctx.get('SELECT * FROM orders')!
+            assert.equal(ctx.get('SELECT is_used FROM cards WHERE id = 1')?.is_used, 1)
+            assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'order'), state !== 'revoked')
+            assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), {
+                ok: true, allocationId: 'batch', productId: 'product', deletedCards: 2, deletedStagedCards: 1,
+            })
+            assert.deepEqual({ ...ctx.get('SELECT * FROM orders') }, { ...before, card_ids: null })
+            for (const table of ['cards', 'card_service_cards', 'card_service_operations', 'card_service_staged_cards']) {
+                assert.equal(ctx.all('SELECT * FROM ' + table).length, 0)
+            }
+            assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'order'), false)
+            assert.equal(ctx.get('SELECT last_error_code FROM card_service_allocations')?.last_error_code, 'manually_discarded')
+        })
+    }
+}
+
+for (const status of ['pending', 'paid', 'processing', 'delivered', 'cancelled']) {
+    test(`同批次还关联 ${status} 订单：已退款订单不能越权清理其他订单的卡`, async () => {
+        const ctx = createSqliteCardServiceDatabase()
+        await seedRefunded(ctx, 'sold')
+        ctx.exec(`INSERT INTO orders (order_id, product_id, product_name, amount, status, card_ids)
+            VALUES ('other-order', 'product', 'Other', '1', '${status}', '2')`)
+        const before = snapshot(ctx)
+        assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked', blockedBy: 'soldOrUsed' })
+        assert.deepEqual(snapshot(ctx), before)
+    })
+}
+
+for (const [label, sql] of [
+    ['映射归属不明', "UPDATE card_service_cards SET order_id = 'missing' WHERE local_card_id = 2"],
+    ['预留归属不明', "UPDATE cards SET reserved_order_id = 'missing' WHERE id = 2"],
+    ['作废待办归属不明', "UPDATE card_service_operations SET order_id = 'missing' WHERE operation = 'revoke'"],
+    ['映射状态异常', "UPDATE card_service_cards SET state = 'unknown' WHERE local_card_id = 2"],
+] as const) {
+    test(`已退款但${label}：整批拒绝本地清理`, async () => {
+        const ctx = createSqliteCardServiceDatabase()
+        await seedRefunded(ctx, 'sold')
+        ctx.exec(sql)
+        const before = snapshot(ctx)
+        assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked', blockedBy: 'ownership' })
+        assert.deepEqual(snapshot(ctx), before)
+    })
+}
+
+test('读取后订单退款状态变化：原子校验阻止清理', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    await seedRefunded(ctx, 'sold')
+    const database = beforeWrite(ctx, () => ctx.exec("UPDATE orders SET status = 'paid'"))
+    assert.deepEqual(await discardFailedAllocation(database, 'failed'), { ok: false, reason: 'blocked', blockedBy: 'soldOrUsed' })
+    assert.equal(ctx.all('SELECT * FROM cards').length, 2)
+    assert.equal(ctx.get('SELECT state FROM card_service_allocations')?.state, 'sold')
+})
+
+test('已退款批次删除失败时整批回滚，包括退款订单的历史卡ID', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    await seedRefunded(ctx, 'sold', true)
+    ctx.exec(`CREATE TRIGGER stop_refunded_delete BEFORE DELETE ON card_service_cards
+        BEGIN SELECT RAISE(ABORT, 'simulated refunded deletion failure'); END`)
+    const before = snapshot(ctx)
+    await assert.rejects(discardFailedAllocation(ctx.database, 'failed'), /simulated refunded deletion failure/)
+    assert.deepEqual(snapshot(ctx), before)
+})
+
+test('清理已退款批次只移除该批次，保留其他库存和历史引用', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    await seedRefunded(ctx, 'sold', true)
+    ctx.exec(`INSERT INTO cards (id, product_id, card_key) VALUES (3, 'product', 'OTHER-KEY');
+        UPDATE orders SET card_ids = '1,3,2'`)
+    assert.equal((await discardFailedAllocation(ctx.database, 'failed')).ok, true)
+    assert.deepEqual(ctx.all('SELECT id FROM cards').map(row => row.id), [3])
+    assert.equal(ctx.get('SELECT card_ids FROM orders')?.card_ids, '3')
+    assert.equal(ctx.get('SELECT status FROM orders')?.status, 'refunded')
+})
+
+test('丢弃后的旧退款作废计划不能重建待办、恢复库存或调用中心', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    await seedRefunded(ctx)
+    const cards = [1, 2].map(id => ({ remoteCardId: 'remote-' + id, localCardId: id,
+        allocationId: 'batch', state: 'acknowledged', alreadyRevoked: false }))
+    assert.equal((await discardFailedAllocation(ctx.database, 'failed')).ok, true)
+    const before = snapshot(ctx)
+    await ctx.database.write(buildRevokeIntentStatements({ orderId: 'order', cards, nowMs: 999 }))
+    await ctx.database.write(buildRefundRevokeStatements({ orderId: 'order', cards, nowMs: 999 }))
+    const client = createFakeLicenseServiceClient()
+    const outcome = await executeOrderRevokes({ database: ctx.database, client }, { orderId: 'order', cards, reason: 'refund' })
+    assert.equal(outcome.failed, 2)
+    assert.equal(client.calls.length, 0)
+    assert.deepEqual(snapshot(ctx), before)
+})
+
+test('探测中心期间管理员丢弃已退款批次：晚到结果不再触发 Revoke', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    await seedRefunded(ctx)
+    const client = createFakeLicenseServiceClient({ async getCardStatus() {
+        assert.equal((await discardFailedAllocation(ctx.database, 'failed')).ok, true)
+        return { cardId: 'remote-1', status: 'active', allocationStatus: 'sold' } as never
+    } })
+    const outcome = await executeOrderRevokes({ database: ctx.database, client }, { orderId: 'order', reason: 'refund',
+        cards: [{ remoteCardId: 'remote-1', localCardId: 1, allocationId: 'batch', state: 'acknowledged', alreadyRevoked: false }] })
+    assert.equal(outcome.failed, 1)
+    assert.equal(client.callCount('getCardStatus'), 1)
+    assert.equal(client.callCount('revoke'), 0)
+    assert.equal(ctx.all('SELECT * FROM card_service_operations').length, 0)
+    assert.equal(ctx.get('SELECT status FROM orders')?.status, 'refunded')
+})
+
+test('Revoke not_found 的已退款旧卡也能定位所属批次并本地清理', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    await seedRefunded(ctx, 'sold', true)
+    ctx.exec("UPDATE card_service_operations SET operation = 'revoke', resource_id = 'remote-1' WHERE operation_key = 'failed'")
+    assert.equal((await discardFailedAllocation(ctx.database, 'failed')).ok, true)
+    assert.equal(ctx.all('SELECT * FROM cards').length, 0)
+    assert.equal(ctx.all('SELECT * FROM card_service_operations').length, 0)
+    assert.equal(ctx.get('SELECT status FROM orders')?.status, 'refunded')
+    assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'order'), false)
+})
+
+test('Revoke not_found 仅在整批订单已退款时允许清理', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    await seedRefunded(ctx, 'sold')
+    ctx.exec(`UPDATE card_service_operations SET operation = 'revoke', resource_id = 'remote-1' WHERE operation_key = 'failed';
+        INSERT INTO orders (order_id, product_id, product_name, amount, status, card_ids)
+            VALUES ('other-order', 'product', 'Other', '1', 'paid', '2')`)
+    const before = snapshot(ctx)
+    assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked', blockedBy: 'recordChanged' })
+    assert.deepEqual(snapshot(ctx), before)
 })
