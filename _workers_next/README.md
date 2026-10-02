@@ -195,6 +195,10 @@ npx wrangler r2 bucket create ldc-shop-files
 > ⚠️ **重要**: 若 GitHub 用户需要管理员权限，`ADMIN_USERS` 中**必须**填写 `gh_GitHub用户名`（例如 `gh_octocat`），不能只写原始 GitHub 用户名。
 > ⚠️ **重要**: DEX 登录仅用于后台管理员（见下方「DEX 单点登录」）。
 
+**定时任务与免费套餐：** 每分钟的 Cron 通过 `NEXT_PUBLIC_APP_URL` 分别 POST 清理和卡密补偿接口，避免两个 Next.js 请求在同一次定时执行中累计触发免费套餐的 10ms CPU 上限。该变量需在 Worker 运行时配置为当前站点的 HTTPS 根地址（可带末尾 `/`，不含凭据、子路径、查询参数或片段），并且必须直接命中当前 Worker；重定向不会被跟随，Cloudflare Access/WAF 也不能拦截这两个接口。保留 `wrangler.json` 的 `global_fetch_strictly_public` 标志，使同站点请求重新进入 Worker。
+
+鉴权优先使用 Secret `CRON_CLEANUP_TOKEN`，未设置时回退到 `OAUTH_CLIENT_SECRET`。每个 HTTP 任务仍受免费套餐的 10ms CPU 限制；部署后应分别观察 Cron 和两个接口的日志，不能只凭清理步骤的 `ok` 判断全部任务成功。
+
 **卡密中心（可选）：** 配置 `LICENSE_SERVICE_BASE_URL` 后，在后台执行数据库升级项 `0039`，再为每个商品分别填写 Program 和对应的 API Key。商品 Key 加密保存，不再共用全局 Key；配置、历史卡处理和备份恢复见 [商品独立 API Key](docs/CARD_SERVICE_PRODUCT_KEYS.md)。
 
 **回调地址配置：**

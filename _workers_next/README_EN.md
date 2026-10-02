@@ -166,6 +166,10 @@ Go to project **Settings** → **Variables and Secrets**:
 > ⚠️ **Important**: `NEXT_PUBLIC_APP_URL` **must** be set as Text, not Secret—otherwise payment signatures will fail!
 > ⚠️ **Important**: For GitHub users to be admin, `ADMIN_USERS` **must** contain `gh_GitHubUsername` (e.g. `gh_octocat`), not just the raw GitHub username.
 
+**Scheduled tasks on Workers Free:** The minute-by-minute Cron POSTs cleanup and license-service jobs separately to `NEXT_PUBLIC_APP_URL`, so the two Next.js requests do not share the scheduled invocation's 10ms CPU budget. Set this variable at Worker runtime to this site's HTTPS origin (an optional trailing `/` is allowed; credentials, subpaths, queries, and fragments are rejected). It must reach this Worker directly: redirects are not followed, and Cloudflare Access/WAF must not block the two endpoints. Keep `global_fetch_strictly_public` in `wrangler.json` so same-site requests re-enter the Worker.
+
+Authentication prefers the `CRON_CLEANUP_TOKEN` secret and falls back to `OAUTH_CLIENT_SECRET`. Each HTTP job still has the Free plan's 10ms CPU limit; inspect both endpoint logs and the Cron outcome after deployment, rather than relying only on the cleanup step's `ok` message.
+
 **Callback URLs:**
 
 Assuming your Workers URL is `https://ldc-shop.xxx.workers.dev`:

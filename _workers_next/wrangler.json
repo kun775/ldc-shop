@@ -5,7 +5,8 @@
 	"keep_vars": true,
 	"compatibility_date": "2025-11-12",
 	"compatibility_flags": [
-		"nodejs_compat"
+		"nodejs_compat",
+		"global_fetch_strictly_public"
 	],
 	"assets": {
 		"directory": ".open-next/assets",

@@ -23,13 +23,30 @@ function resolveCronToken(env) {
     return oauthSecret;
 }
 
+/** 只向已配置的 HTTPS 站点发送 Cron 凭据，配置错误时不回退到进程内执行。 */
+function resolveCronOrigin(env) {
+    const appUrl = typeof env?.NEXT_PUBLIC_APP_URL === "string" ? env.NEXT_PUBLIC_APP_URL.trim() : "";
+    if (!appUrl) throw new Error("NEXT_PUBLIC_APP_URL is required for scheduled cron dispatch");
+
+    let url;
+    try {
+        url = new URL(appUrl);
+    } catch {
+        throw new Error("NEXT_PUBLIC_APP_URL must be a valid HTTPS site origin");
+    }
+    if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+        throw new Error("NEXT_PUBLIC_APP_URL must be an HTTPS site origin without credentials, path, query or fragment");
+    }
+    return url.origin;
+}
+
 /** `[cron-cleanup]` / `[cron-license-service]` —— 沿用既有日志前缀习惯。 */
 function cronLabel(path) {
     const segment = path.split("/").filter(Boolean).pop() || "cron";
     return `cron-${segment}`;
 }
 
-async function postInternalCron(env, ctx, path) {
+async function postInternalCron(env, path) {
     const label = cronLabel(path);
     const token = resolveCronToken(env);
     if (!token) {
@@ -39,14 +56,18 @@ async function postInternalCron(env, ctx, path) {
         return;
     }
 
-    const request = new Request(`https://cron.internal${path}`, {
+    const request = new Request(`${resolveCronOrigin(env)}${path}`, {
         method: "POST",
+        // 自定义凭据头不能随跨站重定向转发；站点地址必须直接命中当前 Worker。
+        redirect: "manual",
         headers: {
             [CRON_TOKEN_HEADER]: token,
         },
     });
 
-    const response = await nextWorker.fetch(request, env, ctx);
+    // 通过公共入口触发独立 HTTP 执行，避免 Next.js 与两个任务共用 Cron 的 10ms CPU。
+    // 同站点请求依赖 wrangler.json 中的 global_fetch_strictly_public。
+    const response = await fetch(request);
     const body = await response.text();
     if (!response.ok) {
         console.error(`[${label}] failed: ${response.status} ${body.slice(0, 500)}`);
@@ -60,10 +81,10 @@ async function postInternalCron(env, ctx, path) {
  * 逐个入口串行执行，**每个入口独立 try/catch**：
  * 一个入口失败（或抛错）不能阻断其余入口，否则「清理挂了」会连带让卡密补偿停摆。
  */
-async function runScheduledCrons(env, ctx) {
+async function runScheduledCrons(env) {
     for (const path of SCHEDULED_CRON_PATHS) {
         try {
-            await postInternalCron(env, ctx, path);
+            await postInternalCron(env, path);
         } catch (error) {
             console.error(`[${cronLabel(path)}] threw`, error);
         }
@@ -86,7 +107,7 @@ export default {
         return nextWorker.fetch(request, env, ctx);
     },
     async scheduled(event, env, ctx) {
-        ctx.waitUntil(runScheduledCrons(env, ctx));
+        ctx.waitUntil(runScheduledCrons(env));
     },
 };
 
