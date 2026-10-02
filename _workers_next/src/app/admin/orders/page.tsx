@@ -6,6 +6,8 @@ import { normalizeTimestampMs, withOrderColumnFallback, getProductVariantLabels 
 import { PAYMENT_PRODUCT_ID } from "@/lib/payment"
 import { unstable_noStore } from "next/cache"
 
+import { getLocalTradeOrderId } from "@/lib/orders/trade-number"
+
 const LOGIN_USER_LOOKUP_BATCH_SIZE = 50
 
 function parseIntParam(value: unknown, fallback: number) {
@@ -43,7 +45,7 @@ export default async function AdminOrdersPage(props: {
     }
     if (q) {
         const like = `%${q}%`
-        const orderIdLike = `%${q.replace(/^(?:POINTS_REDEMPTION|ZERO_PRICE):(.+)$/, '$1')}%`
+        const orderIdLike = `%${getLocalTradeOrderId(q) ?? q}%`
         whereParts.push(or(
             sql`${orders.orderId} LIKE ${orderIdLike}`,
             sql`${orders.productName} LIKE ${like}`,

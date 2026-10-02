@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { buildZeroPriceTradeNo } from './trade-number.ts'
 import { executeOrderRefund, getOrderRefundMethod, type RefundOrderPayment } from './refund-policy.ts'
 
 const pointsOrder: RefundOrderPayment = { orderId: 'ORDER-1', status: 'paid', amount: '0.00', pointsUsed: 50, userId: 'user' }
 
-for (const tradeNo of [null, 'POINTS_REDEMPTION', 'POINTS_REDEMPTION:ORDER-1']) {
+for (const tradeNo of [null, 'POINTS_REDEMPTION', 'POINTS_REDEMPTION:ORDER-1', buildZeroPriceTradeNo('ORDER-1', 50)]) {
     test(`纯积分退款 ${tradeNo} 无需交易号或网关配置`, async () => {
         let returned = 0
         const result = await executeOrderRefund({ ...pointsOrder, tradeNo }, {
@@ -33,7 +34,7 @@ for (const patch of [
     { amount: 'NaN' }, { amount: 'Infinity' }, { amount: '-1' }, { amount: '' },
     { status: 'pending' }, { status: 'processing' }, { status: 'cancelled' },
     { amount: '1', tradeNo: 'POINTS_REDEMPTION' }, { amount: '1', tradeNo: 'POINTS_REDEMPTION:ORDER-1' },
-    { amount: '1', tradeNo: null },
+    { amount: '1', tradeNo: null }, { amount: '1', tradeNo: buildZeroPriceTradeNo('ORDER-1', 50) },
 ]) {
     test(`非法或未支付订单不能退款 ${JSON.stringify(patch)}`, async () => {
         const order = { ...pointsOrder, ...patch }

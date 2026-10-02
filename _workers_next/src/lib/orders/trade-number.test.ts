@@ -1,25 +1,39 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildZeroPriceTradeNo, getOrderDisplayTradeNo, isLocalOrderTradeNo } from './trade-number.ts'
+import { randomUUID } from 'node:crypto'
+import { buildZeroPriceTradeNo, getLocalTradeOrderId, getOrderDisplayTradeNo, isLocalOrderTradeNo } from './trade-number.ts'
 
-test('积分与免费订单各有唯一交易号', () => {
-    assert.equal(buildZeroPriceTradeNo('ORDER-A', 10), 'POINTS_REDEMPTION:ORDER-A')
-    assert.equal(buildZeroPriceTradeNo('ORDER-A', 0), 'ZERO_PRICE:ORDER-A')
-    assert.notEqual(buildZeroPriceTradeNo('ORDER-A', 10), buildZeroPriceTradeNo('ORDER-B', 10))
+const ORDER = 'ORD5BE0E641D8104DA0872F489F1BBE97D2'
+
+test('零元数字交易号独立、稳定、可搜索，不截断完整订单身份', () => {
+    const seen = new Set<string>()
+    for (const id of [ORDER, 'ORD00000000000000000000000000000000', 'ORDFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF', 'ORDER-A', '历史订单', ...Array.from({ length: 1000 }, () => 'ORD' + randomUUID().replaceAll('-', '').toUpperCase())]) {
+        for (const points of [0, 10]) {
+            const number = buildZeroPriceTradeNo(id, points)
+            assert.match(number, /^\d+$/)
+            if (id.startsWith('ORD') && id.length === 35) assert.equal(number.length, 43)
+            assert.equal(getLocalTradeOrderId(number), id)
+            assert.equal(isLocalOrderTradeNo(number), true)
+            assert.equal(buildZeroPriceTradeNo(id, points), number)
+            assert.equal(seen.has(number), false)
+            seen.add(number)
+        }
+    }
     assert.throws(() => buildZeroPriceTradeNo(' ', 10), /Missing order id/)
 })
 
-test('历史固定交易号展示补订单ID，真实交易号保持原样', () => {
-    const legacy = { orderId: 'ORDER-A', tradeNo: 'POINTS_REDEMPTION', pointsUsed: 10 }
-    assert.equal(getOrderDisplayTradeNo(legacy), 'POINTS_REDEMPTION:ORDER-A')
-    assert.equal(legacy.tradeNo, 'POINTS_REDEMPTION')
-    assert.equal(getOrderDisplayTradeNo({ ...legacy, tradeNo: 'real-trade' }), 'real-trade')
-    assert.equal(getOrderDisplayTradeNo({ ...legacy, tradeNo: null }), null)
+test('历史固定和带订单号的零元交易号统一数字展示，真实网关交易号保持原样', () => {
+    for (const tradeNo of ['POINTS_REDEMPTION', 'POINTS_REDEMPTION:' + ORDER, 'ZERO_PRICE', 'ZERO_PRICE:' + ORDER]) {
+        const order = { orderId: ORDER, tradeNo, pointsUsed: 10 }
+        assert.equal(getOrderDisplayTradeNo(order), buildZeroPriceTradeNo(ORDER, 10))
+        assert.equal(order.tradeNo, tradeNo)
+    }
+    assert.equal(getLocalTradeOrderId('POINTS_REDEMPTION:' + ORDER), ORDER)
+    assert.equal(getOrderDisplayTradeNo({ orderId: ORDER, tradeNo: '110207387872264192' }), '110207387872264192')
+    assert.equal(getOrderDisplayTradeNo({ orderId: ORDER, tradeNo: null }), null)
 })
 
-test('本地合成交易号不能发送到网关', () => {
-    for (const number of ['POINTS_REDEMPTION', 'POINTS_REDEMPTION:ORDER', 'ZERO_PRICE', 'ZERO_PRICE:ORDER']) {
-        assert.equal(isLocalOrderTradeNo(number), true)
-    }
-    assert.equal(isLocalOrderTradeNo('real-trade'), false)
+test('非法编码不会被误认作本地编号，旧合成号继续阻止发送网关', () => {
+    for (const number of ['POINTS_REDEMPTION', 'POINTS_REDEMPTION:ORDER', 'ZERO_PRICE', 'ZERO_PRICE:ORDER']) assert.equal(isLocalOrderTradeNo(number), true)
+    for (const number of ['110207387872264192', '9900', '9900' + '9'.repeat(39), '99021', '9902255', 'abc', '99' + '1'.repeat(600)]) assert.equal(isLocalOrderTradeNo(number), false)
 })
