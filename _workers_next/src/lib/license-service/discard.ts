@@ -110,10 +110,10 @@ function sqlLiteral(value: string): string {
  * `IN (SELECT ...)` 只物化一次，判定语义完全不变。
  */
 function bindAllocation(template: string, target: { allocationId: string; productId: string }): string {
-    return template
-        // 用函数作替换值：字符串替换值里的 `$&` / `$'` 会被当作反向引用。
-        .replace(/\ba\.allocation_id\b/g, () => sqlLiteral(target.allocationId))
-        .replace(/\ba\.product_id\b/g, () => sqlLiteral(target.productId))
+    // 单次替换，不重扫已插入的字面量（ID 本身也可能包含 `a.product_id`）。
+    // 用函数作替换值：字符串替换值里的 `$&` / `$'` 会被当作反向引用。
+    return template.replace(/\ba\.(allocation_id|product_id)\b/g, (_match, field: string) =>
+        sqlLiteral(field === 'allocation_id' ? target.allocationId : target.productId))
 }
 
 /** 查询诊断与原子 UPDATE 共用同一套条件，防止先读后写期间误删。 */

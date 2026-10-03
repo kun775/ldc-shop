@@ -520,9 +520,9 @@ test('读放大守卫：丢弃判定的子查询不得再与外层分配行相�
     assert.deepEqual(offenders.map((sql) => sql.replace(/\s+/g, ' ').slice(0, 120)), [])
 })
 
-test('分配 ID 含引号与 $ 时内联常量仍正确转义，判定与清理范围不变', async () => {
+for (const weird of ["all-o'b$&r$'", "all-a.product_id-a.allocation_id'o$&"]) {
+    test(`分配 ID ${weird} 的字面量不被重扫，判定与清理范围不变`, async () => {
     const ctx = createSqliteCardServiceDatabase()
-    const weird = "all-o'b$&r$'"
     const quoted = weird.replace(/'/g, "''")
     ctx.exec(`
         INSERT INTO products (id) VALUES ('demo');
@@ -544,4 +544,5 @@ test('分配 ID 含引号与 $ 时内联常量仍正确转义，判定与清理�
         { ok: true, allocationId: weird, productId: 'demo', deletedCards: 1, deletedStagedCards: 0 })
     assert.equal(ctx.all('SELECT * FROM cards').length, 0)
     assert.equal(ctx.all('SELECT * FROM card_service_operations').length, 0)
-})
+    })
+}
