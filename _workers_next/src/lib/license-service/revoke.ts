@@ -40,6 +40,7 @@ import {
 import type { LicenseServiceClient } from './client.ts'
 import { isMissingTableError, type CardServiceDatabase, type CardServiceStatement } from './db-port.ts'
 import {
+    CARD_SERVICE_MAX_OPERATION_ATTEMPTS,
     CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL,
     CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL,
     buildOperationFailureClauses,
@@ -599,6 +600,28 @@ function buildRevokeOperationStateStatements(input: {
         }]
     }
 
+    if (input.state === 'pending') {
+        // 可重试的延后（中心不可用 / 查不到确定状态）同样**计入重试预算**：
+        // 满上限转 `abandoned` 进复核清单，否则每分钟一次的调度会让它永远重放
+        // （线上曾有待办累计到 attempts=35 仍在 `pending`）。
+        // 未给 `nextRetryAtMs`（没有 Retry-After）时走队列统一的指数退避。
+        const failure = buildOperationFailureClauses(input.nowMs)
+        const nextRetryAt = input.nextRetryAtMs == null
+            ? failure.nextRetryAt
+            : `CASE WHEN attempts + 1 >= ${CARD_SERVICE_MAX_OPERATION_ATTEMPTS} THEN NULL ELSE ? END`
+        const params: unknown[] = []
+        if (input.nextRetryAtMs != null) params.push(input.nextRetryAtMs)
+        params.push(input.requestId, input.errorCode, input.nowMs, key)
+        return [{
+            sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
+                SET state = CASE WHEN attempts + 1 >= ${CARD_SERVICE_MAX_OPERATION_ATTEMPTS} THEN 'abandoned' ELSE 'pending' END,
+                    attempts = attempts + 1, next_retry_at = ${nextRetryAt},
+                    request_id = ?, last_error_code = ?, updated_at = ?
+                WHERE operation_key = ?`,
+            params,
+        }]
+    }
+
     return [{
         sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
             SET state = ?, attempts = attempts + 1, next_retry_at = ?,
@@ -696,16 +719,21 @@ export function buildRevokeRetainStatements(input: {
     return statements
 }
 
-/** 可重试失败：保持待办可被重放，并记录下次重试时间。 */
+/**
+ * 可重试失败：保持待办可被重放，并记录下次重试时间。
+ *
+ * 计入重试预算：满 `CARD_SERVICE_MAX_OPERATION_ATTEMPTS` 次转 `abandoned`（进复核清单）。
+ * `nextRetryAtMs` 省略/为 null 时走队列指数退避；只有远端给了 Retry-After 才传具体时间。
+ */
 export function buildRevokeDeferStatements(input: {
     orderId: string
     remoteCardId: string
     errorCode: string
     requestId: string | null
-    nextRetryAtMs: number
+    nextRetryAtMs?: number | null
     nowMs: number
 }): CardServiceStatement[] {
-    return buildRevokeOperationStateStatements({ ...input, state: 'pending' })
+    return buildRevokeOperationStateStatements({ ...input, nextRetryAtMs: input.nextRetryAtMs ?? null, state: 'pending' })
 }
 
 /** 不可重试失败：待办置 `failed`（含退避与尝试上限）等人工核查（不是「已完成」）。 */
@@ -812,6 +840,7 @@ async function probeRemoteCardStatus(
 ): Promise<RemoteRevokeProbe> {
     let cardStatus = 'unknown'
     let inlineStatus = ''
+    let cardNotFound = false
 
     try {
         const detail = await runWithRetry(
@@ -829,6 +858,7 @@ async function probeRemoteCardStatus(
         if (classified.category === 'unavailable') return { ok: false, error: classified }
         // 卡本身查不到（not_found 等）：分配状态仍值得一问。
         cardStatus = 'unknown'
+        cardNotFound = classified.code === 'not_found'
         if (!options.needAllocationStatus) {
             return { ok: true, cardStatus, allocationStatus: '' }
         }
@@ -845,6 +875,12 @@ async function probeRemoteCardStatus(
     } catch (error) {
         const classified = toLicenseServiceError(error, 'getAllocation')
         if (classified.category === 'unavailable') return { ok: false, error: classified }
+        // 卡与分配**都**明确 404：在当前凭据下中心不认这张卡（典型是换过商品 API Key、
+        // 旧 client 名下的分配）。这是确定结论，不是「暂时不知道」——交人工复核并允许
+        // 本地丢弃，而不是无限延后。只有一边 404 仍按未知处理。
+        if (cardNotFound && classified.code === 'not_found') {
+            return { ok: true, cardStatus, allocationStatus: REMOTE_NOT_FOUND_STATUS }
+        }
         return { ok: true, cardStatus, allocationStatus: 'unknown' }
     }
 }
@@ -879,6 +915,12 @@ export const SHOP_HELD_ALLOCATION_STATUSES = ['allocated', 'acknowledged'] as co
  * （吊销可能落在已经不属于本店的卡上）—— 只能交人工核查。
  */
 export const DEAD_ALLOCATION_STATUSES = ['expired', 'cancelled'] as const
+
+/**
+ * 探测内部哨兵值：卡状态与分配**都**返回 404（不是中心的真实取值）。
+ * 带 `__` 前缀，避免与中心将来新增的状态撞名。
+ */
+export const REMOTE_NOT_FOUND_STATUS = '__not_found__'
 
 /**
  * 「未交付映射」（本地 `acknowledged`）在探测中心之后的处置结论。
@@ -918,6 +960,11 @@ export function classifyAcknowledgedProbe(input: {
     const allocationStatus = (input.allocationStatus || '').toLowerCase()
 
     if (cardStatus === 'revoked') return { kind: 'reclaim' }
+    // 卡与分配都 404：中心在当前凭据下不认这张卡。错误码用 `not_found`，
+    // 运维面板据此提供「本地丢弃」（`discardFailedAllocation` 只接受 not_found）。
+    if (allocationStatus === REMOTE_NOT_FOUND_STATUS) {
+        return { kind: 'review', errorCode: 'not_found' }
+    }
     // 未知（查询失败/字段缺失/本地没有 allocationId）**不是**「仍可售」的证据。
     if (!allocationStatus || allocationStatus === 'unknown') {
         return { kind: 'defer', errorCode: 'remote_status_unknown' }
@@ -977,7 +1024,7 @@ async function revokeOneCard(
                 remoteCardId: card.remoteCardId,
                 errorCode: error.code,
                 requestId: error.requestId,
-                nextRetryAtMs: now() + (error.retryAfterMs ?? 0),
+                ...(error.retryAfterMs == null ? {} : { nextRetryAtMs: now() + error.retryAfterMs }),
                 nowMs: now(),
             }))
             outcome.deferred += 1
@@ -1001,7 +1048,7 @@ async function revokeOneCard(
                 remoteCardId: card.remoteCardId,
                 errorCode: disposition.errorCode,
                 requestId: null,
-                nextRetryAtMs: now(),
+                // 不传具体时间：走队列指数退避，并计入重试预算（满上限转 `abandoned`）。
                 nowMs: now(),
             }))
             outcome.deferred += 1
@@ -1074,7 +1121,7 @@ async function revokeOneCard(
                     remoteCardId: card.remoteCardId,
                     errorCode: probeError.code,
                     requestId: probeError.requestId,
-                    nextRetryAtMs: now() + (probeError.retryAfterMs ?? 0),
+                    ...(probeError.retryAfterMs == null ? {} : { nextRetryAtMs: now() + probeError.retryAfterMs }),
                     nowMs: now(),
                 }))
                 outcome.deferred += 1
@@ -1088,7 +1135,7 @@ async function revokeOneCard(
                 remoteCardId: card.remoteCardId,
                 errorCode: classified.code,
                 requestId: classified.requestId,
-                nextRetryAtMs: now() + (classified.retryAfterMs ?? 0),
+                ...(classified.retryAfterMs == null ? {} : { nextRetryAtMs: now() + classified.retryAfterMs }),
                 nowMs: now(),
             }))
             outcome.deferred += 1

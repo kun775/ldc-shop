@@ -908,6 +908,102 @@ test('远端状态未知（403 / 无效响应）→ 不得放回库存，保留�
     assert.equal(operation(ctx, 'card_a1')?.state, 'pending')
 })
 
+test('回归：远端状态未知的延后走指数退避，不再「立即可重试」', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+    const unavailableAnswer = () => { throw new LicenseServiceError({ code: 'forbidden', httpStatus: 403 }) }
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async () => unavailableAnswer(),
+        getAllocation: async () => unavailableAnswer(),
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    const op = operation(ctx, 'card_a1')
+    assert.equal(op?.state, 'pending')
+    assert.equal(op?.last_error_code, 'remote_status_unknown')
+    // 首次失败：attempts 0 → 1，退避 = now + 60s * 2^0。
+    assert.equal(op?.attempts, 1)
+    assert.equal(op?.next_retry_at, 1_000 + 60_000)
+    // 定时重放遵守退避：退避未到期时不会被选中。
+    assert.deepEqual(await listPendingRevokeOperations(ctx.database, { respectBackoff: true, nowMs: 2_000 }), [])
+})
+
+test('回归：远端状态持续未知累计到上限 → abandoned 进复核清单，不再无限重放', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+    const unavailableAnswer = () => { throw new LicenseServiceError({ code: 'forbidden', httpStatus: 403 }) }
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async () => unavailableAnswer(),
+        getAllocation: async () => unavailableAnswer(),
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+
+    // 模拟线上已累计 35 次的旧待办：下一次失败就必须转终态。
+    ctx.exec(`INSERT INTO card_service_operations
+        (operation_key, operation, resource_id, order_id, state, attempts, next_retry_at, created_at, updated_at)
+        VALUES ('revoke:card_a1:${ORDER_ID}', 'revoke', 'card_a1', '${ORDER_ID}', 'pending', 35, 0, 0, 0)`)
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.equal(outcome.deferred, 1)
+    const op = operation(ctx, 'card_a1')
+    assert.equal(op?.state, 'abandoned')
+    assert.equal(op?.attempts, 36)
+    assert.equal(op?.next_retry_at, null)
+    // 卡保持隔离：终态 ≠ 放回库存。
+    assert.equal(card(ctx, 7)?.is_used, 1)
+    assert.deepEqual(await listPendingRevokeOperations(ctx.database), [])
+})
+
+test('卡与分配都 404（旧凭据名下的分配）→ 转复核 not_found，可本地丢弃，绝不放回库存', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+    const notFound = () => { throw new LicenseServiceError({ code: 'not_found', httpStatus: 404 }) }
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async () => notFound(),
+        getAllocation: async () => notFound(),
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.deepEqual(outcome, { requested: 1, revoked: 0, retained: 0, deferred: 0, failed: 1 })
+    assert.equal(client.callCount('revoke'), 0)
+    assert.equal(card(ctx, 7)?.is_used, 1)
+    const op = operation(ctx, 'card_a1')
+    assert.equal(op?.state, 'failed')
+    assert.equal(op?.last_error_code, 'not_found')
+})
+
+test('只有一边 404（卡查不到但分配 403）→ 仍按未知延后，不下 not_found 结论', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7)
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1' })
+    const client = createFakeLicenseServiceClient({
+        getCardStatus: async () => { throw new LicenseServiceError({ code: 'not_found', httpStatus: 404 }) },
+        getAllocation: async () => { throw new LicenseServiceError({ code: 'forbidden', httpStatus: 403 }) },
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+    await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    const op = operation(ctx, 'card_a1')
+    assert.equal(op?.state, 'pending')
+    assert.equal(op?.last_error_code, 'remote_status_unknown')
+})
+
 test('明确确认仍可用（acknowledged）才放回 —— 与 unknown 区别对待', async () => {
     const ctx = createSqliteCardServiceDatabase()
     seedCard(ctx, 7)

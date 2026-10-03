@@ -216,3 +216,21 @@ test('首次入队的待办（next_retry_at 为空）不受退避过滤影响', 
     const rows = await listPendingSellOperations(ctx.database, { limit: 10, respectBackoff: true, nowMs: NOW })
     assert.deepEqual(rows.map((item) => item.operationKey), [SELL_KEY])
 })
+
+test('回归：已退款/已取消订单的 Sell 待办不占用重放队列', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    // 线上实况：退款订单留下的 40 条 Sell 待办 attempts 恒为 0、created_at 最早，
+    // 交付入口对终态订单直接返回、不会推进它们 —— 不过滤就会永久吃光 `LIMIT`。
+    ctx.exec(`INSERT INTO orders (order_id, product_id, product_name, amount, status) VALUES
+        ('${ORDER_ID}', 'p', 'p', '0', 'refunded'),
+        ('ORDER-C', 'p', 'p', '0', 'cancelled'),
+        ('ORDER-PAID', 'p', 'p', '1', 'paid')`)
+    seedOperation(ctx, { key: SELL_KEY, operation: 'sell', state: 'pending', attempts: 0, createdAt: 0 })
+    ctx.exec(`INSERT INTO card_service_operations
+        (operation_key, operation, resource_id, order_id, state, attempts, next_retry_at, created_at, updated_at) VALUES
+        ('sell:c', 'sell', 'alloc_c', 'ORDER-C', 'pending', 0, NULL, 1, 1),
+        ('sell:paid', 'sell', 'alloc_paid', 'ORDER-PAID', 'pending', 0, NULL, 2, 2)`)
+
+    const rows = await listPendingSellOperations(ctx.database, { limit: 1, respectBackoff: true, nowMs: NOW })
+    assert.deepEqual(rows.map((item) => item.operationKey), ['sell:paid'])
+})

@@ -431,7 +431,13 @@ export async function listPendingSellOperations(
         const params: unknown[] = [CARD_SERVICE_OPERATION_SELL]
         const filters = [`operation = ? AND state IN ('pending', 'failed')
             AND attempts < ${CARD_SERVICE_MAX_OPERATION_ATTEMPTS}
-            AND COALESCE(last_error_code, '') <> 'not_found'`]
+            AND COALESCE(last_error_code, '') <> 'not_found'
+            AND NOT EXISTS (SELECT 1 FROM orders o
+                WHERE o.order_id = ${CARD_SERVICE_OPERATIONS_TABLE}.order_id
+                  AND o.status IN ('refunded', 'cancelled'))`]
+        // ↑ 终态订单的 Sell 待办永远不会被交付入口推进（`completePaidOrderDelivery` 对
+        //   `refunded`/`cancelled` 直接返回、不改待办），attempts 恒为 0、按 created_at 恒排队首。
+        //   不排除它们，`LIMIT n` 会被吃光，真实已付款订单的 Sell 永远轮不到重放。
         // 队列读取可跳过退避筛选，但执行核心仍强制遵守退避与总预算。
         if (options.respectBackoff) {
             filters.push(CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL)

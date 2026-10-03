@@ -463,3 +463,41 @@ test('Revoke not_found 仅在整批订单已退款时允许清理', async () => 
     assert.deepEqual(await discardFailedAllocation(ctx.database, 'failed'), { ok: false, reason: 'blocked', blockedBy: 'recordChanged' })
     assert.deepEqual(snapshot(ctx), before)
 })
+
+test('线上 A 组形态：中心双 404 的退款隔离卡可本地丢弃，连带清掉残留 Sell 待办', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    ctx.exec(`
+        INSERT INTO products (id) VALUES ('demo');
+        INSERT INTO orders (order_id, product_id, product_name, amount, status, trade_no, paid_at, points_used)
+            VALUES ('refunded-order', 'demo', 'Demo', '0.00', 'refunded', 'points', 123, 21000);
+        INSERT INTO card_service_allocations
+            (allocation_id, product_id, program_key, external_ref, quantity, state,
+             request_key, ack_key, expires_at, created_at, updated_at)
+            VALUES ('a-batch', 'demo', 'program', 'ref-a', 1, 'acknowledged', 'req-a', 'ack-a', 999999, 1, 1),
+                   ('b-batch', 'demo', 'program', 'ref-b', 1, 'acknowledged', 'req-b', 'ack-b', 999999, 1, 1);
+        INSERT INTO cards (id, product_id, card_key, is_used, used_at)
+            VALUES (358, 'demo', 'A-KEY', 1, 456), (380, 'demo', 'B-KEY', 0, NULL);
+        INSERT INTO card_service_cards
+            (local_card_id, remote_card_id, allocation_id, product_id, state, created_at, updated_at)
+            VALUES (358, 'remote-a', 'a-batch', 'demo', 'acknowledged', 1, 1),
+                   (380, 'remote-b', 'b-batch', 'demo', 'acknowledged', 1, 1);
+        INSERT INTO card_service_operations
+            (operation_key, operation, resource_id, order_id, state, attempts, last_error_code, created_at, updated_at)
+            VALUES ('ack-a', 'ack', 'a-batch', NULL, 'done', 1, NULL, 1, 1),
+                   ('sell-a', 'sell', 'a-batch', 'refunded-order', 'pending', 0, NULL, 1, 1),
+                   ('revoke-a', 'revoke', 'remote-a', 'refunded-order', 'abandoned', 48, 'not_found', 1, 1),
+                   ('ack-b', 'ack', 'b-batch', NULL, 'done', 1, NULL, 1, 1);
+    `)
+    const orderBefore = { ...ctx.get('SELECT * FROM orders') }
+    assert.deepEqual(await discardFailedAllocation(ctx.database, 'revoke-a'),
+        { ok: true, allocationId: 'a-batch', productId: 'demo', deletedCards: 1, deletedStagedCards: 0 })
+    assert.deepEqual({ ...ctx.get('SELECT * FROM orders') }, orderBefore)
+    assert.deepEqual(ctx.all('SELECT id FROM cards').map((row) => row.id), [380])
+    assert.deepEqual(ctx.all('SELECT local_card_id FROM card_service_cards').map((row) => row.local_card_id), [380])
+    assert.deepEqual(ctx.all('SELECT operation_key FROM card_service_operations').map((row) => row.operation_key), ['ack-b'])
+    assert.deepEqual({ ...ctx.get("SELECT state, last_error_code FROM card_service_allocations WHERE allocation_id = 'a-batch'") },
+        { state: 'abandoned', last_error_code: 'manually_discarded' })
+    assert.deepEqual({ ...ctx.get("SELECT state, last_error_code FROM card_service_allocations WHERE allocation_id = 'b-batch'") },
+        { state: 'acknowledged', last_error_code: null })
+    assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'refunded-order'), false)
+})
