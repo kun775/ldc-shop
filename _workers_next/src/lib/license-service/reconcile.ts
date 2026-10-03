@@ -214,8 +214,9 @@ function outcomeOfAck(outcome: Awaited<ReturnType<typeof ackAndMaterializeAlloca
 export async function reconcilePendingAckOperations(
     deps: RestockDeps,
     options: { limit?: number } = {},
-): Promise<ReconcileSummary> {
+): Promise<ReconcileSummary & { seenAllocationIds: string[] }> {
     const summary = emptyReconcileSummary()
+    const seenAllocationIds: string[] = []
     const operations = await listPendingCardServiceOperations(deps.database, {
         operation: CARD_SERVICE_OPERATION_ACK,
         limit: options.limit ?? RECONCILE_DEFAULT_LIMIT,
@@ -225,21 +226,28 @@ export async function reconcilePendingAckOperations(
     })
 
     for (const operation of operations) {
-        const row = await loadCardServiceAllocation(deps.database, operation.resourceId)
-        if (!row) {
-            // 台账缺失（例如已被人工清理）：待办永远无法推进，计入需人工核查。
+        try {
+            const row = await loadCardServiceAllocation(deps.database, operation.resourceId)
+            if (operation.resourceId) seenAllocationIds.push(operation.resourceId)
+            if (!row) {
+                // 台账缺失（例如已被人工清理）：待办永远无法推进，计入需人工核查。
+                summary.checked += 1
+                summary.requiresReview += 1
+                continue
+            }
+            if (row.state !== 'allocated') {
+                tally(summary, 'skipped', row.productId)
+                continue
+            }
+            tally(summary, await resolveAllocationWithRemoteState(deps, row), row.productId)
+        } catch {
+            // 单条待办（含物化落账本身失败）不能中断本轮已确认的成功项。
             summary.checked += 1
-            summary.requiresReview += 1
-            continue
+            summary.failed += 1
         }
-        if (row.state !== 'allocated') {
-            tally(summary, 'skipped', row.productId)
-            continue
-        }
-        tally(summary, await resolveAllocationWithRemoteState(deps, row), row.productId)
     }
 
-    return summary
+    return { ...summary, seenAllocationIds }
 }
 
 /**
@@ -252,35 +260,35 @@ export async function reconcilePendingAckOperations(
  */
 export async function abandonStaleAllocations(
     deps: RestockDeps,
-    options: { limit?: number } = {},
+    options: { limit?: number; excludeAllocationIds?: ReadonlySet<string> } = {},
 ): Promise<ReconcileSummary> {
     const summary = emptyReconcileSummary()
     const nowMs = resolveNow(deps)()
+    const limit = Math.max(1, Math.trunc(options.limit ?? RECONCILE_DEFAULT_LIMIT))
     const rows = await listStaleAllocatedAllocations(deps.database, {
         deadLineMs: nowMs,
-        limit: options.limit ?? RECONCILE_DEFAULT_LIMIT,
+        limit,
+        excludeAllocationIds: options.excludeAllocationIds ? Array.from(options.excludeAllocationIds) : [],
     })
 
     for (const row of rows) {
-        tally(summary, await resolveAllocationWithRemoteState(deps, row), row.productId)
+        if (summary.checked >= limit) break
+        try {
+            tally(summary, await resolveAllocationWithRemoteState(deps, row), row.productId)
+        } catch {
+            summary.checked += 1
+            summary.failed += 1
+        }
     }
 
     return summary
 }
 
-/** 对账入口：先推进待办，再清理过期分配。供定时任务调用。 */
-export async function reconcileCardServiceState(
-    deps: RestockDeps,
-    options: { limit?: number } = {},
-): Promise<ReconcileSummary> {
-    const pending = await reconcilePendingAckOperations(deps, options)
-    const stale = await abandonStaleAllocations(deps, options)
-
+function mergeReconcileSummary(pending: ReconcileSummary, stale: ReconcileSummary): ReconcileSummary {
     const changedProductIds: string[] = []
     for (const productId of [...pending.changedProductIds, ...stale.changedProductIds]) {
         if (!changedProductIds.includes(productId)) changedProductIds.push(productId)
     }
-
     return {
         checked: pending.checked + stale.checked,
         acknowledged: pending.acknowledged + stale.acknowledged,
@@ -292,4 +300,30 @@ export async function reconcileCardServiceState(
         skipped: pending.skipped + stale.skipped,
         changedProductIds,
     }
+}
+
+/**
+ * 对账入口：先推进待办，再清理过期分配。供定时任务调用。
+ *
+ * 两段共享同一个条目上限，并且第二段排除第一段已经查过的 allocation。
+ * 否则 limit=1 时，一笔「待办里有、又已超窗」的分配会在同一轮被 GET 两次。
+ */
+export async function reconcileCardServiceState(
+    deps: RestockDeps,
+    options: { limit?: number } = {},
+): Promise<ReconcileSummary> {
+    const limit = Math.max(1, Math.trunc(options.limit ?? RECONCILE_DEFAULT_LIMIT))
+    const pending = await reconcilePendingAckOperations(deps, { limit })
+    const remaining = limit - pending.checked
+    if (remaining <= 0) {
+        const { seenAllocationIds: _seen, ...summary } = pending
+        return summary
+    }
+
+    const stale = await abandonStaleAllocations(deps, {
+        limit: remaining,
+        excludeAllocationIds: new Set(pending.seenAllocationIds),
+    })
+
+    return mergeReconcileSummary(pending, stale)
 }

@@ -247,6 +247,16 @@ export function createLicenseServiceClient(options: LicenseServiceClientOptions)
     const now = options.now ?? (() => Date.now())
     const baseUrl = base.baseUrl
 
+    async function conflictFingerprint(code: string, body: unknown): Promise<string | null> {
+        if (code !== 'idempotency_conflict' || body === undefined) return null
+        try {
+            return await fingerprintIdempotentRequest(body)
+        } catch {
+            // 诊断失败不能盖住已经收到的 HTTP 冲突。
+            return null
+        }
+    }
+
     async function request({ operation, method, path, body, idempotencyKey, query }: RequestOptions): Promise<LicenseServiceResponse> {
         const headers: Record<string, string> = {
             Authorization: `Bearer ${apiKey}`,
@@ -257,12 +267,9 @@ export function createLicenseServiceClient(options: LicenseServiceClientOptions)
         if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
 
         let payload: string | undefined
-        let bodyFingerprint: string | null = null
         if (body !== undefined) {
             payload = JSON.stringify(body)
             headers['Content-Type'] = 'application/json'
-            // 指纹只用于排查 idempotency_conflict，不含卡密原文。
-            bodyFingerprint = await fingerprintIdempotentRequest(body)
         }
 
         let url = buildLicenseServiceUrl(baseUrl, path)
@@ -306,13 +313,14 @@ export function createLicenseServiceClient(options: LicenseServiceClientOptions)
 
         if (!response.ok) {
             const envelope = parseErrorEnvelope(parsed)
+            const code = envelope.code ?? fallbackErrorCodeForStatus(response.status)
             throw new LicenseServiceError({
-                code: envelope.code ?? fallbackErrorCodeForStatus(response.status),
+                code,
                 httpStatus: response.status,
                 requestId: extractErrorRequestId(parsed, response.headers.get('X-Request-ID')),
                 retryable: envelope.retryable === true,
                 operation,
-                bodyFingerprint,
+                bodyFingerprint: await conflictFingerprint(code, body),
                 retryAfterMs: parseRetryAfterMs(response.headers.get('Retry-After'), now()),
                 cause: envelope.message,
             })
@@ -325,7 +333,7 @@ export function createLicenseServiceClient(options: LicenseServiceClientOptions)
                 httpStatus: response.status,
                 requestId: extractErrorRequestId(parsed, response.headers.get('X-Request-ID')),
                 operation,
-                bodyFingerprint,
+                bodyFingerprint: null,
                 cause: envelope.reason,
             })
         }

@@ -25,16 +25,8 @@ import {
     replenishCardStock,
     replayPendingCardServiceRevokes,
 } from "@/lib/license-service";
+import { clampCardServiceCronLimit } from "@/lib/license-service/replenish";
 import { retryPendingCardServiceDeliveries } from "@/lib/order-processing";
-
-const DEFAULT_LIMIT = 10;
-const MAX_LIMIT = 50;
-
-function clampLimit(raw: string | null): number {
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return DEFAULT_LIMIT;
-    return Math.min(MAX_LIMIT, Math.max(1, Math.trunc(parsed)));
-}
 
 export async function POST(request: Request) {
     const expectedToken = getCronToken();
@@ -60,14 +52,18 @@ export async function POST(request: Request) {
     }
 
     const startedAt = Date.now();
-    const limit = clampLimit(new URL(request.url).searchParams.get("limit"));
+    const limit = clampCardServiceCronLimit(new URL(request.url).searchParams.get("limit"));
     const steps: Record<string, unknown> = {};
 
     try {
         steps.deliveries = await retryPendingCardServiceDeliveries({ limit });
         steps.reconcile = await reconcileCardService({ limit });
         steps.revokes = await replayPendingCardServiceRevokes({ limit });
-        steps.replenish = await replenishCardStock({});
+        steps.replenish = await replenishCardStock({
+            maxProducts: limit,
+            maxCards: limit,
+            maxPerProduct: 1,
+        });
     } catch (error) {
         console.error("[cron-license-service] failed", error);
         return NextResponse.json(

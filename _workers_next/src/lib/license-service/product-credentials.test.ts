@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { CARD_SERVICE_DDL_STATEMENTS } from '../db/license-service-schema.ts'
 import { CARD_SERVICE_CREDENTIALS_TABLE, CARD_SERVICE_CREDENTIALS_DDL_STATEMENTS, CARD_SERVICE_CREDENTIALS_SCHEMA_PROBES } from '../db/license-service-credentials-schema.ts'
-import { encryptProductApiKey, decryptProductApiKey, describeProductLicenseServiceConfig, listProductCredentialIdentities } from './credentials.ts'
+import { encryptProductApiKey, decryptProductApiKey, describeProductLicenseServiceConfig, listProductCredentialIdentities, clearDerivedCredentialKeys } from './credentials.ts'
 import { saveCardServiceProductConnection } from './product-connection.ts'
 import { loadCardServiceProductConfig } from './product-config.ts'
 import { createProductLicenseServiceClient } from './product-client.ts'
@@ -145,6 +145,53 @@ test('0039 未执行、加密 Secret 缺失与非法 Key 都明确拒绝且不�
     assert.deepEqual(await save(ctx, 'p1', 'program-a', 'key'), { ok: false, reason: 'credential_storage_not_ready' })
     assert.deepEqual(await listProductCredentialIdentities(ctx.database), { ready: false, identities: [] })
     assert.equal((await loadCardServiceProductConfig(ctx.database, 'p1')).configured, false)
+})
+
+test('同一 secret 并发加解密只派生一次，secret 变化后旧缓存不复用', async () => {
+    clearDerivedCredentialKeys()
+    const original = crypto.subtle.deriveKey.bind(crypto.subtle)
+    let derivations = 0
+    crypto.subtle.deriveKey = (async (...args: Parameters<SubtleCrypto['deriveKey']>) => {
+        derivations += 1
+        return original(...args)
+    }) as SubtleCrypto['deriveKey']
+    try {
+        const [first, second] = await Promise.all([
+            encryptProductApiKey('key-a', 'p1', 'program-a', ENV),
+            encryptProductApiKey('key-b', 'p2', 'program-b', ENV),
+        ])
+        assert.equal(derivations, 1)
+        assert.equal(await decryptProductApiKey(first, 'p1', 'program-a', ENV), 'key-a')
+        assert.equal(await decryptProductApiKey(second, 'p2', 'program-b', ENV), 'key-b')
+        const changed = { ...ENV, AUTH_SECRET: 'another-secret' }
+        await assert.rejects(() => decryptProductApiKey(first, 'p1', 'program-a', changed))
+        assert.equal(derivations, 2)
+        const again = await encryptProductApiKey('key-c', 'p1', 'program-a', ENV)
+        assert.equal(derivations, 2)
+        assert.equal(await decryptProductApiKey(again, 'p1', 'program-a', ENV), 'key-c')
+    } finally {
+        crypto.subtle.deriveKey = original
+        clearDerivedCredentialKeys()
+    }
+})
+
+test('派生失败不留在缓存里，下一次会重新派生', async () => {
+    clearDerivedCredentialKeys()
+    const original = crypto.subtle.deriveKey.bind(crypto.subtle)
+    let attempts = 0
+    crypto.subtle.deriveKey = (async (...args: Parameters<SubtleCrypto['deriveKey']>) => {
+        attempts += 1
+        if (attempts === 1) throw new Error('hkdf unavailable')
+        return original(...args)
+    }) as SubtleCrypto['deriveKey']
+    try {
+        await assert.rejects(() => encryptProductApiKey('key-a', 'p1', 'program-a', ENV))
+        assert.equal(await decryptProductApiKey(await encryptProductApiKey('key-a', 'p1', 'program-a', ENV), 'p1', 'program-a', ENV), 'key-a')
+        assert.equal(attempts, 2)
+    } finally {
+        crypto.subtle.deriveKey = original
+        clearDerivedCredentialKeys()
+    }
 })
 
 test('新增凭据迁移幂等且探针可运行，升级 0038 不会隐式建立凭据表', () => {

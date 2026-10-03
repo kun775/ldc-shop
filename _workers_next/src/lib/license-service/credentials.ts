@@ -9,9 +9,32 @@ export function credentialEncryptionSecret(env: Record<string, string | undefine
 }
 function configError(): never { throw new LicenseServiceError({ code: 'config_error' }) }
 
+const derivedKeys = new Map<string, Promise<CryptoKey>>()
+const DERIVED_KEY_CACHE_LIMIT = 4
+
+/** 测试隔离用。生产路径不需要清空：secret 变化会自然换成另一个键。 */
+export function clearDerivedCredentialKeys(): void {
+    derivedKeys.clear()
+}
+
 async function encryptionKey(env: Record<string, string | undefined>): Promise<CryptoKey> {
     const secret = credentialEncryptionSecret(env)
     if (!secret) return configError()
+    const cached = derivedKeys.get(secret)
+    if (cached) return cached
+    const pending = deriveCredentialKey(secret).catch((error: unknown) => {
+        if (derivedKeys.get(secret) === pending) derivedKeys.delete(secret)
+        throw error
+    })
+    if (derivedKeys.size >= DERIVED_KEY_CACHE_LIMIT) {
+        const oldest = derivedKeys.keys().next().value
+        if (oldest) derivedKeys.delete(oldest)
+    }
+    derivedKeys.set(secret, pending)
+    return pending
+}
+
+async function deriveCredentialKey(secret: string): Promise<CryptoKey> {
     const encoder = new TextEncoder()
     const material = await crypto.subtle.importKey('raw', encoder.encode(secret), 'HKDF', false, ['deriveKey'])
     return crypto.subtle.deriveKey({

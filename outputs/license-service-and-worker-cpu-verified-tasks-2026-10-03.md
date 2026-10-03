@@ -109,7 +109,10 @@ D1 属于子请求，但不能据此将远端 HTTP、D1、其他内部服务调�
 
 ### F01 · P1 · 卡密 cron 总预算、去重与公平推进
 
-- [ ] 状态：待实施；依赖：先定分项计数口径，平台配额由 V01 验证；可先做输入边界与同轮去重。
+- [ ] 状态：部分实施（2026-10-03）。已做输入边界与同轮去重；未做分项请求计数、大订单分步进度、平台配额实验（仍属 V01）。
+  已实现：`clampCardServiceCronLimit` 对 null、空串、非数字、负数、0 返回 1，合法值夹到 1–10（不再把 `abc` 当成 10）。对账两段共享这一个上限，第二段排除第一段已检查的 allocation。补货增加商品扫描上限、全轮补卡上限，以及 `cursor` / `afterProductId` 轮转；cron 补货使用 `maxProducts=limit`、`maxCards=limit`、`maxPerProduct=1`。
+  未实现：交付、作废、对账、补货的远端请求与 D1 调用仍没有统一的剩余预算；单个大订单超过预算时没有持久化分步进度。默认调度路径不带查询参数，因此线上默认仍是每段 1 条，而不是旧代码注释里的 10。
+  验证：`replenish.test.ts`、`reconcile.test.ts`、`restock.test.ts`、`cron-wiring.test.ts` 合计 59 通过；`tsc --noEmit` 通过。
 - 范围：L 的 cron license-service route、reconcile.ts、replenish.ts、product-config.ts、order-processing.ts、retry.ts 及装配处；确需分入口时才改 worker-entry.mjs。
 - 修改：显式处理 null/空值/非法 limit，设保守上限；交付、对账、作废、补货均有界。对账两段共享总条目数并排除已检查 allocation；补货增加商品扫描上限、全轮补卡上限及稳定游标/轮转，避免总从首商品开始。
 - 约束：条目不等于请求；计入单订单多 allocation、每卡探测、重试、凭据查询和收尾聚合。耗尽时在安全边界留待下轮，预留持久化额度；不能远端已执行却丢记录。若单个大订单也超预算，需持久化分步进度，最终交付仍全有或全无。
@@ -117,7 +120,10 @@ D1 属于子请求，但不能据此将远端 HTTP、D1、其他内部服务调�
 
 ### F02 · P1 · 超时订单清理有界批次
 
-- [ ] 状态：待实施；依赖：F01 的计数方法，不依赖其代码合入。
+- [x] 状态：已实施（2026-10-03）。未做线上积压观测。
+  实现：候选选择与单笔收尾抽到 `src/lib/orders/expired-cleanup.ts`。默认每轮 20，上限 100，按创建时间与订单号排序。名额先给仍为 pending 的超时订单；有剩余才补扫「已取消但仍押着卡」的订单，避免释放失败后只扫 pending 就丢失。返积分继续用 `refund_return:<orderId>`，券释放只匹配 `reserved`，重复执行不重复入账。卡释放按 90 个订单分块。支付竞争仍靠 `status='pending'` 条件更新，只有一个推进有效。
+  未实现：返积分失败后的订单如果卡已经释放，下一轮不会再被扫到；这种情况依赖 cron 当轮重试。没有把返积分、券、卡放进同一个事务。
+  验证：`expired-cleanup.test.ts` 6 通过；`tsc --noEmit` 通过。生产 SQL 本身未用真实 D1 复跑。
 - 范围：L/src/lib/db/queries.ts:3876、cleanup route 及 cancelExpiredOrders 定向调用方。
 - 修改：按稳定时间/订单键选有限候选，限定单轮工作量；保留 product/user/order 过滤；卡释放和聚合继续批量，IN 按 100 参数约束分块。
 - 约束：状态推进后的返积分、券释放、卡释放不能因停止永久遗漏。预算在完整业务单元间截断；失败要可恢复，不能指望下轮仅扫描 pending 找回已取消的半完成项。
@@ -125,7 +131,10 @@ D1 属于子请求，但不能据此将远端 HTTP、D1、其他内部服务调�
 
 ### F03 · P1 · 隔离 Ack 后的物化失败
 
-- [ ] 状态：待实施；依赖：无，可最先实施。
+- [x] 状态：已实施（2026-10-03，仅商城侧代码与内存 SQLite 测试；未部署、未改 ID 算法）。
+  实现：`ackAndMaterializeAllocation` 捕获物化批次失败。可恢复错误（存储不可用）按操作队列指数退避保留原 allocation 与 ack key；约束类错误走 `failed`，满 12 次转 `abandoned`，暂存都不删除。落账本身失败时返回 `materialize_failure_unrecorded`，不把原待办改写成已保存。补货与对账按商品/分配隔离，一条失败不吞掉同轮已成功摘要。物化提交后读回失败仍按 `restocked` 返回。MAX(id) 注释改为「同批事务内计算，不存在先读后插的并发窗口」。
+  未覆盖：调用方在物化提交后、读回前进程被杀，仍靠既有幂等重放（暂存已空则直接返回已有本地卡）；未新增持久化进度表。
+  验证：`restock.test.ts` 17、`replenish.test.ts` 12、`reconcile.test.ts` 11、`discard.test.ts` 65，合计 105 通过；`tsc --noEmit` 通过。
 - 范围：L/restock.ts:575、replenish.ts:96、reconcile.ts、index.ts:323（均位于 src/lib/license-service）。
 - 修改：区分远端 Ack 与本地物化错误；可恢复失败保留暂存和原 allocation/ack key，写脱敏错误与退避；永久约束错误进入人工复核/有限重试。单商品/分配故障不吞此前成功摘要及聚合。
 - 约束：DB 完全不可写时不得伪报已保存错误；报告基础设施失败，靠原持久化意图恢复。不新 Allocate，不把存储错误误判 expired 并删暂存。澄清 MAX 注释，不改 ID 方案。
@@ -148,21 +157,27 @@ D1 属于子请求，但不能据此将远端 HTTP、D1、其他内部服务调�
 
 ### F06 · P2 · 缓存凭据派生密钥
 
-- [ ] 状态：待实施；依赖：无。
+- [x] 状态：已实施（2026-10-03）。
+  实现：按解析后的 secret 缓存 HKDF 派生 Promise，最多 4 个。并发调用共享同一次派生；派生失败会移除缓存；secret 变化使用另一个键。缓存的是 CryptoKey，不是商品 API Key 明文。
+  验证：`product-credentials.test.ts` 14 通过，含并发一次派生、secret 变化、失败重试。
 - 范围：L/src/lib/license-service/credentials.ts:7、product-credentials.test.ts。
 - 修改：按实际解析 secret（包含现有三个变量回退）使用有界 Promise 缓存；并发合并、失败移除、secret 改变失效。
 - 验收：同 secret 并发只派生一次；变化/缺失/派生失败正确；随机 IV、AAD、旧密文兼容性不变；不全局缓存商品 API Key 明文，不记录 secret。
 
 ### F07 · P2 · 冲突时才计算诊断指纹
 
-- [ ] 状态：待实施；依赖：无。
+- [x] 状态：已实施（2026-10-03）。
+  实现：请求发送前不再计算指纹。只有响应码是 `idempotency_conflict` 才计算；成功、网络失败和普通错误的 `bodyFingerprint` 为 null。计算抛错时仍抛原来的 HTTP 冲突。
+  验证：`client.test.ts` 15 通过。
 - 范围：L/src/lib/license-service/client.ts:250、errors.ts、client.test.ts。
 - 修改：明确 idempotency_conflict 响应才算指纹，其他错误字段约定为 null；计算失败不能覆盖原 HTTP 错误。
 - 验收：成功/网络失败/普通错误不调用 digest；同体不同键序冲突指纹一致；payload、幂等键不变；日志无请求体、卡密和凭据。
 
 ### F08 · P2 · 去除翻译的无效正则处理
 
-- [ ] 状态：待实施；依赖：无。
+- [x] 状态：已实施（2026-10-03）。
+  实现：服务端与客户端共用 `interpolate.ts`。原文不含 `{{` 时直接返回，不编译正则。占位符用一次全局扫描替换，替换值中的 `$` 与新占位符不再被解释；调用方参数仍覆盖默认 `currencyUnit`。
+  验证：`interpolate.test.ts` 2 通过。未做 Worker CPU 微基准。
 - 范围：L/src/lib/i18n/server.ts、context.tsx，可抽取两端纯插值函数。
 - 修改：无占位符直接返回，避免每参数动态编译正则；每翻译器/渲染周期预解析 currencyUnit，保持参数覆盖顺序。
 - 验收：中英文、多/重复占位符、缺参数、数字 0、含 $ 的替换值、SSR/客户端一致；无占位符不创建正则；微基准不冒充 Worker CPU。

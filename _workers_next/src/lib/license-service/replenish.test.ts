@@ -104,8 +104,8 @@ test('低水位补货：串行补齐到目标库存，每张卡独立领卡', as
 
     const summary = await replenishLowStockProducts({ client, database: ctx.database, now: () => NOW })
 
-    assert.deepEqual(summary, {
-        ...emptyReplenishSummary(),
+    assert.deepEqual((({ cursor: _cursor, ...rest }) => rest)(summary), {
+        ...(({ cursor: _ignored, ...rest }) => rest)(emptyReplenishSummary()),
         products: 1,
         restocked: 3,
         changedProductIds: [PROGRAM_PRODUCT],
@@ -124,7 +124,7 @@ test('目标库存为 0 视为暂停自动补货，不发起任何请求', async
 
     const summary = await replenishLowStockProducts({ client, database: ctx.database, now: () => NOW })
 
-    assert.deepEqual(summary, { ...emptyReplenishSummary(), products: 1, skipped: 1 })
+    assert.deepEqual((({ cursor: _cursor, ...rest }) => rest)(summary), { ...(({ cursor: _ignored, ...rest }) => rest)(emptyReplenishSummary()), products: 1, skipped: 1 })
     assert.equal(client.calls.length, 0)
 })
 
@@ -136,8 +136,8 @@ test('已有可用卡时只补差额，不会补过头', async () => {
 
     const summary = await replenishLowStockProducts({ client, database: ctx.database, now: () => NOW })
 
-    assert.deepEqual(summary, {
-        ...emptyReplenishSummary(),
+    assert.deepEqual((({ cursor: _cursor, ...rest }) => rest)(summary), {
+        ...(({ cursor: _ignored, ...rest }) => rest)(emptyReplenishSummary()),
         products: 1,
         restocked: 1,
         changedProductIds: [PROGRAM_PRODUCT],
@@ -154,8 +154,8 @@ test('单商品单轮有上限，剩余额度留给下一轮', async () => {
         maxPerProduct: 2,
     })
 
-    assert.deepEqual(summary, {
-        ...emptyReplenishSummary(),
+    assert.deepEqual((({ cursor: _cursor, ...rest }) => rest)(summary), {
+        ...(({ cursor: _ignored, ...rest }) => rest)(emptyReplenishSummary()),
         products: 1,
         restocked: 2,
         changedProductIds: [PROGRAM_PRODUCT],
@@ -177,7 +177,7 @@ test('一旦补不到就停止本轮：不会在同一个故障上连续失败',
         policy: { maxAttempts: 1 },
     })
 
-    assert.deepEqual(summary, { ...emptyReplenishSummary(), products: 1, failed: 1 })
+    assert.deepEqual((({ cursor: _cursor, ...rest }) => rest)(summary), { ...(({ cursor: _ignored, ...base }) => base)(emptyReplenishSummary()), products: 1, failed: 1 })
     assert.equal(client.callCount('allocate'), 1)
 })
 
@@ -189,8 +189,8 @@ test('只扫描走通用卡密服务的商品，本地供应商品不参与补�
 
     const summary = await replenishLowStockProducts({ client, database: ctx.database, now: () => NOW })
 
-    assert.deepEqual(summary, {
-        ...emptyReplenishSummary(),
+    assert.deepEqual((({ cursor: _cursor, ...rest }) => rest)(summary), {
+        ...(({ cursor: _ignored, ...rest }) => rest)(emptyReplenishSummary()),
         products: 1,
         restocked: 1,
         changedProductIds: [PROGRAM_PRODUCT],
@@ -200,6 +200,62 @@ test('只扫描走通用卡密服务的商品，本地供应商品不参与补�
         ctx.get(`SELECT product_id FROM cards ORDER BY id ASC LIMIT 1`)?.product_id,
         PROGRAM_PRODUCT,
     )
+})
+
+test('一个商品物化失败不吞掉已成功商品，预算内的后续商品继续补', async () => {
+    const ctx = setup()
+    const third = 'prod_third'
+    ctx.exec(`INSERT INTO products (id) VALUES ('${third}')`)
+    await configure(ctx, PROGRAM_PRODUCT, { targetStock: 1 })
+    await configure(ctx, LOCAL_PRODUCT, { targetStock: 1 })
+    await configure(ctx, third, { targetStock: 1 })
+
+    let allocations = 0
+    const allocationProduct = new Map<string, string>()
+    const client = createFakeLicenseServiceClient({
+        allocate: async (input) => {
+            allocations += 1
+            const allocationId = `alloc_${allocations}`
+            allocationProduct.set(allocationId, (input as { productId: string }).productId)
+            return makeAllocationDetail({
+                allocationId,
+                programKey: (input as { programKey: string }).programKey,
+                cards: [{ id: `card_${allocations}`, key: `KEY-${allocations}`, maskedKey: null }],
+            })
+        },
+        ack: async (input) => ({
+            allocationId: (input as { allocationId: string }).allocationId,
+            status: 'acknowledged' as const,
+        }),
+    })
+    const database = {
+        query: ctx.database.query.bind(ctx.database),
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            const materialize = statements.some((statement) => statement.sql.includes('INSERT INTO cards'))
+            const target = statements
+                .map((statement) => statement.params?.find((value) => allocationProduct.get(String(value)) === PROGRAM_PRODUCT))
+                .find(Boolean)
+            if (materialize && target) throw new Error('D1 is restarting')
+            return ctx.database.write(statements)
+        },
+    }
+
+    const summary = await replenishLowStockProducts({
+        client,
+        database,
+        now: () => NOW,
+        policy: { maxAttempts: 1 },
+    })
+
+    assert.equal(summary.products, 3)
+    assert.equal(summary.restocked, 2)
+    assert.equal(summary.failed, 1)
+    assert.deepEqual([...summary.changedProductIds].sort(), [LOCAL_PRODUCT, third].sort())
+    assert.equal(countOf(ctx, 'cards'), 2)
+    assert.equal(countOf(ctx, 'card_service_staged_cards'), 1)
+    const stuck = ctx.get(`SELECT product_id, state FROM card_service_allocations WHERE state = 'allocated'`)
+    assert.equal(stuck?.product_id, PROGRAM_PRODUCT)
+    assert.equal(client.callCount('allocate'), 3)
 })
 
 test('Ack 失败时本轮计入 deferred 并停止，留给对账重放', async () => {
@@ -214,7 +270,7 @@ test('Ack 失败时本轮计入 deferred 并停止，留给对账重放', async 
 
     const summary = await replenishLowStockProducts(depsOf(ctx, failing))
 
-    assert.deepEqual(summary, { ...emptyReplenishSummary(), products: 1, deferred: 1 })
+    assert.deepEqual((({ cursor: _cursor, ...rest }) => rest)(summary), { ...(({ cursor: _ignored, ...base }) => base)(emptyReplenishSummary()), products: 1, deferred: 1 })
     // 暂存保留，等对账推进；可售库存仍为 0。
     assert.equal(countOf(ctx, 'cards'), 0)
     assert.equal(countOf(ctx, 'card_service_staged_cards'), 1)
@@ -252,6 +308,27 @@ test('目标库存留空默认补到 1 张', async () => {
     assert.equal((await replenishLowStockProducts(deps)).restocked, 1)
     assert.equal(await countReplenishableLocalCards(deps, PROGRAM_PRODUCT, NOW), 1)
     assert.equal((await replenishLowStockProducts(deps)).restocked, 0)
+})
+
+test('补货按商品轮转：本轮只扫一个，下一轮从它后面继续，不会总卡在第一个', async () => {
+    const ctx = setup()
+    const third = 'prod_third'
+    ctx.exec(`INSERT INTO products (id) VALUES ('${third}')`)
+    await configure(ctx, LOCAL_PRODUCT, { targetStock: 1 })
+    await configure(ctx, PROGRAM_PRODUCT, { targetStock: 1 })
+    await configure(ctx, third, { targetStock: 1 })
+    const client = sequentialClient()
+    const deps = { client, database: ctx.database, now: () => NOW, policy: { maxAttempts: 1 } }
+
+    const first = await replenishLowStockProducts(deps, { maxProducts: 1, maxCards: 1 })
+    const second = await replenishLowStockProducts(deps, { maxProducts: 1, maxCards: 1, afterProductId: first.cursor })
+    const thirdRound = await replenishLowStockProducts(deps, { maxProducts: 1, maxCards: 1, afterProductId: second.cursor })
+
+    assert.deepEqual([first.cursor, second.cursor, thirdRound.cursor], [LOCAL_PRODUCT, PROGRAM_PRODUCT, third])
+    assert.equal(first.restocked, 1)
+    assert.equal(second.restocked, 1)
+    assert.equal(thirdRound.restocked, 1)
+    assert.equal(client.callCount('allocate'), 3)
 })
 
 test('超时预留卡恢复可售，不重复补货；有效预留仍不计入目标库存', async () => {

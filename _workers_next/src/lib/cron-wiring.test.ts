@@ -15,6 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
+import { clampCardServiceCronLimit } from './license-service/replenish.ts'
 
 function source(relativePath: string) {
     return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
@@ -166,6 +167,19 @@ function cronHarness(respond: (request: Request) => Promise<Response> = async ()
         },
     }
 }
+
+test('卡密 cron 的 limit：缺失、空串、非数字用 1，合法值夹在 1 到 10', () => {
+    assert.equal(clampCardServiceCronLimit(null), 1)
+    assert.equal(clampCardServiceCronLimit(''), 1)
+    assert.equal(clampCardServiceCronLimit('   '), 1)
+    assert.equal(clampCardServiceCronLimit('abc'), 1)
+    assert.equal(clampCardServiceCronLimit('-3'), 1)
+    assert.equal(clampCardServiceCronLimit('0'), 1)
+    assert.equal(clampCardServiceCronLimit('4'), 4)
+    assert.equal(clampCardServiceCronLimit('10'), 10)
+    assert.equal(clampCardServiceCronLimit('50'), 10)
+    assert.equal(clampCardServiceCronLimit('1e2'), 10)
+})
 
 test('scheduled jobs use separate public HTTP requests without invoking Next.js locally', async () => {
     const harness = cronHarness()

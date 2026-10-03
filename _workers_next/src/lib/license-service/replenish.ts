@@ -21,6 +21,31 @@ export const CARD_SERVICE_DEFAULT_TARGET_STOCK = 1
 /** 单商品单轮最多补几张（仍需逐张串行执行）。 */
 export const CARD_SERVICE_REPLENISH_BATCH_LIMIT = 5
 
+/** 单轮最多扫描多少个已接入商品。其余留到下一轮，从上次停住的商品之后继续。 */
+export const CARD_SERVICE_REPLENISH_PRODUCT_LIMIT = 20
+
+/** 单轮全场最多补多少张，避免一个 cron 触发把所有缺口一次补完。 */
+export const CARD_SERVICE_REPLENISH_ROUND_CARD_LIMIT = 20
+
+/** 卡密 cron 未传 limit 时的处理量。刻意保守：四段共用这一个数。 */
+export const CARD_SERVICE_CRON_DEFAULT_LIMIT = 1
+
+/** 卡密 cron 允许的最大处理量。调大它会同时放大交付、对账、作废和补货。 */
+export const CARD_SERVICE_CRON_MAX_LIMIT = 10
+
+/**
+ * 未传、空串、非数字一律用默认值。
+ *
+ * `Number(null)` 与 `Number("")` 都是 0，而 `Number("abc")` 是 NaN。
+ * 非法文本不能比「没传」处理得更多。
+ */
+export function clampCardServiceCronLimit(raw: string | null): number {
+    if (raw == null || raw.trim() === '') return CARD_SERVICE_CRON_DEFAULT_LIMIT
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed)) return CARD_SERVICE_CRON_DEFAULT_LIMIT
+    return Math.min(CARD_SERVICE_CRON_MAX_LIMIT, Math.max(1, Math.trunc(parsed)))
+}
+
 export interface ReplenishSummary {
     products: number
     restocked: number
@@ -36,10 +61,12 @@ export interface ReplenishSummary {
      * 还是缺货」。
      */
     changedProductIds: string[]
+    /** 本轮扫描停住的商品。下一轮把它传回 `afterProductId`，从它后面继续。 */
+    cursor: string | null
 }
 
 export function emptyReplenishSummary(): ReplenishSummary {
-    return { products: 0, restocked: 0, skipped: 0, deferred: 0, expired: 0, failed: 0, changedProductIds: [] }
+    return { products: 0, restocked: 0, skipped: 0, deferred: 0, expired: 0, failed: 0, changedProductIds: [], cursor: null }
 }
 
 function tally(summary: ReplenishSummary, result: RestockResult, productId: string) {
@@ -83,6 +110,15 @@ export async function countReplenishableLocalCards(
 export interface ReplenishOptions {
     /** 单商品单轮补货上限，默认 `CARD_SERVICE_REPLENISH_BATCH_LIMIT`。 */
     maxPerProduct?: number
+    /** 单轮扫描的商品数上限，默认 `CARD_SERVICE_REPLENISH_PRODUCT_LIMIT`。 */
+    maxProducts?: number
+    /** 单轮全场补卡上限，默认 `CARD_SERVICE_REPLENISH_ROUND_CARD_LIMIT`。 */
+    maxCards?: number
+    /**
+     * 上一轮停住的商品 ID。本轮从它的下一个开始，扫到末尾再回头，
+     * 避免每轮都只处理排序后的前几个商品。
+     */
+    afterProductId?: string | null
     /** 触发来源文案，写入 Allocate 的 `metadata.source`。 */
     reason?: string
 }
@@ -100,12 +136,21 @@ export async function replenishLowStockProducts(
     const summary = emptyReplenishSummary()
     const now = deps.now ?? (() => Date.now())
     const maxPerProduct = Math.max(1, Math.trunc(options.maxPerProduct ?? CARD_SERVICE_REPLENISH_BATCH_LIMIT))
+    const maxProducts = Math.max(1, Math.trunc(options.maxProducts ?? CARD_SERVICE_REPLENISH_PRODUCT_LIMIT))
+    const maxCards = Math.max(1, Math.trunc(options.maxCards ?? CARD_SERVICE_REPLENISH_ROUND_CARD_LIMIT))
     const reason = options.reason ?? 'low-water'
 
-    const products = await listCardServiceProgramProducts(deps.database)
+    const products = [...await listCardServiceProgramProducts(deps.database)]
+        .sort((left, right) => left.productId < right.productId ? -1 : left.productId > right.productId ? 1 : 0)
     summary.products = products.length
+    const start = Math.max(0, products.findIndex((product) => product.productId > (options.afterProductId ?? '')))
+    const ordered = start > 0 ? [...products.slice(start), ...products.slice(0, start)] : products
 
-    for (const product of products) {
+    let scanned = 0
+    for (const product of ordered) {
+        if (scanned >= maxProducts || summary.restocked >= maxCards) break
+        scanned += 1
+        summary.cursor = product.productId
         const target = product.targetStock ?? CARD_SERVICE_DEFAULT_TARGET_STOCK
         if (target <= 0) {
             summary.skipped += 1
@@ -115,16 +160,25 @@ export async function replenishLowStockProducts(
         const available = await countReplenishableLocalCards(deps, product.productId, now())
         let missing = Math.min(target - available, maxPerProduct)
 
-        while (missing > 0) {
-            const result = await restockProductCards(deps, {
-                productId: product.productId,
-                quantity: 1,
-                reason,
-            })
+        while (missing > 0 && summary.restocked < maxCards) {
+            let result: RestockResult
+            try {
+                result = await restockProductCards(deps, {
+                    productId: product.productId,
+                    quantity: 1,
+                    reason,
+                })
+            } catch {
+                // 单商品的未预期失败不能吞掉此前已成功的摘要，也不能挡住后续商品。
+                // 已知的 Ack 后物化失败已在 restock 内落成 failed，正常不会到这里。
+                summary.failed += 1
+                break
+            }
             tally(summary, result, product.productId)
 
-            // 一旦不是「补到一张」，本轮就该停：继续循环只会在同一个故障上
+            // 一旦不是「补到一张」，本商品本轮就该停：继续循环只会在同一个故障上
             // 连续失败（例如库存不足、Key 失效），既无意义也会淹掉日志。
+            // 停的是本商品，不是整轮扫描。
             if (result.status !== 'restocked') break
             missing -= 1
         }

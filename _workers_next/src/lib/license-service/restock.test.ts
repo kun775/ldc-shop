@@ -9,6 +9,7 @@ import {
 } from '../db/license-service-schema.ts'
 import { LicenseServiceError } from './errors.ts'
 import { saveCardServiceProductConfig } from './product-config.ts'
+import { CARD_SERVICE_MAX_OPERATION_ATTEMPTS, CARD_SERVICE_RETRY_BACKOFF_BASE_MS } from './operation-queue.ts'
 import {
     ackAndMaterializeAllocation,
     buildInsertAllocationStatements,
@@ -198,6 +199,148 @@ test('重复物化是幂等的：再跑一次 Ack+物化不会多发请求、不
     assert.equal(countOf(ctx, 'cards'), 1)
     assert.equal(countOf(ctx, CARD_SERVICE_CARDS_TABLE), 1)
     assert.equal(client.callCount('ack'), 1)
+})
+
+test('Ack 成功后物化批次失败：不留半成品，暂存与原 Ack 键保留，且不新领卡', async () => {
+    const ctx = setup()
+    await configure(ctx)
+    let writes = 0
+    const database = {
+        query: ctx.database.query.bind(ctx.database),
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            writes += 1
+            // 第 1 次是批次 A（台账+暂存+待办），第 2 次是物化批次。
+            if (writes === 2) throw new Error('D1 is restarting')
+            return ctx.database.write(statements)
+        },
+    }
+    const client = createFakeLicenseServiceClient({
+        allocate: async () => makeAllocationDetail({ allocationId: 'alloc_mat' }),
+        ack: async () => ({ allocationId: 'alloc_mat', status: 'acknowledged' }),
+    })
+
+    const result = await restockProductCards({ client, database, now: () => NOW, ...singleAttempt }, {
+        productId: PRODUCT_ID,
+    })
+
+    assert.equal(result.status, 'failed')
+    if (result.status === 'failed') {
+        assert.equal(result.allocationId, 'alloc_mat')
+        assert.equal(result.errorCode, 'invalid_response')
+    }
+    assert.equal(countOf(ctx, 'cards'), 0)
+    assert.equal(countOf(ctx, CARD_SERVICE_CARDS_TABLE), 0)
+    assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 1)
+    assert.equal(client.callCount('allocate'), 1)
+    assert.equal(client.callCount('ack'), 1)
+
+    const ledger = ctx.get(`SELECT state, last_error_code, ack_key FROM ${CARD_SERVICE_ALLOCATIONS_TABLE}`)
+    assert.equal(ledger?.state, 'allocated')
+    assert.equal(ledger?.last_error_code, 'local_materialize_unavailable')
+    const operation = ctx.get(`SELECT state, attempts, next_retry_at, operation_key FROM ${CARD_SERVICE_OPERATIONS_TABLE}`)
+    assert.equal(operation?.state, 'pending')
+    assert.equal(operation?.attempts, 1)
+    assert.equal(operation?.next_retry_at, NOW + CARD_SERVICE_RETRY_BACKOFF_BASE_MS)
+    assert.equal(operation?.operation_key, ledger?.ack_key)
+})
+
+test('物化撞上约束时进入有限重试，到上限转 abandoned，仍不删暂存、不换任务', async () => {
+    const ctx = setup()
+    await configure(ctx)
+    let writes = 0
+    const database = {
+        query: ctx.database.query.bind(ctx.database),
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            writes += 1
+            // 批次 A 放行；其后每次物化都撞约束，落账写入放行。
+            if (writes === 2 || writes === 4) throw new Error('UNIQUE constraint failed: cards.id')
+            return ctx.database.write(statements)
+        },
+    }
+    const client = createFakeLicenseServiceClient({
+        allocate: async () => makeAllocationDetail({ allocationId: 'alloc_constraint' }),
+        ack: async () => ({ allocationId: 'alloc_constraint', status: 'acknowledged' }),
+    })
+
+    const first = await restockProductCards({ client, database, now: () => NOW, ...singleAttempt }, {
+        productId: PRODUCT_ID,
+    })
+    assert.equal(first.status, 'failed')
+    const pending = ctx.get(`SELECT state, attempts, last_error_code FROM ${CARD_SERVICE_OPERATIONS_TABLE}`)
+    assert.equal(pending?.state, 'failed')
+    assert.equal(pending?.attempts, 1)
+    assert.equal(pending?.last_error_code, 'local_materialize_constraint')
+    assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 1)
+    assert.equal(countOf(ctx, 'cards'), 0)
+    assert.equal(client.callCount('allocate'), 1)
+
+    ctx.exec(`UPDATE ${CARD_SERVICE_OPERATIONS_TABLE} SET attempts = ${CARD_SERVICE_MAX_OPERATION_ATTEMPTS - 1}`)
+    const row = await loadCardServiceAllocation(ctx.database, 'alloc_constraint')
+    assert.ok(row)
+    const capped = await ackAndMaterializeAllocation({ client, database, now: () => NOW }, row)
+    assert.equal(capped.status, 'failed')
+    const abandoned = ctx.get(`SELECT state, attempts FROM ${CARD_SERVICE_OPERATIONS_TABLE}`)
+    assert.equal(abandoned?.state, 'abandoned')
+    assert.equal(abandoned?.attempts, CARD_SERVICE_MAX_OPERATION_ATTEMPTS)
+    assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 1)
+    assert.equal(client.callCount('allocate'), 1)
+})
+
+test('物化已经提交后读取本地卡失败：仍按已补货恢复，不把空暂存当成缺失', async () => {
+    const ctx = setup()
+    await configure(ctx)
+    const database = {
+        query: async (sql: string, params?: readonly unknown[]) => {
+            if (sql.includes('local_card_id') && countOf(ctx, 'cards') > 0) throw new Error('readback failed')
+            return ctx.database.query(sql, params)
+        },
+        write: ctx.database.write.bind(ctx.database),
+    }
+    const client = createFakeLicenseServiceClient({
+        allocate: async () => makeAllocationDetail({ allocationId: 'alloc_read' }),
+        ack: async () => ({ allocationId: 'alloc_read', status: 'acknowledged' }),
+    })
+
+    const result = await restockProductCards({ client, database, now: () => NOW, ...singleAttempt }, {
+        productId: PRODUCT_ID,
+    })
+
+    assert.equal(result.status, 'restocked')
+    if (result.status === 'restocked') assert.deepEqual(result.localCardIds, [])
+    assert.equal(countOf(ctx, 'cards'), 1)
+    assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 0)
+    assert.equal(ctx.get(`SELECT state FROM ${CARD_SERVICE_OPERATIONS_TABLE}`)?.state, 'done')
+    assert.equal(client.callCount('allocate'), 1)
+})
+
+test('物化失败且错误本身也写不进去：不伪报已保存，原待办保持首次写入', async () => {
+    const ctx = setup()
+    await configure(ctx)
+    let writes = 0
+    const database = {
+        query: ctx.database.query.bind(ctx.database),
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            writes += 1
+            if (writes > 1) throw new Error('database unavailable')
+            return ctx.database.write(statements)
+        },
+    }
+    const client = createFakeLicenseServiceClient({
+        allocate: async () => makeAllocationDetail({ allocationId: 'alloc_down' }),
+        ack: async () => ({ allocationId: 'alloc_down', status: 'acknowledged' }),
+    })
+
+    const result = await restockProductCards({ client, database, now: () => NOW, ...singleAttempt }, {
+        productId: PRODUCT_ID,
+    })
+    assert.equal(result.status, 'failed')
+    if (result.status === 'failed') assert.match(result.message, /materialize_failure_unrecorded/)
+    const operation = ctx.get(`SELECT state, attempts, last_error_code FROM ${CARD_SERVICE_OPERATIONS_TABLE}`)
+    assert.equal(operation?.state, 'pending')
+    assert.equal(operation?.attempts, 0)
+    assert.equal(operation?.last_error_code, null)
+    assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 1)
+    assert.equal(countOf(ctx, 'cards'), 0)
 })
 
 test('超窗（409 allocation_expired）：删掉暂存、台账转 expired、待办 abandoned，并要求换新任务', async () => {

@@ -5,6 +5,7 @@ import en from '@/locales/en.json'
 import zh from '@/locales/zh.json'
 import { type Locale } from './shared'
 import { resolveCurrencyUnit } from '@/lib/currency-unit'
+import { interpolateTranslation } from './interpolate'
 
 type Translations = typeof en
 
@@ -25,13 +26,6 @@ function getNestedValue(obj: unknown, path: string): string | null {
         value = (value as Record<string, unknown>)[part]
     }
     return typeof value === 'string' ? value : null
-}
-
-function interpolate(text: string, params?: Record<string, string | number>): string {
-    if (!params) return text
-    return Object.entries(params).reduce((acc, [key, value]) => {
-        return acc.replace(new RegExp(`{{${key}}}`, 'g'), String(value))
-    }, text)
 }
 
 export function I18nProvider({
@@ -59,7 +53,7 @@ export function I18nProvider({
 
     const t = (key: string, params?: Record<string, string | number>): string => {
         const text = getNestedValue(translations[locale], key) ?? key
-        return interpolate(text, { currencyUnit: resolveCurrencyUnit(locale, currencyUnit), ...params })
+        return interpolateTranslation(text, { currencyUnit: resolveCurrencyUnit(locale, currencyUnit), ...params })
     }
 
     return (
@@ -78,7 +72,7 @@ export function useI18n() {
             setLocale: () => { },
             t: (key: string, params?: Record<string, string | number>) => {
                 const text = getNestedValue(en, key) ?? key
-                return interpolate(text, { currencyUnit: resolveCurrencyUnit('en', null), ...params })
+                return interpolateTranslation(text, { currencyUnit: resolveCurrencyUnit('en', null), ...params })
             }
         }
     }

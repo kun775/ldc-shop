@@ -191,7 +191,18 @@ export type RestockResult =
     }
 
 export type AckAndMaterializeOutcome =
-    | { status: 'acknowledged'; allocationId: string; remoteCardIds: string[]; localCardIds: number[] }
+    | {
+        status: 'acknowledged'
+        allocationId: string
+        remoteCardIds: string[]
+        localCardIds: number[]
+        /**
+         * 物化批次已提交，但随后读取本地卡 ID 失败。卡已经在可售池，
+         * 调用方仍应按成功记账；ID 列表为空只表示这一次没读回来。
+         */
+        readbackFailed?: boolean
+        error?: LicenseServiceError
+    }
     | { status: 'expired'; allocationId: string; errorCode: string }
     | { status: 'deferred'; allocationId: string; error: LicenseServiceError }
     | { status: 'failed'; allocationId: string; error: LicenseServiceError; keepStaged: true }
@@ -274,16 +285,25 @@ export async function listLocalCardIds(
 /** 列出超过 Ack 窗口仍未确认的分配（本地记录 `expires_at` 才能做这件事）。 */
 export async function listStaleAllocatedAllocations(
     database: CardServiceDatabase,
-    options: { deadLineMs: number; limit?: number },
+    options: { deadLineMs: number; limit?: number; excludeAllocationIds?: readonly string[] },
 ): Promise<CardServiceAllocationRow[]> {
+    const excluded = new Set((options.excludeAllocationIds ?? []).filter(Boolean))
+    const limit = Math.max(1, Math.trunc(options.limit ?? 20))
+    // 不把排除列表拼进 IN：单条语句绑定参数上限是 100，而本段上限本身只有几十。
+    // 多取「上限 + 已排除」行，再在内存里丢掉本轮已经查过的 allocation。
     const rows = await database.query(
         `SELECT ${ALLOCATION_COLUMNS} FROM ${CARD_SERVICE_ALLOCATIONS_TABLE}
          WHERE state = 'allocated' AND expires_at <= ?
          ORDER BY expires_at ASC
          LIMIT ?`,
-        [options.deadLineMs, Math.max(1, Math.trunc(options.limit ?? 20))],
+        [options.deadLineMs, limit + excluded.size],
     )
-    return rows.map(toAllocationRow).filter((row): row is CardServiceAllocationRow => row !== null)
+    const collected: CardServiceAllocationRow[] = []
+    for (const row of rows.map(toAllocationRow)) {
+        if (!row || excluded.has(row.allocationId) || collected.length >= limit) continue
+        collected.push(row)
+    }
+    return collected
 }
 
 export interface PendingOperationRow {
@@ -404,8 +424,10 @@ export function buildInsertAckOperationStatement(input: {
  * 因此顺序是：映射侧用 `MAX(id) + ROW_NUMBER()` 一次算完整段连续 ID，
  * 卡侧再按这份映射把 `id` 显式写进 `cards`。
  *
- * 并发插入（管理端加卡、旧 GET 拉卡）理论上仍可能撞主键，撞了整批回滚，
- * 由对账重放（此时会重新计算）处理，不会留下半成品。
+ * ID 的计算与插入同处一个 D1 batch 事务，不存在「先在 JavaScript 里读出
+ * MAX、事务外等待、再插卡」的窗口，其他普通写入不能在该写事务内部插队。
+ * 真实约束错误、历史脏数据或存储异常仍会使整批回滚；那种失败保留暂存与
+ * 原 Ack 待办，由对账用原 allocation / ack key 重放，不换新任务、不新领卡。
  */
 export function buildMaterializeStatements(input: {
     allocationId: string
@@ -489,15 +511,25 @@ export function buildDiscardAllocationStatements(input: {
     ]
 }
 
-/** 可重试失败：保留暂存与待办，记录下次重试时间。 */
+/**
+ * 可重试失败：保留暂存与待办，记录下次重试时间。
+ *
+ * `nextRetryAtMs` 省略时按操作队列的指数退避计算（与不可重试失败共用
+ * `attempts` 口径）。显式传入仍优先，供远端 `Retry-After` 使用。
+ */
 export function buildDeferAckStatements(input: {
     allocationId: string
     ackOperationKey: string
     errorCode: string
     requestId: string | null
-    nextRetryAtMs: number
+    nextRetryAtMs?: number | null
     nowMs: number
 }): CardServiceStatement[] {
+    const failure = buildOperationFailureClauses(input.nowMs)
+    const nextRetryAt = input.nextRetryAtMs == null ? failure.nextRetryAt : '?'
+    const params: unknown[] = []
+    if (input.nextRetryAtMs != null) params.push(input.nextRetryAtMs)
+    params.push(input.requestId, input.errorCode, input.nowMs, input.ackOperationKey)
     return [
         {
             sql: `UPDATE ${CARD_SERVICE_ALLOCATIONS_TABLE}
@@ -507,16 +539,10 @@ export function buildDeferAckStatements(input: {
         },
         {
             sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
-                SET state = 'pending', attempts = attempts + 1, next_retry_at = ?,
+                SET state = 'pending', attempts = attempts + 1, next_retry_at = ${nextRetryAt},
                     request_id = ?, last_error_code = ?, updated_at = ?
                 WHERE operation_key = ?`,
-            params: [
-                input.nextRetryAtMs,
-                input.requestId,
-                input.errorCode,
-                input.nowMs,
-                input.ackOperationKey,
-            ],
+            params,
         },
     ]
 }
@@ -647,22 +673,124 @@ export async function ackAndMaterializeAllocation(
     }
 
     const nowMs = now()
-    const results = await deps.database.write(buildMaterializeStatements({
-        allocationId: row.allocationId,
-        productId: row.productId,
-        ackOperationKey: row.ackKey,
-        nowMs,
-    }))
+    let results: Awaited<ReturnType<CardServiceDatabase['write']>>
+    try {
+        results = await deps.database.write(buildMaterializeStatements({
+            allocationId: row.allocationId,
+            productId: row.productId,
+            ackOperationKey: row.ackKey,
+            nowMs,
+        }))
+    } catch (error) {
+        // 远端 Ack 已经成功。本地整批回滚后暂存仍在，必须按原 allocation 与
+        // 原 ack key 留下可重放意图，不能抛出、不能新 Allocate、也不能把存储
+        // 错误当成超窗去删暂存。
+        const classified = classifyMaterializeFailure(error)
+        const recorded = await recordMaterializeFailure(deps, row, classified, nowMs)
+        if (!recorded) {
+            return {
+                status: 'failed',
+                allocationId: row.allocationId,
+                error: infrastructureFailure(classified),
+                keepStaged: true,
+            }
+        }
+        return { status: 'failed', allocationId: row.allocationId, error: classified, keepStaged: true }
+    }
     // 远端响应晚于手动丢弃时，写回被终态守卫挡住，不能报告已补货。
     if (!results[3]?.changes) {
         return { status: 'expired', allocationId: row.allocationId, errorCode: 'allocation_cancelled' }
+    }
+
+    let localCardIds: number[]
+    try {
+        localCardIds = await listLocalCardIds(deps.database, row.allocationId)
+    } catch (error) {
+        // 物化批次已经提交。读失败只能按真实状态恢复：卡已在可售池，
+        // 不能再报失败去重放 Ack（重放会发现暂存已空，误判 staged_cards_missing）。
+        const classified = classifyMaterializeFailure(error)
+        return {
+            status: 'acknowledged',
+            allocationId: row.allocationId,
+            remoteCardIds,
+            localCardIds: [],
+            readbackFailed: true,
+            error: classified,
+        }
     }
 
     return {
         status: 'acknowledged',
         allocationId: row.allocationId,
         remoteCardIds,
-        localCardIds: await listLocalCardIds(deps.database, row.allocationId),
+        localCardIds,
+    }
+}
+
+/**
+ * 本地物化失败的处置码。
+ *
+ * 约束类（主键/外键/唯一索引）是数据问题，继续用同一批卡重试不会自愈，
+ * 交给既有尝试上限后进入复核；存储不可用则按退避重放。两者都保留暂存。
+ */
+function classifyMaterializeFailure(error: unknown): LicenseServiceError {
+    if (error instanceof LicenseServiceError) return error
+    const text = `${(error as { message?: string } | null)?.message ?? ''}`.toLowerCase()
+    const permanent = text.includes('constraint')
+        || text.includes('foreign key')
+        || text.includes('unique')
+        || text.includes('not null')
+        || text.includes('datatype mismatch')
+    return new LicenseServiceError({
+        code: 'invalid_response',
+        operation: 'materialize',
+        retryable: !permanent,
+        cause: permanent ? 'local_materialize_constraint' : 'local_materialize_unavailable',
+    })
+}
+
+function infrastructureFailure(cause: LicenseServiceError): LicenseServiceError {
+    return new LicenseServiceError({
+        code: 'invalid_response',
+        operation: 'materialize',
+        retryable: true,
+        cause: `materialize_failure_unrecorded:${cause.causeMessage ?? cause.code}`,
+    })
+}
+
+/**
+ * 物化失败后的落账。写失败说明库本身不可写：不得伪报「错误已保存」，
+ * 调用方只报告基础设施失败，恢复仍靠批次 A 留下的暂存与原 Ack 待办。
+ */
+async function recordMaterializeFailure(
+    deps: RestockDeps,
+    row: CardServiceAllocationRow,
+    error: LicenseServiceError,
+    nowMs: number,
+): Promise<boolean> {
+    try {
+        if (error.retryable) {
+            await deps.database.write(buildDeferAckStatements({
+                allocationId: row.allocationId,
+                ackOperationKey: row.ackKey,
+                errorCode: error.causeMessage ?? error.code,
+                requestId: error.requestId,
+                // 无 Retry-After 时走队列退避；有则尊重远端给出的等待。
+                ...(error.retryAfterMs == null ? {} : { nextRetryAtMs: nowMs + error.retryAfterMs }),
+                nowMs,
+            }))
+        } else {
+            await deps.database.write(buildFailAckStatements({
+                allocationId: row.allocationId,
+                ackOperationKey: row.ackKey,
+                errorCode: error.causeMessage ?? error.code,
+                requestId: error.requestId,
+                nowMs,
+            }))
+        }
+        return true
+    } catch {
+        return false
     }
 }
 
@@ -814,6 +942,8 @@ export async function restockProductCards(
         allocationId: outcome.allocationId,
         errorCode: outcome.error.code,
         category: outcome.error.category,
-        message: outcome.error.message,
+        // causeMessage 是脱敏后的处置原因（如「失败未能落账」）；Error.message
+        // 只有码和操作名，调用方据此分不清是哪一种本地失败。
+        message: outcome.error.causeMessage ?? outcome.error.message,
     }
 }

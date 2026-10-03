@@ -1,6 +1,7 @@
 import { db, runAtomicD1Batch } from "./index";
 import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger, refundRequests, userMessages } from "./schema";
 import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS, SHARED_CARD_CANDIDATE_WINDOW } from "@/lib/constants";
+import { chunkCleanupIds, selectExpiredCleanupCandidates, type ExpiredOrderCandidate } from "@/lib/orders/expired-cleanup";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema, repairPointLedgerStructureIfNeeded, resetPointLedgerSchemaReady, verifyPointLedgerStructure } from "@/lib/points/ledger-db";
 import { USER_POINT_LEDGER_REBUILD_STATEMENTS } from "@/lib/db/point-ledger-schema";
 import {
@@ -3873,7 +3874,11 @@ export const getVisitorCount = cache(async (): Promise<number> => {
     }
 });
 
-export async function cancelExpiredOrders(filters: { productId?: string; userId?: string; orderId?: string } = {}) {
+export { EXPIRED_ORDER_CLEANUP_LIMIT } from '../orders/expired-cleanup.ts'
+
+export async function cancelExpiredOrders(
+    filters: { productId?: string; userId?: string; orderId?: string; limit?: number } = {},
+) {
     const productId = filters.productId ?? null;
     const userId = filters.userId ?? null;
     const orderId = filters.orderId ?? null;
@@ -3890,24 +3895,36 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
     try {
         // No transaction - D1 doesn't support SQL transactions
         const fiveMinutesAgoMs = Date.now() - RESERVATION_TTL_MS;
-        // Preselect expired orders because D1 may not return rows for UPDATE ... RETURNING
-        const candidates = await db
-            .select({
-                orderId: orders.orderId,
-                productId: orders.productId,
-                userId: orders.userId,
-                username: orders.username,
-                email: orders.email,
-                pointsUsed: orders.pointsUsed,
-            })
-            .from(orders)
-            .where(and(
-                eq(orders.status, 'pending'),
-                lte(orders.createdAt, new Date(fiveMinutesAgoMs)),
-                productId ? eq(orders.productId, productId) : sql`1=1`,
-                userId ? eq(orders.userId, userId) : sql`1=1`,
-                orderId ? eq(orders.orderId, orderId) : sql`1=1`
-            ));
+        const scope = { productId, userId, orderId }
+        const selectCandidate = {
+            orderId: orders.orderId,
+            productId: orders.productId,
+            userId: orders.userId,
+            username: orders.username,
+            email: orders.email,
+            pointsUsed: orders.pointsUsed,
+            status: orders.status,
+        }
+        const candidates = await selectExpiredCleanupCandidates({
+            async listPending(input) {
+                return db.select(selectCandidate).from(orders).where(and(
+                    eq(orders.status, 'pending'),
+                    lte(orders.createdAt, new Date(input.deadlineMs)),
+                    input.productId ? eq(orders.productId, input.productId) : sql`1=1`,
+                    input.userId ? eq(orders.userId, input.userId) : sql`1=1`,
+                    input.orderId ? eq(orders.orderId, input.orderId) : sql`1=1`,
+                )).orderBy(orders.createdAt, orders.orderId).limit(input.limit) as Promise<ExpiredOrderCandidate[]>
+            },
+            async listReservedCancelled(input) {
+                return db.select(selectCandidate).from(orders).where(and(
+                    eq(orders.status, 'cancelled'),
+                    sql`EXISTS (SELECT 1 FROM cards WHERE cards.reserved_order_id = ${orders.orderId})`,
+                    input.productId ? eq(orders.productId, input.productId) : sql`1=1`,
+                    input.userId ? eq(orders.userId, input.userId) : sql`1=1`,
+                    input.orderId ? eq(orders.orderId, input.orderId) : sql`1=1`,
+                )).orderBy(orders.createdAt, orders.orderId).limit(input.limit) as Promise<ExpiredOrderCandidate[]>
+            },
+        }, { deadlineMs: fiveMinutesAgoMs, limit: filters.limit, ...scope })
 
         const orderIds = candidates.map((row) => row.orderId).filter(Boolean);
         if (!orderIds.length) return orderIds;
@@ -3924,9 +3941,11 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
                     eq(orders.status, 'pending')
                 ))
                 .returning({ orderId: orders.orderId });
-            if (!cancelled.length) continue;
+            if (!cancelled.length && expired.status !== 'cancelled') continue;
             actuallyCancelled.push(expired);
 
+            // 已取消的恢复项也走这里：businessKey 保证不会重复返积分，
+            // 券释放只匹配仍为 reserved 的记录。
             if (expired.userId && expired.pointsUsed && expired.pointsUsed > 0) {
                 await ensurePointLedgerUserRecord({
                     userId: expired.userId,
@@ -3969,10 +3988,12 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
             .filter((value): value is string => Boolean(value));
         if (cancelledOrderIds.length > 0) {
             try {
-                // Mirror manual cancel behavior to guarantee release
-                await db.update(cards)
-                    .set({ reservedOrderId: null, reservedAt: null })
-                    .where(inArray(cards.reservedOrderId, cancelledOrderIds));
+                // D1 单条语句绑定参数上限 100，按 90 分块。
+                for (const chunk of chunkCleanupIds(cancelledOrderIds)) {
+                    await db.update(cards)
+                        .set({ reservedOrderId: null, reservedAt: null })
+                        .where(inArray(cards.reservedOrderId, chunk));
+                }
             } catch (error: any) {
                 if (!isMissingTableOrColumn(error)) throw error;
             }
@@ -3980,7 +4001,9 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
 
         // 商品聚合一次性重算：recalcProductAggregatesForMany 内部按批处理，
         // 不再「每个受影响商品各跑一遍全量聚合」。
-        const productIds = Array.from(new Set(actuallyCancelled.map((row) => row.productId).filter(Boolean)));
+        const productIds = Array.from(new Set(
+            actuallyCancelled.map((row) => row.productId).filter((value): value is string => Boolean(value)),
+        ));
         if (productIds.length > 0) {
             try {
                 await recalcProductAggregatesForMany(productIds);

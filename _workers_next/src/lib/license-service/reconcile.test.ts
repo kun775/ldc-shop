@@ -245,8 +245,9 @@ test('待办重放：先核对远程真实状态再决定动作，台账缺失�
     })
 
     const summary = await reconcilePendingAckOperations(deps)
+    const { seenAllocationIds: _seen, ...visible } = summary
 
-    assert.deepEqual(summary, {
+    assert.deepEqual(visible, {
         ...emptyReconcileSummary(),
         checked: 3,
         acknowledged: 1,
@@ -285,6 +286,28 @@ test('过期分配清理会先查远程状态：时钟误判时不会把确认�
     assert.equal(countOf(ctx, CARD_SERVICE_CARDS_TABLE), 1)
 })
 
+test('limit=1 时待办与超窗清理共享一个名额，同一 allocation 本轮只查一次', async () => {
+    const ctx = setup()
+    await seedAllocation(ctx, { allocationId: 'alloc_both', expiresAtMs: NOW - 60_000 })
+    await seedAllocation(ctx, { allocationId: 'alloc_later', expiresAtMs: NOW - 30_000 })
+    let gets = 0
+    const deps = depsOf(ctx, {
+        getAllocation: async () => {
+            gets += 1
+            throw new LicenseServiceError({ code: 'temporarily_unavailable', httpStatus: 503 })
+        },
+    })
+
+    const summary = await reconcileCardServiceState(deps, { limit: 1 })
+
+    assert.equal(summary.checked, 1)
+    assert.equal(summary.deferred, 1)
+    assert.equal(gets, 1)
+    const second = await reconcileCardServiceState(deps, { limit: 1 })
+    assert.equal(second.checked, 1)
+    assert.equal(gets, 2)
+})
+
 test('对账入口把待办推进与过期清理合并计数', async () => {
     const ctx = setup()
     await seedAllocation(ctx, { allocationId: 'alloc_pending', expiresAtMs: NOW + 10 * 60_000 })
@@ -309,4 +332,39 @@ test('对账入口把待办推进与过期清理合并计数', async () => {
     })
     assert.equal(countOf(ctx, 'cards'), 1)
     assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 0)
+})
+
+test('重放时一条分配物化失败，不丢掉同轮已成功的另一条', async () => {
+    const ctx = setup()
+    ctx.exec(`INSERT INTO products (id) VALUES ('prod_2')`)
+    await seedAllocation(ctx, { allocationId: 'alloc_good', expiresAtMs: NOW + 10 * 60_000 })
+    await seedAllocation(ctx, { allocationId: 'alloc_bad', expiresAtMs: NOW + 10 * 60_000 })
+    ctx.exec(`UPDATE ${CARD_SERVICE_ALLOCATIONS_TABLE} SET product_id = 'prod_2' WHERE allocation_id = 'alloc_bad'`)
+
+    const database = {
+        query: ctx.database.query.bind(ctx.database),
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            const hitsBad = statements.some((statement) =>
+                statement.sql.includes('INSERT INTO cards')
+                && statement.params?.includes('alloc_bad'),
+            )
+            if (hitsBad) throw new Error('D1 is restarting')
+            return ctx.database.write(statements)
+        },
+    }
+    const deps = depsOf(ctx, {
+        getAllocation: async (id) => makeAllocationDetail({ allocationId: id, status: 'acknowledged' }),
+        ack: async (input) => ({ allocationId: (input as { allocationId: string }).allocationId, status: 'acknowledged' }),
+    })
+    deps.database = database
+
+    const summary = await reconcilePendingAckOperations(deps)
+
+    assert.equal(summary.checked, 2)
+    assert.equal(summary.acknowledged, 1)
+    assert.equal(summary.failed, 1)
+    assert.deepEqual(summary.changedProductIds, [PRODUCT_ID])
+    assert.equal(countOf(ctx, 'cards'), 1)
+    assert.equal(ctx.get(`SELECT state FROM ${CARD_SERVICE_ALLOCATIONS_TABLE} WHERE allocation_id = 'alloc_bad'`)?.state, 'allocated')
+    assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 1)
 })

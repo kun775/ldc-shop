@@ -279,6 +279,57 @@ test('超时与网络失败分别折算成 timeout / network_error，两者都�
     )
 })
 
+test('只有幂等冲突才计算请求指纹，普通错误和成功都不计算', async () => {
+    const original = crypto.subtle.digest.bind(crypto.subtle)
+    let digests = 0
+    crypto.subtle.digest = (async (...args: Parameters<SubtleCrypto['digest']>) => {
+        digests += 1
+        return original(...args)
+    }) as SubtleCrypto['digest']
+    try {
+        const success = stubFetch(() => jsonResponse(allocationEnvelope()))
+        await makeClient(success.impl).allocate({ programKey: 'bill-service', idempotencyKey: 'restock:task-1:allocate' })
+        assert.equal(digests, 0)
+
+        const ordinary = stubFetch(() => jsonResponse({ ok: false, error: { code: 'rate_limited', message: 'slow down', retryable: true } }, 429))
+        await assert.rejects(
+            makeClient(ordinary.impl).allocate({ programKey: 'bill-service', idempotencyKey: 'restock:task-1:allocate' }),
+            (error: unknown) => isLicenseServiceError(error) && error.code === 'rate_limited' && error.bodyFingerprint === null,
+        )
+        assert.equal(digests, 0)
+
+        const conflict = stubFetch(() => jsonResponse({ ok: false, error: { code: 'idempotency_conflict', message: 'different body', retryable: false } }, 409))
+        await assert.rejects(
+            makeClient(conflict.impl).allocate({ programKey: 'bill-service', quantity: 1, idempotencyKey: 'restock:task-1:allocate' }),
+            (error: unknown) => isLicenseServiceError(error) && error.code === 'idempotency_conflict' && error.bodyFingerprint?.length === 16,
+        )
+        const reversed = stubFetch(() => jsonResponse({ ok: false, error: { code: 'idempotency_conflict', message: 'different body', retryable: false } }, 409))
+        await assert.rejects(
+            makeClient(reversed.impl).allocate({ quantity: 1, programKey: 'bill-service', idempotencyKey: 'restock:task-1:allocate' }),
+            (error: unknown) => isLicenseServiceError(error) && error.bodyFingerprint?.length === 16,
+        )
+        assert.equal(digests, 2)
+    } finally {
+        crypto.subtle.digest = original
+    }
+})
+
+test('指纹计算失败时保留原来的幂等冲突，不改成计算错误', async () => {
+    const original = crypto.subtle.digest.bind(crypto.subtle)
+    crypto.subtle.digest = (async () => {
+        throw new Error('digest unavailable')
+    }) as SubtleCrypto['digest']
+    try {
+        const conflict = stubFetch(() => jsonResponse({ ok: false, error: { code: 'idempotency_conflict', message: 'different body', retryable: false } }, 409))
+        await assert.rejects(
+            makeClient(conflict.impl).allocate({ programKey: 'bill-service', idempotencyKey: 'restock:task-1:allocate' }),
+            (error: unknown) => isLicenseServiceError(error) && error.code === 'idempotency_conflict' && error.bodyFingerprint === null,
+        )
+    } finally {
+        crypto.subtle.digest = original
+    }
+})
+
 test('构造期就拒绝不可用配置：非 HTTPS Base URL 与空 Key 直接抛 config_error', () => {
     const { impl } = stubFetch(() => jsonResponse({ ok: true }))
     assert.throws(
