@@ -3,6 +3,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { buildDatabaseUpgradeStatus, DATABASE_UPGRADE_DEFINITIONS } from './database-upgrade-registry.ts'
+import { CARD_SERVICE_OPERATIONS_CREATE_TABLE_STATEMENT } from './license-service-schema.ts'
+import {
+    CARD_SERVICE_OPERATION_INDEX_DDL_STATEMENTS,
+    CARD_SERVICE_OPERATION_REQUIRED_INDEX_NAMES,
+    CARD_SERVICE_OPERATIONS_RESOURCE_INDEX,
+    CARD_SERVICE_OPERATIONS_ORDER_INDEX,
+} from './license-service-operation-index-schema.ts'
 
 const require = createRequire(import.meta.url)
 const { DatabaseSync } = require('node:sqlite')
@@ -83,7 +90,7 @@ test('0037 stays on manual registered path regardless of schema version, not on 
     const ensure = functionSource(source, 'export async function ensureDatabaseInitialized()', 'async function ensureProductsColumns()')
     const preparation = functionSource(source, 'async function prepareDatabaseForManualUpgrade()', 'export async function ensureDatabaseInitialized()')
 
-    assert.match(source, /const CURRENT_SCHEMA_VERSION = 39;/)
+    assert.match(source, /const CURRENT_SCHEMA_VERSION = 40;/)
     assert.match(runner, /async '0037_product_review_aggregates_rebuild'\(\)\s*\{\s*await rebuildProductReviewAggregates\(\)/)
     assert.match(manual, /await runRegisteredDatabaseUpgrades\(\)/)
     assert.match(manual, /status\.pending === 0 && status\.running === 0/)
@@ -192,4 +199,62 @@ test('0039 商品凭据升级独立于 0038，普通请求不执行 DDL', () => 
     assert.match(source, /'0039_license_service_product_credentials': cardServiceCredentials/)
     const item = DATABASE_UPGRADE_DEFINITIONS.find((d) => d.id === '0039_license_service_product_credentials')
     assert.equal(item?.verifiesStructure, true)
+})
+
+test('0040 独立补索引，接入结构校验与全新库初始化，不在普通请求执行', () => {
+    const source = readSource('./queries.ts')
+    const runner = functionSource(source, 'async function runRegisteredDatabaseUpgrades()', 'export async function getDatabaseUpgradeStatus()')
+    assert.match(runner, /async '0040_license_service_operation_indexes'\(\) \{[\s\S]*?await ensureCardServiceOperationIndexObjects\(\);/)
+    const ensure = functionSource(source, 'async function ensureCardServiceOperationIndexObjects()', '// ensureStructuralSchema')
+    assert.match(ensure, /CARD_SERVICE_OPERATION_INDEX_DDL_STATEMENTS/)
+    assert.doesNotMatch(ensure, /setSetting|markCurrentSchemaReady|schema_version|DELETE FROM|ALTER TABLE/)
+    const ordinary = functionSource(source, 'export async function ensureDatabaseInitialized()', 'async function ensureProductsColumns()')
+    assert.doesNotMatch(ordinary, /ensureCardServiceOperationIndexObjects/)
+    const preparation = functionSource(source, 'async function prepareDatabaseForManualUpgrade()', 'export async function ensureDatabaseInitialized()')
+    assert.match(preparation, /await ensureCardServiceStructureObjects\(\);[\s\S]*?await ensureCardServiceOperationIndexObjects\(\);/)
+    const verify = functionSource(source, 'async function verifyDatabaseUpgradeStructures()', 'async function getPersistedSchemaVersion()')
+    assert.match(verify, /verifyCardServiceOperationIndexStructure\(\)/)
+    assert.match(verify, /'0040_license_service_operation_indexes': cardServiceOperationIndexes/)
+    assert.equal(DATABASE_UPGRADE_DEFINITIONS.find((item) => item.id === '0040_license_service_operation_indexes')?.verifiesStructure, true)
+    const schema = readSource('./schema.ts')
+    assert.match(schema, /index\('card_service_operations_resource_idx'\)\.on\(table\.resourceId\)/)
+    assert.match(schema, /index\('card_service_operations_order_idx'\)\.on\(table\.orderId\)/)
+})
+
+test('0040 真实 SQLite：幂等、缺任一索引判不健康、按资源和订单查找均命中索引', async (t) => {
+    const database = new DatabaseSync(':memory:')
+    t.after(() => database.close())
+    database.exec(CARD_SERVICE_OPERATIONS_CREATE_TABLE_STATEMENT)
+    database.exec(`INSERT INTO card_service_operations
+        (operation_key, operation, resource_id, order_id, state, created_at, updated_at)
+        VALUES ('keep', 'sell', 'allocation', 'order', 'pending', 1, 1)`)
+    const before = database.prepare('SELECT * FROM card_service_operations').all()
+    const source = readSource('./queries.ts')
+    const verifierSource = functionSource(source, 'async function verifyCardServiceOperationIndexStructure()', 'async function verifyDatabaseUpgradeStructures()')
+        .replace(': Promise<boolean>', '').replace('error: unknown', 'error')
+    // 执行生产校验函数，而非手抄一份健康判定逻辑。
+    const verify = new Function('indexExists', 'CARD_SERVICE_OPERATION_REQUIRED_INDEX_NAMES', 'isSchemaDriftError',
+        `${verifierSource}; return verifyCardServiceOperationIndexStructure;`)(
+        async (name: string) => Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(name)),
+        CARD_SERVICE_OPERATION_REQUIRED_INDEX_NAMES,
+        () => false,
+    ) as () => Promise<boolean>
+    assert.equal(await verify(), false)
+    for (let round = 0; round < 2; round += 1) {
+        for (const ddl of CARD_SERVICE_OPERATION_INDEX_DDL_STATEMENTS) database.exec(ddl)
+    }
+    assert.equal(await verify(), true)
+    assert.deepEqual(database.prepare('SELECT * FROM card_service_operations').all(), before)
+    for (const [name, column] of [[CARD_SERVICE_OPERATIONS_RESOURCE_INDEX, 'resource_id'], [CARD_SERVICE_OPERATIONS_ORDER_INDEX, 'order_id']]) {
+        const columns = database.prepare(`PRAGMA index_info('${name}')`).all() as Array<{ name: string }>
+        assert.deepEqual(columns.map((row) => row.name), [column])
+        const plan = database.prepare(`EXPLAIN QUERY PLAN SELECT operation_key FROM card_service_operations WHERE ${column} = ?`).all('target') as Array<{ detail: string }>
+        assert.ok(plan.some((row) => row.detail.includes(`USING INDEX ${name}`)), JSON.stringify(plan))
+        assert.ok(plan.every((row) => !row.detail.includes('SCAN card_service_operations')), JSON.stringify(plan))
+        database.exec(`DROP INDEX ${name}`)
+        assert.equal(await verify(), false, `缺 ${name} 必须判不健康`)
+        for (const ddl of CARD_SERVICE_OPERATION_INDEX_DDL_STATEMENTS) database.exec(ddl)
+        assert.equal(await verify(), true)
+    }
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_list(card_service_operations)').all(), [])
 })

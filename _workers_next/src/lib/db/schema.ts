@@ -424,6 +424,9 @@ export const cardServiceOperations = sqliteTable('card_service_operations', {
     updatedAt: integer('updated_at').notNull(),
 }, (table) => [
     index('card_service_operations_state_idx').on(table.state, table.nextRetryAt),
+    // 升级项 0040：按分配/远端卡与订单查待办（DDL 见 license-service-operation-index-schema.ts）。
+    index('card_service_operations_resource_idx').on(table.resourceId),
+    index('card_service_operations_order_idx').on(table.orderId),
 ]);
 
 // 商品 → 供应模式 / Program 映射（服务端管理，无配置行时回落到 local）

@@ -74,6 +74,12 @@ export const DATABASE_UPGRADE_DEFINITIONS = [
         description: '新增商品与 Program 的加密 API Key 存储；保留历史 Program 凭据，补货、销售、对账和作废按商品分别认证。',
         verifiesStructure: true,
     },
+    {
+        id: '0040_license_service_operation_indexes',
+        name: '卡密服务待办查找索引',
+        description: '为 card_service_operations 的 resource_id 与 order_id 建立索引，避免丢弃、删除守卫与入队判重按分配或订单查待办时全表扫描。只加索引，不改数据。',
+        verifiesStructure: true,
+    },
 ] as const
 
 export type DatabaseUpgradeId = (typeof DATABASE_UPGRADE_DEFINITIONS)[number]['id']

@@ -46,6 +46,10 @@ import {
     CARD_SERVICE_REQUIRED_INDEX_NAMES,
 } from "./license-service-schema";
 import { CARD_SERVICE_CREDENTIALS_DDL_STATEMENTS, CARD_SERVICE_CREDENTIALS_SCHEMA_PROBES } from "./license-service-credentials-schema";
+import {
+    CARD_SERVICE_OPERATION_INDEX_DDL_STATEMENTS,
+    CARD_SERVICE_OPERATION_REQUIRED_INDEX_NAMES,
+} from "./license-service-operation-index-schema";
 import { executeDatabaseUpgrades, ensureDatabaseMigrationsTable, readDatabaseUpgradeStatus } from "./database-upgrades";
 import { supportsRegisteredDatabaseUpgrades, type DatabaseUpgradeHealth } from "./database-upgrade-registry";
 import { isMissingRelationError } from "./schema-errors";
@@ -60,7 +64,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 39;
+const CURRENT_SCHEMA_VERSION = 40;
 const dbInitializationState = createAsyncOnceState();
 const databaseUpgradePreparationState = createAsyncOnceState();
 const persistedSchemaVersionState = createAsyncOnceState();
@@ -301,6 +305,19 @@ async function verifyCardServiceCredentialsStructure(): Promise<boolean> {
     return true;
 }
 
+// verifyCardServiceOperationIndexStructure 校验 0040 的两个待办查找索引。
+// 缺索引不会让任何查询报错，只会让读取量静默放大，因此必须按名查 sqlite_master。
+async function verifyCardServiceOperationIndexStructure(): Promise<boolean> {
+    try {
+        for (const indexName of CARD_SERVICE_OPERATION_REQUIRED_INDEX_NAMES) {
+            if (!(await indexExists(indexName))) return false;
+        }
+        return true;
+    } catch (error: unknown) {
+        return !isSchemaDriftError(error);
+    }
+}
+
 async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth> {
     const [
         baseline,
@@ -314,6 +331,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         rateLimit,
         cardService,
         cardServiceCredentials,
+        cardServiceOperationIndexes,
     ] = await Promise.all([
         verifyBaselineDatabaseStructure(),
         verifyPointLedgerStructure(),
@@ -326,6 +344,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         verifyRateLimitStructure(),
         verifyCardServiceStructure(),
         verifyCardServiceCredentialsStructure(),
+        verifyCardServiceOperationIndexStructure(),
     ]);
     return {
         '0028_database_upgrade_registry': baseline,
@@ -340,6 +359,7 @@ async function verifyDatabaseUpgradeStructures(): Promise<DatabaseUpgradeHealth>
         '0037_product_review_aggregates_rebuild': true, // 纯数据修复，没有结构探针。
         '0038_license_service_ledger': cardService,
         '0039_license_service_product_credentials': cardServiceCredentials,
+        '0040_license_service_operation_indexes': cardServiceOperationIndexes,
     };
 }
 
@@ -637,6 +657,14 @@ async function ensureCardServiceCredentialsStructureObjects() {
     }
 }
 
+// ensureCardServiceOperationIndexObjects 建立待办账本的 resource_id / order_id 索引
+// （升级项 0040 的执行体、全新库初始化共用）。只建索引，不写版本标记。
+async function ensureCardServiceOperationIndexObjects() {
+    for (const statement of CARD_SERVICE_OPERATION_INDEX_DDL_STATEMENTS) {
+        await db.run(sql.raw(statement));
+    }
+}
+
 // ensureStructuralSchema 确保所有表、列与索引等结构对象存在（全部幂等）。
 // 只能从管理员手动升级路径调用，普通页面访问不得触发此函数。
 //
@@ -724,6 +752,10 @@ async function runRegisteredDatabaseUpgrades() {
             },
             async '0039_license_service_product_credentials'() {
                 await ensureCardServiceCredentialsStructureObjects();
+            },
+            async '0040_license_service_operation_indexes'() {
+                // 独立升级项：只给已存在的待办账本补两个索引，不复用 0038 的整套建表。
+                await ensureCardServiceOperationIndexObjects();
             },
         },
         verifyStructures: verifyDatabaseUpgradeStructures,
@@ -1046,6 +1078,7 @@ async function prepareDatabaseForManualUpgrade() {
         await ensureManualStockTriggers();
         await ensureCardServiceStructureObjects();
         await ensureCardServiceCredentialsStructureObjects();
+        await ensureCardServiceOperationIndexObjects();
         await ensureUserPointLedgerSchema({ force: true });
         await ensureDatabaseMigrationsTable();
         await backfillProductAggregates();
