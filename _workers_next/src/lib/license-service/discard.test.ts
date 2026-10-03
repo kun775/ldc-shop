@@ -501,3 +501,47 @@ test('线上 A 组形态：中心双 404 的退款隔离卡可本地丢弃，连
         { state: 'acknowledged', last_error_code: null })
     assert.equal(await orderHasUnsettledCardServiceLedger(ctx.database, 'refunded-order'), false)
 })
+
+test('读放大守卫：丢弃判定的子查询不得再与外层分配行相关', async () => {
+    // 2026-10-03 事故：子查询引用外层 `a.allocation_id` 时，SQLite 对每个候选分配 × 每个订单
+    // 重扫待办/映射/卡表，82 个分配、250 单就读到约 876 万行。判定必须先解析出唯一分配再内联常量。
+    const ctx = createSqliteCardServiceDatabase()
+    seed(ctx)
+    const statements: string[] = []
+    const spy: CardServiceDatabase = {
+        async query(sql, params) { statements.push(sql); return ctx.database.query(sql, params) },
+        async write(batch) { statements.push(...batch.map((s) => s.sql)); return ctx.database.write(batch) },
+    }
+    assert.equal((await discardFailedAllocation(spy, 'failed')).ok, true)
+    const correlated = /=\s*a\.(allocation_id|product_id)\b|\ba\.(allocation_id|product_id)\s*\)/
+    const offenders = statements.filter((sql) => /\bEXISTS\b|\bIN\s*\(\s*SELECT\b/i.test(sql) && correlated.test(sql))
+        // 最后一条读诊断/首条定位查询的外层 `a.allocation_id = ?` 是按主键取行，不算相关子查询。
+        .filter((sql) => !/^\s*SELECT op\.operation, a\.allocation_id/.test(sql))
+    assert.deepEqual(offenders.map((sql) => sql.replace(/\s+/g, ' ').slice(0, 120)), [])
+})
+
+test('分配 ID 含引号与 $ 时内联常量仍正确转义，判定与清理范围不变', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    const weird = "all-o'b$&r$'"
+    const quoted = weird.replace(/'/g, "''")
+    ctx.exec(`
+        INSERT INTO products (id) VALUES ('demo');
+        INSERT INTO orders (order_id, product_id, product_name, amount, status, trade_no, paid_at)
+            VALUES ('refunded-order', 'demo', 'Demo', '0.00', 'refunded', 'points', 123);
+        INSERT INTO card_service_allocations
+            (allocation_id, product_id, program_key, external_ref, quantity, state,
+             request_key, ack_key, expires_at, created_at, updated_at)
+            VALUES ('${quoted}', 'demo', 'program', 'ref-w', 1, 'acknowledged', 'req-w', 'ack-w', 999999, 1, 1);
+        INSERT INTO cards (id, product_id, card_key, is_used, used_at) VALUES (1, 'demo', 'W-KEY', 1, 456);
+        INSERT INTO card_service_cards
+            (local_card_id, remote_card_id, allocation_id, product_id, state, created_at, updated_at)
+            VALUES (1, 'remote-w', '${quoted}', 'demo', 'acknowledged', 1, 1);
+        INSERT INTO card_service_operations
+            (operation_key, operation, resource_id, order_id, state, attempts, last_error_code, created_at, updated_at)
+            VALUES ('revoke-w', 'revoke', 'remote-w', 'refunded-order', 'failed', 3, 'not_found', 1, 1);
+    `)
+    assert.deepEqual(await discardFailedAllocation(ctx.database, 'revoke-w'),
+        { ok: true, allocationId: weird, productId: 'demo', deletedCards: 1, deletedStagedCards: 0 })
+    assert.equal(ctx.all('SELECT * FROM cards').length, 0)
+    assert.equal(ctx.all('SELECT * FROM card_service_operations').length, 0)
+})
