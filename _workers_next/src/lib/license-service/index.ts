@@ -23,7 +23,9 @@ import { resolveAffectedProductIds } from './affected-products.ts'
 import { getProducts, recalcProductAggregatesForMany } from '@/lib/db/queries'
 import type { LicenseServiceErrorCode } from './errors.ts'
 import {
+    readReplenishCursor,
     replenishLowStockProducts,
+    writeReplenishCursor,
     type ReplenishOptions,
     type ReplenishSummary,
 } from './replenish.ts'
@@ -325,7 +327,19 @@ export async function replenishCardStock(
     env: Record<string, string | undefined> = process.env,
 ): Promise<ReplenishSummary | null> {
     if (!isLicenseServiceConfigured(env)) return null
-    const summary = await replenishLowStockProducts(buildCardServiceDeps(env), options)
+    const deps = buildCardServiceDeps(env)
+    const cursor = options.afterProductId === undefined
+        ? await readReplenishCursor(deps.database).catch(() => null)
+        : options.afterProductId
+    const summary = await replenishLowStockProducts(deps, {
+        ...options,
+        afterProductId: cursor,
+    })
+    if (summary.cursor) {
+        await writeReplenishCursor(deps.database, summary.cursor).catch((error) => {
+            console.error('[CardService] replenish cursor save failed', error)
+        })
+    }
     await recalcStorefrontStock(summary.changedProductIds)
     return summary
 }

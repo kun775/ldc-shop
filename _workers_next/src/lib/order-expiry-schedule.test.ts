@@ -11,5 +11,8 @@ test('expired order cleanup runs every minute and includes the exact TTL boundar
     const queries = source('./db/queries.ts')
 
     assert.deepEqual(wrangler.triggers?.crons, ['* * * * *'])
-    assert.match(queries, /lte\(orders\.createdAt, new Date\(fiveMinutesAgoMs\)\)/)
+    // 边界用 lte（含等于）；截止时间经 selectExpiredCleanupCandidates 透传为 input.deadlineMs。
+    assert.match(queries, /lte\(orders\.createdAt, new Date\(input\.deadlineMs\)\)/)
+    assert.match(queries, /deadlineMs: fiveMinutesAgoMs/)
+    assert.match(queries, /const fiveMinutesAgoMs = Date\.now\(\) - RESERVATION_TTL_MS/)
 })

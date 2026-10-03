@@ -416,6 +416,53 @@ test('暂时性错误：保留暂存与待办，登记下次重试时间', async
     assert.equal(operation?.request_id, 'req_01K')
 })
 
+test('已有未物化分配时不再向中心领新卡', async () => {
+    const ctx = setup()
+    await configure(ctx)
+    const client = createFakeLicenseServiceClient({
+        allocate: async () => makeAllocationDetail({ allocationId: 'alloc_held' }),
+        ack: async () => ({ allocationId: 'alloc_held', status: 'acknowledged' }),
+    })
+    let writes = 0
+    const database = {
+        query: ctx.database.query.bind(ctx.database),
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            writes += 1
+            if (writes === 2) throw new Error('D1 is restarting')
+            return ctx.database.write(statements)
+        },
+    }
+    const first = await restockProductCards({ client, database, now: () => NOW, ...singleAttempt }, { productId: PRODUCT_ID })
+    assert.equal(first.status, 'failed')
+
+    const second = await restockProductCards({ client, database: ctx.database, now: () => NOW, ...singleAttempt }, { productId: PRODUCT_ID })
+    assert.deepEqual(second, { status: 'skipped', reason: 'materialize_pending' })
+    assert.equal(client.callCount('allocate'), 1)
+    assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 1)
+})
+
+test('可恢复失败到达尝试上限后转 abandoned，不再保持 pending', async () => {
+    const ctx = setup()
+    await configure(ctx)
+    const client = createFakeLicenseServiceClient({
+        allocate: async () => makeAllocationDetail({ allocationId: 'alloc_cap' }),
+        ack: async () => {
+            throw new LicenseServiceError({ code: 'rate_limited', httpStatus: 429, retryAfterMs: 1_000 })
+        },
+    })
+    await restockProductCards({ client, database: ctx.database, now: () => NOW, ...singleAttempt }, { productId: PRODUCT_ID })
+    ctx.exec(`UPDATE ${CARD_SERVICE_OPERATIONS_TABLE} SET attempts = ${CARD_SERVICE_MAX_OPERATION_ATTEMPTS - 1}`)
+    const row = await loadCardServiceAllocation(ctx.database, 'alloc_cap')
+    assert.ok(row)
+    const outcome = await ackAndMaterializeAllocation({ client, database: ctx.database, now: () => NOW }, row)
+    assert.equal(outcome.status, 'deferred')
+    const operation = ctx.get(`SELECT state, attempts, next_retry_at FROM ${CARD_SERVICE_OPERATIONS_TABLE}`)
+    assert.equal(operation?.state, 'abandoned')
+    assert.equal(operation?.attempts, CARD_SERVICE_MAX_OPERATION_ATTEMPTS)
+    assert.equal(operation?.next_retry_at, null)
+    assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 1)
+})
+
 test('冲突类失败：暂存保留、待办转 failed，等对账核实真实状态后再处理', async () => {
     const ctx = setup()
     await configure(ctx)

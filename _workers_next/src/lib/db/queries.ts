@@ -1,7 +1,15 @@
 import { db, runAtomicD1Batch } from "./index";
 import { products, cards, orders, settings, reviews, reviewReplies, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes, userPointLedger, refundRequests, userMessages } from "./schema";
 import { INFINITE_STOCK, LOGIN_HEARTBEAT_TTL_MS, RESERVATION_TTL_MS, SHARED_CARD_CANDIDATE_WINDOW } from "@/lib/constants";
-import { chunkCleanupIds, selectExpiredCleanupCandidates, type ExpiredOrderCandidate } from "@/lib/orders/expired-cleanup";
+import {
+    EXPIRED_CLEANUP_CARDS_ONLY_RECOVERY_CONDITION_SQL,
+    buildExpiredCleanupRecoveryConditionSql,
+    chunkCleanupIds,
+    refundablePointsParams,
+    selectExpiredCleanupCandidates,
+    settleExpiredCleanupBatch,
+    type ExpiredOrderCandidate,
+} from "@/lib/orders/expired-cleanup";
 import { applyUserAutomaticPointEvent, ensurePointLedgerUserRecord, ensureUserPointLedgerSchema, repairPointLedgerStructureIfNeeded, resetPointLedgerSchemaReady, verifyPointLedgerStructure } from "@/lib/points/ledger-db";
 import { USER_POINT_LEDGER_REBUILD_STATEMENTS } from "@/lib/db/point-ledger-schema";
 import {
@@ -3905,6 +3913,13 @@ export async function cancelExpiredOrders(
             pointsUsed: orders.pointsUsed,
             status: orders.status,
         }
+        const recoveryWhere = (condition: string, input: { productId: string | null; userId: string | null; orderId: string | null }) => and(
+            eq(orders.status, 'cancelled'),
+            sql.raw(condition),
+            input.productId ? eq(orders.productId, input.productId) : sql`1=1`,
+            input.userId ? eq(orders.userId, input.userId) : sql`1=1`,
+            input.orderId ? eq(orders.orderId, input.orderId) : sql`1=1`,
+        )
         const candidates = await selectExpiredCleanupCandidates({
             async listPending(input) {
                 return db.select(selectCandidate).from(orders).where(and(
@@ -3916,88 +3931,128 @@ export async function cancelExpiredOrders(
                 )).orderBy(orders.createdAt, orders.orderId).limit(input.limit) as Promise<ExpiredOrderCandidate[]>
             },
             async listReservedCancelled(input) {
-                return db.select(selectCandidate).from(orders).where(and(
-                    eq(orders.status, 'cancelled'),
-                    sql`EXISTS (SELECT 1 FROM cards WHERE cards.reserved_order_id = ${orders.orderId})`,
-                    input.productId ? eq(orders.productId, input.productId) : sql`1=1`,
-                    input.userId ? eq(orders.userId, input.userId) : sql`1=1`,
-                    input.orderId ? eq(orders.orderId, input.orderId) : sql`1=1`,
-                )).orderBy(orders.createdAt, orders.orderId).limit(input.limit) as Promise<ExpiredOrderCandidate[]>
+                // 恢复条件覆盖押卡、券预占、积分未返三种残留（见 expired-cleanup.ts）。
+                try {
+                    return await (db.select(selectCandidate).from(orders)
+                        .where(recoveryWhere(buildExpiredCleanupRecoveryConditionSql(Date.now()), input))
+                        .orderBy(orders.createdAt, orders.orderId).limit(input.limit) as Promise<ExpiredOrderCandidate[]>)
+                } catch (error: unknown) {
+                    // 旧库还没有券 / 积分账本表时退化为只恢复押卡，不能让整轮清理失败。
+                    if (!isMissingTableOrColumn(error)) throw error
+                    return db.select(selectCandidate).from(orders)
+                        .where(recoveryWhere(EXPIRED_CLEANUP_CARDS_ONLY_RECOVERY_CONDITION_SQL, input))
+                        .orderBy(orders.createdAt, orders.orderId).limit(input.limit) as Promise<ExpiredOrderCandidate[]>
+                }
             },
         }, { deadlineMs: fiveMinutesAgoMs, limit: filters.limit, ...scope })
 
-        const orderIds = candidates.map((row) => row.orderId).filter(Boolean);
-        if (!orderIds.length) return orderIds;
+        if (!candidates.length) return [];
 
-        const actuallyCancelled: typeof candidates = [];
-        let releasedCouponUsageCount = 0;
-        for (const expired of candidates) {
-            const expiredOrderId = expired.orderId;
-            if (!expiredOrderId) continue;
-            const cancelled = await db.update(orders)
-                .set({ status: 'cancelled' })
-                .where(and(
-                    eq(orders.orderId, expiredOrderId),
-                    eq(orders.status, 'pending')
-                ))
-                .returning({ orderId: orders.orderId });
-            if (!cancelled.length && expired.status !== 'cancelled') continue;
-            actuallyCancelled.push(expired);
-
-            // 已取消的恢复项也走这里：businessKey 保证不会重复返积分，
-            // 券释放只匹配仍为 reserved 的记录。
-            if (expired.userId && expired.pointsUsed && expired.pointsUsed > 0) {
+        const { releaseCouponUsages } = await import("@/lib/coupons/reservation");
+        const settlement = await settleExpiredCleanupBatch({
+            listPending: async () => [],
+            listReservedCancelled: async () => [],
+            async cancelIfPending(expiredOrderId) {
+                const cancelled = await db.update(orders)
+                    .set({ status: 'cancelled' })
+                    .where(and(
+                        eq(orders.orderId, expiredOrderId),
+                        eq(orders.status, 'pending')
+                    ))
+                    .returning({ orderId: orders.orderId });
+                return cancelled.length > 0;
+            },
+            async shouldReturnPoints(expired) {
+                // 只给 checkout 真正扣过、且尚未返还的订单返积分；
+                // 历史回填的扣减（metadata 为空）当年返还已计入初始余额，再返就重复入账。
+                const [deductionKey, returnKey] = refundablePointsParams(expired.orderId);
+                let rows: Array<{ businessKey: string; metadata: string | null }>;
+                try {
+                    rows = await db.select({
+                        businessKey: userPointLedger.businessKey,
+                        metadata: userPointLedger.metadata,
+                    }).from(userPointLedger).where(and(
+                        inArray(userPointLedger.businessKey, [deductionKey, returnKey]),
+                        eq(userPointLedger.status, 'completed'),
+                    ));
+                } catch (error: unknown) {
+                    // 账本表还没建：沿用旧行为交给 applyUserAutomaticPointEvent（它会建表，
+                    // 且 businessKey 唯一约束保证不会重复返还）。
+                    if (isMissingTableOrColumn(error)) return true;
+                    throw error;
+                }
+                const deducted = rows.some((row) => row.businessKey === deductionKey && row.metadata != null);
+                const returned = rows.some((row) => row.businessKey === returnKey);
+                return deducted && !returned;
+            },
+            async returnPoints(expired) {
                 await ensurePointLedgerUserRecord({
-                    userId: expired.userId,
+                    userId: expired.userId!,
                     username: expired.username ?? null,
                     email: expired.email ?? null,
                 });
                 await applyUserAutomaticPointEvent({
-                    userId: expired.userId,
+                    userId: expired.userId!,
                     username: expired.username ?? null,
                     email: expired.email ?? null,
                     eventType: "refund_return",
-                    delta: expired.pointsUsed,
-                    businessKey: `refund_return:${expiredOrderId}`,
+                    delta: expired.pointsUsed ?? 0,
+                    businessKey: `refund_return:${expired.orderId}`,
                     sourceType: "order",
-                    sourceId: expiredOrderId,
-                    reason: `订单 ${expiredOrderId} 超时取消返还积分`,
+                    sourceId: expired.orderId,
+                    reason: `订单 ${expired.orderId} 超时取消返还积分`,
                     metadata: JSON.stringify({
                         action: "timeout_cancel",
                     }),
                 });
-            }
-            try {
-                // 超时取消同时释放优惠券预占，避免次数被永久占用
-                const { releaseCouponUsages } = await import("@/lib/coupons/reservation");
-                releasedCouponUsageCount += await releaseCouponUsages(expiredOrderId, 'timeout_cancel');
-            } catch (error: any) {
-                console.error('[Coupon] Release on timeout cancel failed:', error);
-            }
-        }
-
-        if (releasedCouponUsageCount > 0) {
-            console.info('[Coupon] Released reservations on timeout cancel:', releasedCouponUsageCount);
-        }
-
-        // 卡密释放改为**循环外一次性批量**：
-        // 此前每取消一单就发一条 UPDATE，超时清理扫到 N 单就是 N 次 D1 写往返。
-        // 现在按 reserved_order_id IN (...) 合并为一条，写入次数从 O(N) 降到 O(1)。
-        const cancelledOrderIds = actuallyCancelled
-            .map((row) => row.orderId)
-            .filter((value): value is string => Boolean(value));
-        if (cancelledOrderIds.length > 0) {
-            try {
-                // D1 单条语句绑定参数上限 100，按 90 分块。
-                for (const chunk of chunkCleanupIds(cancelledOrderIds)) {
-                    await db.update(cards)
-                        .set({ reservedOrderId: null, reservedAt: null })
-                        .where(inArray(cards.reservedOrderId, chunk));
+            },
+            async releaseCoupons(expiredOrderId) {
+                try {
+                    // 超时取消同时释放优惠券预占，避免次数被永久占用。
+                    // 只匹配 reserved，重复执行无副作用。
+                    return await releaseCouponUsages(expiredOrderId, 'timeout_cancel');
+                } catch (error: unknown) {
+                    // 旧库没有券表：视为无券可放。其他错误抛出，本单不释放押卡，下一轮重试。
+                    if (isMissingTableOrColumn(error)) return 0;
+                    throw error;
                 }
-            } catch (error: any) {
-                if (!isMissingTableOrColumn(error)) throw error;
-            }
+            },
+            async releaseCards(orderIds) {
+                // 卡密释放在循环外一次性批量（D1 单条语句绑定参数上限 100，按 90 分块）。
+                // 只放未使用的卡：已使用的卡不该回到可售池，也会让恢复条件永远命中。
+                try {
+                    for (const chunk of chunkCleanupIds(orderIds)) {
+                        await db.update(cards)
+                            .set({ reservedOrderId: null, reservedAt: null })
+                            .where(and(
+                                inArray(cards.reservedOrderId, chunk),
+                                or(isNull(cards.isUsed), eq(cards.isUsed, false)),
+                            ));
+                    }
+                } catch (error: unknown) {
+                    if (!isMissingTableOrColumn(error)) throw error;
+                }
+            },
+        }, candidates)
+
+        for (const failure of settlement.failed) {
+            console.error('[cancelExpiredOrders] order cleanup step failed', {
+                orderId: failure.orderId,
+                step: failure.step,
+                error: failure.error instanceof Error ? failure.error.message : String(failure.error),
+            });
         }
+        if (settlement.releasedCouponUsages > 0) {
+            console.info('[Coupon] Released reservations on timeout cancel:', settlement.releasedCouponUsages);
+        }
+
+        // 状态已是 cancelled、只是后续收尾失败的订单同样要重算聚合与刷新页面；
+        // 失败在「取消」这一步的订单状态没变，不算。
+        const touchedOrderIds = new Set([
+            ...settlement.settled.map((row) => row.orderId),
+            ...settlement.failed.filter((failure) => failure.step !== 'cancel').map((failure) => failure.orderId),
+        ]);
+        const actuallyCancelled = candidates.filter((row) => touchedOrderIds.has(row.orderId));
 
         // 商品聚合一次性重算：recalcProductAggregatesForMany 内部按批处理，
         // 不再「每个受影响商品各跑一遍全量聚合」。

@@ -12,6 +12,7 @@
  */
 
 import { RESERVATION_TTL_MS } from '../constants.ts'
+import { isMissingTableError, type CardServiceDatabase } from './db-port.ts'
 import { listCardServiceProgramProducts } from './product-config.ts'
 import { restockProductCards, type RestockDeps, type RestockResult } from './restock.ts'
 
@@ -27,11 +28,37 @@ export const CARD_SERVICE_REPLENISH_PRODUCT_LIMIT = 20
 /** 单轮全场最多补多少张，避免一个 cron 触发把所有缺口一次补完。 */
 export const CARD_SERVICE_REPLENISH_ROUND_CARD_LIMIT = 20
 
+/** 补货轮转游标。存在现有 settings 表，不新增迁移。 */
+export const CARD_SERVICE_REPLENISH_CURSOR_KEY = 'card_service_replenish_cursor'
+
 /** 卡密 cron 未传 limit 时的处理量。刻意保守：四段共用这一个数。 */
 export const CARD_SERVICE_CRON_DEFAULT_LIMIT = 1
 
 /** 卡密 cron 允许的最大处理量。调大它会同时放大交付、对账、作废和补货。 */
 export const CARD_SERVICE_CRON_MAX_LIMIT = 10
+
+/** 读取补货轮转游标。settings 表缺失时视为没有游标。 */
+export async function readReplenishCursor(database: CardServiceDatabase): Promise<string | null> {
+    try {
+        const rows = await database.query<{ value?: unknown }>(
+            'SELECT value FROM settings WHERE key = ? LIMIT 1',
+            [CARD_SERVICE_REPLENISH_CURSOR_KEY],
+        )
+        const value = rows[0]?.value
+        return typeof value === 'string' && value.trim() ? value : null
+    } catch (error) {
+        if (isMissingTableError(error)) return null
+        throw error
+    }
+}
+
+export async function writeReplenishCursor(database: CardServiceDatabase, cursor: string, nowMs = Date.now()): Promise<void> {
+    await database.write([{
+        sql: `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        params: [CARD_SERVICE_REPLENISH_CURSOR_KEY, cursor, nowMs],
+    }])
+}
 
 /**
  * 未传、空串、非数字一律用默认值。
@@ -157,7 +184,15 @@ export async function replenishLowStockProducts(
             continue
         }
 
-        const available = await countReplenishableLocalCards(deps, product.productId, now())
+        let available: number
+        try {
+            available = await countReplenishableLocalCards(deps, product.productId, now())
+        } catch {
+            // 库存查询失败同样只算本商品失败：抛出去会丢掉本轮已成功的补货摘要，
+            // 装配层也就拿不到 changedProductIds（前台库存不重算）和游标（不推进）。
+            summary.failed += 1
+            continue
+        }
         let missing = Math.min(target - available, maxPerProduct)
 
         while (missing > 0 && summary.restocked < maxCards) {

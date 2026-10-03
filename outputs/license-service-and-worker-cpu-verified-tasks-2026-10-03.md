@@ -105,13 +105,13 @@ D1 属于子请求，但不能据此将远端 HTTP、D1、其他内部服务调�
 
 ## 5. 已确认问题的修复任务
 
-以下复选框均表示**待实施**。P1 优先于 P2；本轮未确认 P0。每项独立验收，跨仓库任务在对应仓库实施。
+首次核实（2026-10-03）时下列任务全部未实施；每项「状态」行记录的是**当前实施状态**，以最近一次复核为准。`[x]` 表示已通过复核验收，`[ ]` 表示待实施或部分实施。P1 优先于 P2；本轮未确认 P0。每项独立验收，跨仓库任务在对应仓库实施。
 
 ### F01 · P1 · 卡密 cron 总预算、去重与公平推进
 
 - [ ] 状态：部分实施（2026-10-03）。已做输入边界与同轮去重；未做分项请求计数、大订单分步进度、平台配额实验（仍属 V01）。
-  已实现：`clampCardServiceCronLimit` 对 null、空串、非数字、负数、0 返回 1，合法值夹到 1–10（不再把 `abc` 当成 10）。对账两段共享这一个上限，第二段排除第一段已检查的 allocation。补货增加商品扫描上限、全轮补卡上限，以及 `cursor` / `afterProductId` 轮转；cron 补货使用 `maxProducts=limit`、`maxCards=limit`、`maxPerProduct=1`。
-  未实现：交付、作废、对账、补货的远端请求与 D1 调用仍没有统一的剩余预算；单个大订单超过预算时没有持久化分步进度。默认调度路径不带查询参数，因此线上默认仍是每段 1 条，而不是旧代码注释里的 10。
+  已实现：`clampCardServiceCronLimit` 对 null、空串、非数字、负数、0 返回 1，合法值夹到 1–10（不再把 `abc` 当成 10）。对账两段共享这一个上限，第二段排除第一段已检查的 allocation。补货增加商品扫描上限、全轮补卡上限。2026-10-03 审查修正：`replenishCardStock` 从 `settings.card_service_replenish_cursor` 读取上一轮停住的商品，写回本轮游标；调用方显式传入 `afterProductId` 时不读库。cron 仍使用 `maxProducts=limit`、`maxCards=limit`、`maxPerProduct=1`。
+  未实现：交付、作废、对账、补货的远端请求与 D1 调用仍没有统一的剩余预算；单个大订单超过预算时没有持久化分步进度。补货的商品配置仍是全量读取后在内存中排序、截断，需要改成数据库侧按游标分页（`WHERE product_id > ? ORDER BY product_id LIMIT ?`）。默认调度路径不带查询参数，因此线上默认仍是每段 1 条，而不是旧代码注释里的 10。
   验证：`replenish.test.ts`、`reconcile.test.ts`、`restock.test.ts`、`cron-wiring.test.ts` 合计 59 通过；`tsc --noEmit` 通过。
 - 范围：L 的 cron license-service route、reconcile.ts、replenish.ts、product-config.ts、order-processing.ts、retry.ts 及装配处；确需分入口时才改 worker-entry.mjs。
 - 修改：显式处理 null/空值/非法 limit，设保守上限；交付、对账、作废、补货均有界。对账两段共享总条目数并排除已检查 allocation；补货增加商品扫描上限、全轮补卡上限及稳定游标/轮转，避免总从首商品开始。
@@ -120,10 +120,12 @@ D1 属于子请求，但不能据此将远端 HTTP、D1、其他内部服务调�
 
 ### F02 · P1 · 超时订单清理有界批次
 
-- [x] 状态：已实施（2026-10-03）。未做线上积压观测。
-  实现：候选选择与单笔收尾抽到 `src/lib/orders/expired-cleanup.ts`。默认每轮 20，上限 100，按创建时间与订单号排序。名额先给仍为 pending 的超时订单；有剩余才补扫「已取消但仍押着卡」的订单，避免释放失败后只扫 pending 就丢失。返积分继续用 `refund_return:<orderId>`，券释放只匹配 `reserved`，重复执行不重复入账。卡释放按 90 个订单分块。支付竞争仍靠 `status='pending'` 条件更新，只有一个推进有效。
-  未实现：返积分失败后的订单如果卡已经释放，下一轮不会再被扫到；这种情况依赖 cron 当轮重试。没有把返积分、券、卡放进同一个事务。
-  验证：`expired-cleanup.test.ts` 6 通过；`tsc --noEmit` 通过。生产 SQL 本身未用真实 D1 复跑。
+- [ ] 状态：部分实施（2026-10-03 复核撤销「已完成」；同日已按复核意见修复，待再次复核验收）。未做线上积压观测。
+  复核意见（P1）：`queries.ts` 的 `listReservedCancelled` 只按「仍押着卡」补扫已取消订单；返积分或释放券失败而卡已释放时，订单永久漏掉收尾。生产入口也没有复用经测试的收尾核心。
+  本轮修复：① `cancelExpiredOrders` 改为调用 `settleExpiredCleanupBatch`，内联循环删除；逐单 try/catch 隔离，失败单不释放卡、不连累其他订单，并输出失败步骤。② 补扫条件改为 `buildExpiredCleanupRecoveryConditionSql`，三路 UNION 覆盖「未使用的押卡」「`reserved` 状态的券」「7 天内取消、存在带 metadata 的 `order_deduction:` 且没有 `refund_return:`」；legacy backfill（metadata 为 NULL）的扣减已由 `legacy_balance_init` 吸收，不补返。旧库缺表/缺列时退化为只查押卡。③ 返积分前先查账本（`shouldReturnPoints`），只对确有扣减且未返还的订单入账。④ 卡释放加 `is_used = 0 OR NULL` 条件，不会把已售卡放回库存。⑤ 修正 `order-expiry-schedule.test.ts` 中跟不上 HEAD 的守卫正则。
+  首次实施记录：候选选择与单笔收尾抽到 `src/lib/orders/expired-cleanup.ts`。默认每轮 20，上限 100，按创建时间与订单号排序。名额先给仍为 pending 的超时订单；有剩余才补扫「已取消但仍押着卡」的订单，避免释放失败后只扫 pending 就丢失。返积分继续用 `refund_return:<orderId>`，券释放只匹配 `reserved`，重复执行不重复入账。卡释放按 90 个订单分块。支付竞争仍靠 `status='pending'` 条件更新，只有一个推进有效。
+  未实现：没有把返积分、券、卡放进同一个事务（D1 无交互事务，依赖各步幂等 + 补扫恢复）；取消超过 7 天仍欠返积分的订单不再自动补扫，需人工处理。
+  验证：`expired-cleanup.test.ts` 14 通过（含逐步失败隔离、真实 SQLite 执行恢复条件、legacy/已返还/超窗排除、入口接线源码守卫）；`tsc --noEmit` 通过。生产 SQL 未用真实 D1 复跑。
 - 范围：L/src/lib/db/queries.ts:3876、cleanup route 及 cancelExpiredOrders 定向调用方。
 - 修改：按稳定时间/订单键选有限候选，限定单轮工作量；保留 product/user/order 过滤；卡释放和聚合继续批量，IN 按 100 参数约束分块。
 - 约束：状态推进后的返积分、券释放、卡释放不能因停止永久遗漏。预算在完整业务单元间截断；失败要可恢复，不能指望下轮仅扫描 pending 找回已取消的半完成项。
@@ -131,10 +133,12 @@ D1 属于子请求，但不能据此将远端 HTTP、D1、其他内部服务调�
 
 ### F03 · P1 · 隔离 Ack 后的物化失败
 
-- [x] 状态：已实施（2026-10-03，仅商城侧代码与内存 SQLite 测试；未部署、未改 ID 算法）。
-  实现：`ackAndMaterializeAllocation` 捕获物化批次失败。可恢复错误（存储不可用）按操作队列指数退避保留原 allocation 与 ack key；约束类错误走 `failed`，满 12 次转 `abandoned`，暂存都不删除。落账本身失败时返回 `materialize_failure_unrecorded`，不把原待办改写成已保存。补货与对账按商品/分配隔离，一条失败不吞掉同轮已成功摘要。物化提交后读回失败仍按 `restocked` 返回。MAX(id) 注释改为「同批事务内计算，不存在先读后插的并发窗口」。
+- [ ] 状态：部分实施（2026-10-03 复核撤销「已完成」；同日已按复核意见修复，待再次复核验收。仅商城侧代码与内存 SQLite 测试；未部署、未改 ID 算法）。
+  复核意见：P1 —— `restock.ts` 的 `listStaleAllocatedAllocations` 只看 `expires_at`，超窗扫描绕过 Ack 待办的退避和 `abandoned` 终态，每轮都会重新 GET；P2 —— `replenish.ts` 中 `countReplenishableLocalCards` 抛错会让整轮失败，丢掉已成功商品的摘要与游标。
+  本轮修复：① `listStaleAllocatedAllocations` 改为 LEFT JOIN `card_service_operations`（`operation_key = ack_key`），只选「无待办」或「待办为 pending/failed 且 `next_retry_at` 已到期」的分配，`abandoned`/`done` 不再被扫。② 超窗段 GET 失败时写回待办：暂不可用记退避（尊重 `retryAfterMs`），其他错误与远端 sold 等异常态记 `failed`，满 12 次转 `abandoned`。两段对账使用同一个注入时钟。③ 库存查询失败只计该商品 `failed` 并继续，已成功摘要、后续商品和游标保留。④ `hasUnmaterializedAllocation` 刻意不排除 `abandoned` 分配（远端状态未知，自动绕过会重复占用中心库存），需在 `/admin/card-service` 人工丢弃后恢复补货；已在代码注释写明。
+  首次实施记录：`ackAndMaterializeAllocation` 捕获物化批次失败。可恢复错误（存储不可用）按操作队列指数退避保留原 allocation 与 ack key；约束类错误走 `failed`。两种失败满 12 次都转 `abandoned`，`next_retry_at` 清空，暂存不删除。商品仍有 `allocated` 分配时，补货返回 `materialize_pending` 而不再 Allocate。落账本身失败时返回 `materialize_failure_unrecorded`。补货与对账按商品/分配隔离。物化提交后读回失败仍按 `restocked` 返回。MAX(id) 注释改为「同批事务内计算，不存在先读后插的并发窗口」。
   未覆盖：调用方在物化提交后、读回前进程被杀，仍靠既有幂等重放（暂存已空则直接返回已有本地卡）；未新增持久化进度表。
-  验证：`restock.test.ts` 17、`replenish.test.ts` 12、`reconcile.test.ts` 11、`discard.test.ts` 65，合计 105 通过；`tsc --noEmit` 通过。
+  验证：首次实施时 105 通过；本轮修复后新增「超窗扫描遵守退避」「abandoned/done 不再触碰、失败累计转 abandoned」「库存查询失败隔离」等用例，`src/lib/license-service` 全部 368 通过；`tsc --noEmit` 通过。
 - 范围：L/restock.ts:575、replenish.ts:96、reconcile.ts、index.ts:323（均位于 src/lib/license-service）。
 - 修改：区分远端 Ack 与本地物化错误；可恢复失败保留暂存和原 allocation/ack key，写脱敏错误与退避；永久约束错误进入人工复核/有限重试。单商品/分配故障不吞此前成功摘要及聚合。
 - 约束：DB 完全不可写时不得伪报已保存错误；报告基础设施失败，靠原持久化意图恢复。不新 Allocate，不把存储错误误判 expired 并删暂存。澄清 MAX 注释，不改 ID 方案。
@@ -175,7 +179,7 @@ D1 属于子请求，但不能据此将远端 HTTP、D1、其他内部服务调�
 
 ### F08 · P2 · 去除翻译的无效正则处理
 
-- [x] 状态：已实施（2026-10-03）。
+- [x] 状态：主体完成（2026-10-03）。缺「每翻译器/渲染周期预解析 `currencyUnit`」，目前每次调用仍现取默认值。
   实现：服务端与客户端共用 `interpolate.ts`。原文不含 `{{` 时直接返回，不编译正则。占位符用一次全局扫描替换，替换值中的 `$` 与新占位符不再被解释；调用方参数仍覆盖默认 `currencyUnit`。
   验证：`interpolate.test.ts` 2 通过。未做 Worker CPU 微基准。
 - 范围：L/src/lib/i18n/server.ts、context.tsx，可抽取两端纯插值函数。
@@ -294,7 +298,13 @@ D1 属于子请求，但不能据此将远端 HTTP、D1、其他内部服务调�
 - 无线上 CPU/配额观测、压测、真实 Sell/Revoke，不证明线上已超限。
 - 未重建/部署 OpenNext；既有本地产物不代表线上版本。
 - 未运行中心 PostgreSQL 集成测试、并发竞争或索引基准；Go 侧为静态核实，内存仓储结果不冒充数据库实测。
-- 本次仅交付任务文档，所有修复复选框仍未完成。
+- 首次核实时仅交付任务文档、未改代码；之后的实施状态见 §5、§6 各任务的「状态」行。
+
+2026-10-03 复核修复后的验证：
+
+- `node --test "src/lib/**/*.test.ts"` 全量 783/783 通过；其中 `src/lib/license-service` 368/368、`expired-cleanup.test.ts` 14/14。
+- `tsc --noEmit` 无错误。
+- `eslint src`：382 warning / 0 error。高于项目记录基线 369，逐文件与 HEAD 对比确认本轮未新增（`queries.ts` 71→69，其余持平），差额来自更早的提交。
 
 ## 9. 官方资料
 

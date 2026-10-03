@@ -8,6 +8,7 @@ import {
     CARD_SERVICE_STAGED_CARDS_TABLE,
 } from '../db/license-service-schema.ts'
 import { LicenseServiceError } from './errors.ts'
+import { CARD_SERVICE_MAX_OPERATION_ATTEMPTS, CARD_SERVICE_RETRY_BACKOFF_BASE_MS } from './operation-queue.ts'
 import {
     abandonStaleAllocations,
     emptyReconcileSummary,
@@ -191,7 +192,7 @@ test('查询返回 not_found：本地副本无法再转正，就地作废并留�
     assert.equal(ledger?.last_error_code, 'not_found')
 })
 
-test('查询暂时不可用：留待下一轮，什么都不改', async () => {
+test('查询暂时不可用：保留暂存与台账状态，只给 Ack 待办记一次退避', async () => {
     const ctx = setup()
     await seedAllocation(ctx, { allocationId: 'alloc_later', expiresAtMs: NOW + 10 * 60_000 })
     const deps = depsOf(ctx, {
@@ -206,7 +207,10 @@ test('查询暂时不可用：留待下一轮，什么都不改', async () => {
     assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 1)
     const ledger = ctx.get(`SELECT * FROM ${CARD_SERVICE_ALLOCATIONS_TABLE}`)
     assert.equal(ledger?.state, 'allocated')
-    assert.equal(ledger?.last_error_code, null)
+    const op = ctx.get(`SELECT state, attempts, next_retry_at FROM ${CARD_SERVICE_OPERATIONS_TABLE}`)
+    assert.equal(op?.state, 'pending')
+    assert.equal(op?.attempts, 1)
+    assert.equal(op?.next_retry_at, NOW + CARD_SERVICE_RETRY_BACKOFF_BASE_MS)
 })
 
 test('查询遇到鉴权/契约错误：保持暂存不动，标记需人工处理', async () => {
@@ -367,4 +371,56 @@ test('重放时一条分配物化失败，不丢掉同轮已成功的另一条',
     assert.equal(countOf(ctx, 'cards'), 1)
     assert.equal(ctx.get(`SELECT state FROM ${CARD_SERVICE_ALLOCATIONS_TABLE} WHERE allocation_id = 'alloc_bad'`)?.state, 'allocated')
     assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 1)
+})
+
+test('超窗扫描遵守 Ack 待办退避：未到期不查，到期才查', async () => {
+    const ctx = setup()
+    await seedAllocation(ctx, { allocationId: 'alloc_backoff', expiresAtMs: NOW - 60_000 })
+    ctx.exec(`UPDATE ${CARD_SERVICE_OPERATIONS_TABLE} SET state = 'failed', attempts = 3, next_retry_at = ${NOW + 60_000}`)
+    let gets = 0
+    const behavior: FakeClientBehavior = {
+        getAllocation: async () => {
+            gets += 1
+            throw new LicenseServiceError({ code: 'temporarily_unavailable', httpStatus: 503 })
+        },
+    }
+
+    const early = await reconcileCardServiceState(depsOf(ctx, behavior), { limit: 5 })
+    assert.equal(early.checked, 0)
+    assert.equal(gets, 0)
+
+    const due = await reconcileCardServiceState(depsOf(ctx, behavior, NOW + 60_000), { limit: 5 })
+    assert.equal(due.checked, 1)
+    assert.equal(gets, 1)
+    const op = ctx.get(`SELECT attempts, next_retry_at FROM ${CARD_SERVICE_OPERATIONS_TABLE}`)
+    assert.equal(op?.attempts, 4)
+    assert.ok(Number(op?.next_retry_at) > NOW + 60_000, '查询失败后必须推迟下一次')
+})
+
+test('超窗扫描不再触碰 abandoned / done 的待办，查询失败累计到上限后转 abandoned', async () => {
+    const ctx = setup()
+    await seedAllocation(ctx, { allocationId: 'alloc_dead', expiresAtMs: NOW - 60_000 })
+    ctx.exec(`UPDATE ${CARD_SERVICE_OPERATIONS_TABLE} SET state = 'failed', attempts = ${CARD_SERVICE_MAX_OPERATION_ATTEMPTS - 1}, next_retry_at = NULL`)
+    let gets = 0
+    const behavior: FakeClientBehavior = {
+        getAllocation: async () => {
+            gets += 1
+            throw new LicenseServiceError({ code: 'forbidden', httpStatus: 403 })
+        },
+    }
+
+    const first = await reconcileCardServiceState(depsOf(ctx, behavior), { limit: 5 })
+    assert.equal(first.failed, 1)
+    assert.equal(ctx.get(`SELECT state FROM ${CARD_SERVICE_OPERATIONS_TABLE}`)?.state, 'abandoned')
+    // 暂存保留：远端可能仍持有这批卡，交人工复核。
+    assert.equal(countOf(ctx, CARD_SERVICE_STAGED_CARDS_TABLE), 1)
+
+    const second = await reconcileCardServiceState(depsOf(ctx, behavior, NOW + 24 * 3_600_000), { limit: 5 })
+    assert.equal(second.checked, 0)
+    assert.equal(gets, 1)
+
+    ctx.exec(`UPDATE ${CARD_SERVICE_OPERATIONS_TABLE} SET state = 'done'`)
+    const third = await reconcileCardServiceState(depsOf(ctx, behavior, NOW + 24 * 3_600_000), { limit: 5 })
+    assert.equal(third.checked, 0)
+    assert.equal(gets, 1)
 })

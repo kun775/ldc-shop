@@ -60,6 +60,11 @@ const CORE_TABLE_STATEMENTS: readonly string[] = [
         name TEXT NOT NULL DEFAULT '',
         is_shared INTEGER DEFAULT 0
     )`,
+    `CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at INTEGER
+    )`,
     `CREATE TABLE IF NOT EXISTS cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,

@@ -41,6 +41,7 @@ import {
 import type { CardServiceDatabase, CardServiceStatement } from './db-port.ts'
 import { loadCardServiceProductConfig, loadProductSupplyGuard } from './product-config.ts'
 import {
+    CARD_SERVICE_MAX_OPERATION_ATTEMPTS,
     CARD_SERVICE_OPERATION_QUEUE_ORDER_SQL,
     CARD_SERVICE_RETRY_BACKOFF_FILTER_SQL,
     buildOperationFailureClauses,
@@ -147,6 +148,11 @@ export type RestockSkipReason =
      * 让它从中心领卡等于「卡领出来、明文发出去、中心永远显示未售出」。
      */
     | 'shared_product'
+    /**
+     * 已有一笔领到但还没搬进可售库存的分配。继续 Allocate 会在中心再扣一批，
+     * 旧的那批仍等对账按原键物化。
+     */
+    | 'materialize_pending'
 
 export type RestockResult =
     | {
@@ -271,6 +277,26 @@ export async function listStagedCardIds(
     return rows.map((row) => toStringOrEmpty(row.remote_card_id)).filter(Boolean)
 }
 
+/**
+ * 该商品是否还有未物化的分配。有则不能再向中心领新卡。
+ *
+ * 刻意**不排除** Ack 待办已 `abandoned` 的分配：那笔分配在中心的真实状态未知
+ * （可能已 Ack、卡仍被本店持有），自动绕过去再领等于重复占用中心库存。
+ * 它会出现在 `/admin/card-service` 复核清单里，人工「丢弃」后本商品即恢复补货。
+ */
+export async function hasUnmaterializedAllocation(
+    database: CardServiceDatabase,
+    productId: string,
+): Promise<boolean> {
+    const rows = await database.query(
+        `SELECT 1 AS pending FROM ${CARD_SERVICE_ALLOCATIONS_TABLE}
+         WHERE product_id = ? AND state = 'allocated'
+         LIMIT 1`,
+        [productId],
+    )
+    return rows.length > 0
+}
+
 export async function listLocalCardIds(
     database: CardServiceDatabase,
     allocationId: string,
@@ -282,21 +308,36 @@ export async function listLocalCardIds(
     return rows.map((row) => toIntegerOrNull(row.local_card_id)).filter((id): id is number => id !== null)
 }
 
-/** 列出超过 Ack 窗口仍未确认的分配（本地记录 `expires_at` 才能做这件事）。 */
+/**
+ * 列出超过 Ack 窗口仍未确认、且**本轮该查**的分配（本地记录 `expires_at` 才能做这件事）。
+ *
+ * 必须与 Ack 待办共用同一套重试节奏：
+ *   - 待办已 `abandoned`（重试耗尽，进人工复核）或 `done` 的不再自动查；
+ *   - 待办 `next_retry_at` 未到期的跳过，否则每分钟一次的调度会绕过退避，
+ *     对同一笔分配无限 GET。
+ * 没有待办行的历史分配（理论上不该存在）仍允许查，避免永远无人处理。
+ */
 export async function listStaleAllocatedAllocations(
     database: CardServiceDatabase,
-    options: { deadLineMs: number; limit?: number; excludeAllocationIds?: readonly string[] },
+    options: { deadLineMs: number; nowMs?: number; limit?: number; excludeAllocationIds?: readonly string[] },
 ): Promise<CardServiceAllocationRow[]> {
     const excluded = new Set((options.excludeAllocationIds ?? []).filter(Boolean))
     const limit = Math.max(1, Math.trunc(options.limit ?? 20))
+    const nowMs = options.nowMs ?? options.deadLineMs
+    const columns = ALLOCATION_COLUMNS.split(',').map((column) => `a.${column.trim()}`).join(', ')
     // 不把排除列表拼进 IN：单条语句绑定参数上限是 100，而本段上限本身只有几十。
     // 多取「上限 + 已排除」行，再在内存里丢掉本轮已经查过的 allocation。
     const rows = await database.query(
-        `SELECT ${ALLOCATION_COLUMNS} FROM ${CARD_SERVICE_ALLOCATIONS_TABLE}
-         WHERE state = 'allocated' AND expires_at <= ?
-         ORDER BY expires_at ASC
+        `SELECT ${columns} FROM ${CARD_SERVICE_ALLOCATIONS_TABLE} a
+         LEFT JOIN ${CARD_SERVICE_OPERATIONS_TABLE} o ON o.operation_key = a.ack_key
+         WHERE a.state = 'allocated' AND a.expires_at <= ?
+           AND (
+                o.operation_key IS NULL
+                OR (o.state IN ('pending', 'failed') AND (o.next_retry_at IS NULL OR o.next_retry_at <= ?))
+           )
+         ORDER BY a.expires_at ASC
          LIMIT ?`,
-        [options.deadLineMs, limit + excluded.size],
+        [options.deadLineMs, nowMs, limit + excluded.size],
     )
     const collected: CardServiceAllocationRow[] = []
     for (const row of rows.map(toAllocationRow)) {
@@ -526,7 +567,9 @@ export function buildDeferAckStatements(input: {
     nowMs: number
 }): CardServiceStatement[] {
     const failure = buildOperationFailureClauses(input.nowMs)
-    const nextRetryAt = input.nextRetryAtMs == null ? failure.nextRetryAt : '?'
+    const nextRetryAt = input.nextRetryAtMs == null
+        ? failure.nextRetryAt
+        : `CASE WHEN attempts + 1 >= ${CARD_SERVICE_MAX_OPERATION_ATTEMPTS} THEN NULL ELSE ? END`
     const params: unknown[] = []
     if (input.nextRetryAtMs != null) params.push(input.nextRetryAtMs)
     params.push(input.requestId, input.errorCode, input.nowMs, input.ackOperationKey)
@@ -539,7 +582,8 @@ export function buildDeferAckStatements(input: {
         },
         {
             sql: `UPDATE ${CARD_SERVICE_OPERATIONS_TABLE}
-                SET state = 'pending', attempts = attempts + 1, next_retry_at = ${nextRetryAt},
+                SET state = CASE WHEN attempts + 1 >= ${CARD_SERVICE_MAX_OPERATION_ATTEMPTS} THEN 'abandoned' ELSE 'pending' END,
+                    attempts = attempts + 1, next_retry_at = ${nextRetryAt},
                     request_id = ?, last_error_code = ?, updated_at = ?
                 WHERE operation_key = ?`,
             params,
@@ -837,6 +881,12 @@ export async function restockProductCards(
     }
     if (product.isShared) {
         return { status: 'skipped', reason: 'shared_product' }
+    }
+
+    // 上一笔已经 Ack、只是本地物化失败时，暂存和原分配还在。
+    // 这里再领会在中心扣掉另一批卡，而旧的那批仍等对账重放。
+    if (await hasUnmaterializedAllocation(deps.database, options.productId)) {
+        return { status: 'skipped', reason: 'materialize_pending' }
     }
 
     const intent = createRestockIntent({

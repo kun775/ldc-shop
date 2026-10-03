@@ -25,7 +25,9 @@ import {
     ACK_RETRY_SAFETY_MARGIN_MS,
     CARD_SERVICE_OPERATION_ACK,
     ackAndMaterializeAllocation,
+    buildDeferAckStatements,
     buildDiscardAllocationStatements,
+    buildFailAckStatements,
     listPendingCardServiceOperations,
     listStaleAllocatedAllocations,
     loadCardServiceAllocation,
@@ -152,7 +154,20 @@ export async function resolveAllocationWithRemoteState(
     } catch (error) {
         const classified = toLicenseServiceError(error, 'getAllocation')
 
-        if (classified.category === 'unavailable') return 'deferred'
+        if (classified.category === 'unavailable') {
+            // 必须写回退避：不写的话这笔分配下一轮（一分钟后）还会被原样再查，
+            // 待办 attempts 永不增长，也永远到不了 abandoned 终态。
+            const nowMs = resolveNow(deps)()
+            await deps.database.write(buildDeferAckStatements({
+                allocationId: row.allocationId,
+                ackOperationKey: row.ackKey,
+                errorCode: classified.code,
+                requestId: classified.requestId,
+                ...(classified.retryAfterMs == null ? {} : { nextRetryAtMs: nowMs + classified.retryAfterMs }),
+                nowMs,
+            }))
+            return 'deferred'
+        }
 
         // 查不到该分配（例如 Key 换了 Client、或中心已清理）：本地副本已无法
         // 通过 Ack 转正，就地作废并留痕，等待人工核查。
@@ -162,7 +177,14 @@ export async function resolveAllocationWithRemoteState(
         }
 
         // 其余不可重试错误（鉴权、权限、契约）保持暂存不动：远程可能仍持有
-        // 这批卡，删掉就是把库存白送出去。
+        // 这批卡，删掉就是把库存白送出去。只记失败与退避，满上限转 abandoned。
+        await deps.database.write(buildFailAckStatements({
+            allocationId: row.allocationId,
+            ackOperationKey: row.ackKey,
+            errorCode: classified.code,
+            requestId: classified.requestId,
+            nowMs: resolveNow(deps)(),
+        }))
         return 'failed'
     }
 
@@ -192,6 +214,14 @@ export async function resolveAllocationWithRemoteState(
         default:
             // `sold` 或未来新增的枚举：本地没有对应订单，不能凭空物化成可售卡
             // （`sold` 需要 `cards:sell` + 订单号，属阶段 D）。保留暂存并交人工。
+            // 同样记一次失败：远端状态不会自己变回来，按退避降频，满上限转 abandoned。
+            await deps.database.write(buildFailAckStatements({
+                allocationId: row.allocationId,
+                ackOperationKey: row.ackKey,
+                errorCode: `remote_status_${remoteStatus || 'unknown'}`.slice(0, 64),
+                requestId: null,
+                nowMs: resolveNow(deps)(),
+            }))
             return 'requires_review'
     }
 }
@@ -223,6 +253,8 @@ export async function reconcilePendingAckOperations(
         // 自动对账必须遵守退避：没到期的待办这一轮跳过，否则每分钟一次的调度
         // 会把 attempts 迅速烧光（12 次上限约 12 分钟耗尽），操作提前死信。
         respectBackoff: true,
+        // 与超窗段用同一个时钟（可注入），两段对「是否到期」的判断才一致。
+        nowMs: resolveNow(deps)(),
     })
 
     for (const operation of operations) {
@@ -267,6 +299,7 @@ export async function abandonStaleAllocations(
     const limit = Math.max(1, Math.trunc(options.limit ?? RECONCILE_DEFAULT_LIMIT))
     const rows = await listStaleAllocatedAllocations(deps.database, {
         deadLineMs: nowMs,
+        nowMs,
         limit,
         excludeAllocationIds: options.excludeAllocationIds ? Array.from(options.excludeAllocationIds) : [],
     })

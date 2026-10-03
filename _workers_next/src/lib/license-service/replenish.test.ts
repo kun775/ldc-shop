@@ -7,6 +7,8 @@ import {
     CARD_SERVICE_DEFAULT_TARGET_STOCK,
     CARD_SERVICE_REPLENISH_BATCH_LIMIT,
     countReplenishableLocalCards,
+    readReplenishCursor,
+    writeReplenishCursor,
     emptyReplenishSummary,
     replenishLowStockProducts,
 } from './replenish.ts'
@@ -258,6 +260,35 @@ test('一个商品物化失败不吞掉已成功商品，预算内的后续商�
     assert.equal(client.callCount('allocate'), 3)
 })
 
+test('库存查询失败只算该商品失败：已成功摘要、后续商品与游标都保留', async () => {
+    const ctx = setup()
+    const third = 'prod_third'
+    ctx.exec(`INSERT INTO products (id) VALUES ('${third}')`)
+    // 排序后依次是 prod_local → prod_program → prod_third。
+    await configure(ctx, LOCAL_PRODUCT, { targetStock: 1 })
+    await configure(ctx, PROGRAM_PRODUCT, { targetStock: 1 })
+    await configure(ctx, third, { targetStock: 1 })
+    const client = sequentialClient()
+    const database = {
+        query: async <T,>(sql: string, params: readonly unknown[] = []) => {
+            if (sql.includes('AS available FROM cards') && params[0] === PROGRAM_PRODUCT) {
+                throw new Error('D1_ERROR: storage operation exceeded timeout')
+            }
+            return ctx.database.query<T>(sql, params)
+        },
+        write: ctx.database.write.bind(ctx.database),
+    } as SqliteTestContext['database']
+
+    const summary = await replenishLowStockProducts({ client, database, now: () => NOW })
+
+    assert.equal(summary.products, 3)
+    assert.equal(summary.restocked, 2)
+    assert.equal(summary.failed, 1)
+    assert.deepEqual([...summary.changedProductIds].sort(), [LOCAL_PRODUCT, third].sort())
+    assert.equal(summary.cursor, third)
+    assert.equal(client.callCount('allocate'), 2)
+})
+
 test('Ack 失败时本轮计入 deferred 并停止，留给对账重放', async () => {
     const ctx = setup()
     await configure(ctx, PROGRAM_PRODUCT, { targetStock: 3 })
@@ -329,6 +360,24 @@ test('补货按商品轮转：本轮只扫一个，下一轮从它后面继续�
     assert.equal(second.restocked, 1)
     assert.equal(thirdRound.restocked, 1)
     assert.equal(client.callCount('allocate'), 3)
+})
+
+test('补货游标写入 settings 后，下一轮从该商品后面继续', async () => {
+    const ctx = setup()
+    const third = 'prod_third'
+    ctx.exec(`INSERT INTO products (id) VALUES ('${third}')`)
+    await configure(ctx, LOCAL_PRODUCT, { targetStock: 0 })
+    await configure(ctx, PROGRAM_PRODUCT, { targetStock: 0 })
+    await configure(ctx, third, { targetStock: 0 })
+    const deps = { client: sequentialClient(), database: ctx.database, now: () => NOW }
+
+    const first = await replenishLowStockProducts(deps, { maxProducts: 1 })
+    await writeReplenishCursor(ctx.database, first.cursor ?? '', NOW)
+    const stored = await readReplenishCursor(ctx.database)
+    const second = await replenishLowStockProducts(deps, { maxProducts: 1, afterProductId: stored })
+
+    assert.equal(stored, first.cursor)
+    assert.notEqual(second.cursor, first.cursor)
 })
 
 test('超时预留卡恢复可售，不重复补货；有效预留仍不计入目标库存', async () => {
