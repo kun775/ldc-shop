@@ -8,7 +8,8 @@ import {
     CARD_SERVICE_STAGED_CARDS_TABLE,
 } from '../db/license-service-schema.ts'
 import { LicenseServiceError } from './errors.ts'
-import { saveCardServiceProductConfig } from './product-config.ts'
+import { loadProductSupplyGuard, saveCardServiceProductConfig } from './product-config.ts'
+import { emptyReplenishSummary, replenishLowStockProducts } from './replenish.ts'
 import { CARD_SERVICE_MAX_OPERATION_ATTEMPTS, CARD_SERVICE_RETRY_BACKOFF_BASE_MS } from './operation-queue.ts'
 import {
     ackAndMaterializeAllocation,
@@ -96,6 +97,140 @@ test('商品已被删除（供应配置行还在）时不再补货，一张卡�
 
     assert.deepEqual(result, { status: 'skipped', reason: 'product_not_found' })
     assert.equal(client.calls.length, 0)
+})
+
+test('直接补货下架商品跳过，先于未物化查询且零远端调用、零台账写入', async () => {
+    const ctx = setup()
+    await configure(ctx)
+    ctx.exec(`UPDATE products SET is_active = 0 WHERE id = '${PRODUCT_ID}'`)
+    const queries: string[] = []
+    let writes = 0
+    const database = {
+        query: async <T,>(sql: string, params: readonly unknown[] = []) => {
+            queries.push(sql)
+            return ctx.database.query<T>(sql, params)
+        },
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            writes += 1
+            return ctx.database.write(statements)
+        },
+    } as SqliteTestContext['database']
+    const client = createFakeLicenseServiceClient()
+
+    const result = await restockProductCards({ client, database, ...singleAttempt }, { productId: PRODUCT_ID })
+
+    assert.deepEqual(result, { status: 'skipped', reason: 'product_inactive' })
+    assert.equal(queries.some((sql) => sql.includes(CARD_SERVICE_ALLOCATIONS_TABLE)), false)
+    assert.equal(queries.some((sql) => /\bFROM\s+cards\b/i.test(sql)), false)
+    assert.equal(client.calls.length, 0)
+    assert.equal(writes, 0)
+    for (const table of ['cards', CARD_SERVICE_ALLOCATIONS_TABLE, CARD_SERVICE_CARDS_TABLE, CARD_SERVICE_STAGED_CARDS_TABLE, CARD_SERVICE_OPERATIONS_TABLE]) {
+        assert.equal(countOf(ctx, table), 0, table)
+    }
+})
+
+test('商品 is_active 为 NULL 时不可补货，不查询未物化分配也不联网', async () => {
+    const ctx = setup()
+    await configure(ctx)
+    ctx.exec(`UPDATE products SET is_active = NULL WHERE id = '${PRODUCT_ID}'`)
+    const queries: string[] = []
+    let writes = 0
+    const database = {
+        query: async <T,>(sql: string, params: readonly unknown[] = []) => {
+            queries.push(sql)
+            return ctx.database.query<T>(sql, params)
+        },
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            writes += 1
+            return ctx.database.write(statements)
+        },
+    } as SqliteTestContext['database']
+    const client = createFakeLicenseServiceClient()
+
+    const result = await restockProductCards({ client, database, ...singleAttempt }, { productId: PRODUCT_ID })
+
+    assert.deepEqual(result, { status: 'skipped', reason: 'product_inactive' })
+    assert.equal(queries.some((sql) => sql.includes(CARD_SERVICE_ALLOCATIONS_TABLE)), false)
+    assert.equal(client.calls.length, 0)
+    assert.equal(writes, 0)
+    for (const table of ['cards', CARD_SERVICE_ALLOCATIONS_TABLE, CARD_SERVICE_CARDS_TABLE, CARD_SERVICE_STAGED_CARDS_TABLE, CARD_SERVICE_OPERATIONS_TABLE]) {
+        assert.equal(countOf(ctx, table), 0, table)
+    }
+})
+
+test('商品读取失败时守卫 isActive 为 false，补货安全跳过而非继续领卡', async () => {
+    const ctx = setup()
+    await configure(ctx)
+    let productReads = 0
+    const queries: string[] = []
+    let writes = 0
+    const database = {
+        query: async <T,>(sql: string, params: readonly unknown[] = []) => {
+            queries.push(sql)
+            if (/\bFROM\s+products\b/i.test(sql)) {
+                productReads += 1
+                throw new Error('D1_ERROR: storage operation exceeded timeout')
+            }
+            return ctx.database.query<T>(sql, params)
+        },
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            writes += 1
+            return ctx.database.write(statements)
+        },
+    } as SqliteTestContext['database']
+    const client = createFakeLicenseServiceClient()
+
+    assert.deepEqual(await loadProductSupplyGuard(database, PRODUCT_ID), {
+        exists: true, isShared: false, isActive: false,
+    })
+    const result = await restockProductCards({ client, database, ...singleAttempt }, { productId: PRODUCT_ID })
+
+    assert.deepEqual(result, { status: 'skipped', reason: 'product_inactive' })
+    assert.equal(productReads, 2)
+    assert.equal(queries.some((sql) => sql.includes(CARD_SERVICE_ALLOCATIONS_TABLE)), false)
+    assert.equal(client.calls.length, 0)
+    assert.equal(writes, 0)
+    for (const table of ['cards', CARD_SERVICE_ALLOCATIONS_TABLE, CARD_SERVICE_CARDS_TABLE, CARD_SERVICE_STAGED_CARDS_TABLE, CARD_SERVICE_OPERATIONS_TABLE]) {
+        assert.equal(countOf(ctx, table), 0, table)
+    }
+})
+
+test('候选读取后商品下架的竞态：库存查询后由 restock 守卫阻断，不联网或写台账', async () => {
+    const ctx = setup()
+    await configure(ctx, { targetStock: 1 })
+    const queries: string[] = []
+    let inventoryReads = 0
+    let writes = 0
+    const database = {
+        query: async <T,>(sql: string, params: readonly unknown[] = []) => {
+            queries.push(sql)
+            const rows = await ctx.database.query<T>(sql, params)
+            if (/\bFROM\s+cards\b/i.test(sql) && params[0] === PRODUCT_ID) {
+                inventoryReads += 1
+                ctx.exec(`UPDATE products SET is_active = 0 WHERE id = '${PRODUCT_ID}'`)
+            }
+            return rows
+        },
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            writes += 1
+            return ctx.database.write(statements)
+        },
+    } as SqliteTestContext['database']
+    const client = createFakeLicenseServiceClient()
+
+    const summary = await replenishLowStockProducts({ client, database, now: () => NOW, ...singleAttempt })
+
+    assert.deepEqual(summary, {
+        ...emptyReplenishSummary(), products: 1, skipped: 1, cursor: PRODUCT_ID,
+    })
+    assert.equal(inventoryReads, 1)
+    assert.equal(ctx.get(`SELECT is_active FROM products WHERE id = '${PRODUCT_ID}'`)?.is_active, 0)
+    assert.equal(queries.some((sql) => sql.includes(CARD_SERVICE_ALLOCATIONS_TABLE)), false)
+    assert.equal(client.calls.length, 0)
+    assert.equal(writes, 0)
+    for (const table of ['cards', CARD_SERVICE_ALLOCATIONS_TABLE, CARD_SERVICE_CARDS_TABLE, CARD_SERVICE_STAGED_CARDS_TABLE, CARD_SERVICE_OPERATIONS_TABLE]) {
+        assert.equal(countOf(ctx, table), 0, table)
+    }
 })
 
 test('正常补货：Ack 之前卡密只落在不可售暂存表，Ack 成功后才进 cards', async () => {

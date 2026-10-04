@@ -322,6 +322,26 @@ test('已出售的卡：调用 revoke 后映射转 revoked、台账转 done', as
     assert.equal(operation(ctx, 'card_a1')?.state, 'done')
 })
 
+test('商品下架不阻断已售卡退款作废', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedCard(ctx, 7, { isUsed: true })
+    seedAllocation(ctx, { state: 'sold' })
+    seedMapping(ctx, { localCardId: 7, remoteCardId: 'card_a1', state: 'sold', orderId: ORDER_ID })
+    ctx.exec(`UPDATE products SET is_active = 0 WHERE id = '${PRODUCT_ID}'`)
+    const client = createFakeLicenseServiceClient({
+        revoke: async (cardId) => ({ cardId, status: 'revoked' }),
+    })
+    const deps: RevokeDeps = { client, database: ctx.database, now: () => 1_000 }
+    const plan = planOf(await loadOrderRevokePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [7] }))
+
+    const outcome = await executeOrderRevokes(deps, { orderId: ORDER_ID, cards: plan.cards, reason: 'ldc-shop:refund' })
+
+    assert.deepEqual(outcome, { requested: 1, revoked: 1, retained: 0, deferred: 0, failed: 0 })
+    assert.equal(client.callCount('revoke'), 1)
+    assert.equal(mapped(ctx, 'card_a1')?.state, 'revoked')
+    assert.equal(operation(ctx, 'card_a1')?.state, 'done')
+})
+
 test('未交付且分配仍在我们手上 → 不作废，保留为本店库存', async () => {
     const ctx = createSqliteCardServiceDatabase()
     seedCard(ctx, 7)

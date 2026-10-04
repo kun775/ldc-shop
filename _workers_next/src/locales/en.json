@@ -1230,6 +1230,7 @@
                 "skipped_program_key_missing": "This product has no Program configured",
                 "skipped_shared_product": "Shared-card products cannot source from the card center (shared delivery bypasses the sale confirmation)",
                 "skipped_product_not_found": "Product has been deleted; restocking is skipped (its supply config row remains)",
+                "skipped_product_inactive": "Product is not listed; card restocking is paused and will resume when listed",
                 "deferred": "Restock is in flight; the scheduled job will replay it",
                 "expired": "The allocation overran its window and the local copy was voided; a new task is required",
                 "failed": "Restock failed. See the review list."

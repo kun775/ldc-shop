@@ -204,6 +204,80 @@ test('只扫描走通用卡密服务的商品，本地供应商品不参与补�
     )
 })
 
+test('下架商品不查库存也不占 maxProducts=1 扫描预算，上架商品补货且重新上架恢复', async () => {
+    const ctx = setup()
+    await configure(ctx, LOCAL_PRODUCT, { targetStock: 1 })
+    await configure(ctx, PROGRAM_PRODUCT, { targetStock: 1 })
+    // 下架商品排在上架商品前面，不能先占掉唯一的扫描名额。
+    ctx.exec(`UPDATE products SET is_active = 0 WHERE id = '${LOCAL_PRODUCT}'`)
+    const inventoryQueries: unknown[] = []
+    const database = {
+        query: async <T,>(sql: string, params: readonly unknown[] = []) => {
+            if (/\bFROM\s+cards\b/i.test(sql)) inventoryQueries.push(params[0])
+            return ctx.database.query<T>(sql, params)
+        },
+        write: ctx.database.write.bind(ctx.database),
+    } as SqliteTestContext['database']
+    const client = sequentialClient()
+    const deps = { client, database, now: () => NOW }
+
+    const first = await replenishLowStockProducts(deps, { maxProducts: 1 })
+
+    assert.deepEqual(first, {
+        ...emptyReplenishSummary(),
+        products: 1,
+        restocked: 1,
+        changedProductIds: [PROGRAM_PRODUCT],
+        cursor: PROGRAM_PRODUCT,
+    })
+    assert.equal(inventoryQueries.includes(LOCAL_PRODUCT), false)
+    assert.ok(inventoryQueries.includes(PROGRAM_PRODUCT))
+    assert.deepEqual(client.callsOf('allocate').map((call) => (call as { productId: string }).productId), [PROGRAM_PRODUCT])
+    assert.equal(countOf(ctx, 'cards'), 1)
+
+    ctx.exec(`UPDATE products SET is_active = 1 WHERE id = '${LOCAL_PRODUCT}'`)
+    const second = await replenishLowStockProducts(deps, { maxProducts: 1 })
+    assert.deepEqual(second, {
+        ...emptyReplenishSummary(),
+        products: 2,
+        restocked: 1,
+        changedProductIds: [LOCAL_PRODUCT],
+        cursor: LOCAL_PRODUCT,
+    })
+    assert.ok(inventoryQueries.includes(LOCAL_PRODUCT))
+    assert.deepEqual(client.callsOf('allocate').map((call) => (call as { productId: string }).productId), [PROGRAM_PRODUCT, LOCAL_PRODUCT])
+    assert.equal(countOf(ctx, 'cards'), 2)
+})
+
+test('全部商品下架时返回 empty summary，不查 cards、不联网也不写台账', async () => {
+    const ctx = setup()
+    await configure(ctx, LOCAL_PRODUCT, { targetStock: 1 })
+    await configure(ctx, PROGRAM_PRODUCT, { targetStock: 1 })
+    ctx.exec('UPDATE products SET is_active = 0')
+    const inventoryQueries: string[] = []
+    let writes = 0
+    const database = {
+        query: async <T,>(sql: string, params: readonly unknown[] = []) => {
+            if (/\bFROM\s+cards\b/i.test(sql)) inventoryQueries.push(sql)
+            return ctx.database.query<T>(sql, params)
+        },
+        write: async (statements: Parameters<SqliteTestContext['database']['write']>[0]) => {
+            writes += 1
+            return ctx.database.write(statements)
+        },
+    } as SqliteTestContext['database']
+    const client = sequentialClient()
+
+    const summary = await replenishLowStockProducts({ client, database, now: () => NOW }, { maxProducts: 1 })
+
+    assert.deepEqual(summary, emptyReplenishSummary())
+    assert.deepEqual(inventoryQueries, [])
+    assert.equal(client.calls.length, 0)
+    assert.equal(writes, 0)
+    assert.equal(countOf(ctx, 'cards'), 0)
+    assert.equal(countOf(ctx, 'card_service_allocations'), 0)
+})
+
 test('一个商品物化失败不吞掉已成功商品，预算内的后续商品继续补', async () => {
     const ctx = setup()
     const third = 'prod_third'

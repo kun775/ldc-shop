@@ -1230,6 +1230,7 @@
                 "skipped_program_key_missing": "该商品未配置 Program",
                 "skipped_shared_product": "共享卡商品不能接入卡密中心（共享交付会绕过售出确认）",
                 "skipped_product_not_found": "商品已被删除，不再补货（供应配置行仍在）",
+                "skipped_product_inactive": "商品未上架，已跳过卡密补货；上架后自动恢复",
                 "deferred": "补货在途，稍后由定时任务重放",
                 "expired": "分配已超窗，本地副本已作废，需换新任务再领",
                 "failed": "补货失败，请查看复核清单"

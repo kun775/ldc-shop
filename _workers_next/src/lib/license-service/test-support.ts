@@ -58,7 +58,8 @@ const CORE_TABLE_STATEMENTS: readonly string[] = [
     `CREATE TABLE IF NOT EXISTS products (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL DEFAULT '',
-        is_shared INTEGER DEFAULT 0
+        is_shared INTEGER DEFAULT 0,
+        is_active INTEGER DEFAULT 1
     )`,
     `CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,

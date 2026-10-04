@@ -303,6 +303,26 @@ test('全部 Sell 成功 → confirmed，请求体与幂等键稳定', async () 
     assert.equal(operation?.order_id, ORDER_ID)
 })
 
+test('商品下架不阻断已有订单 Sell，冲突后仍查询分配确认售出', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedOrder(ctx)
+    seedCard(ctx, 1)
+    seedAllocation(ctx)
+    seedMapping(ctx, { localCardId: 1, remoteCardId: 'card_a' })
+    ctx.exec(`UPDATE products SET is_active = 0 WHERE id = '${PRODUCT_ID}'`)
+
+    const plan = planOf(await loadOrderRemoteSalePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [1] }))
+    const { deps, client } = depsOf(ctx, {
+        sell: async () => { throw new LicenseServiceError({ code: 'allocation_conflict', httpStatus: 409 }) },
+        getAllocation: async () => ({ status: 'sold' } as never),
+    })
+    const outcome = await executeOrderRemoteSales(deps, { orderId: ORDER_ID, groups: plan.groups })
+
+    assert.deepEqual(outcome, { status: 'confirmed' })
+    assert.equal(client.callCount('sell'), 1)
+    assert.equal(client.callCount('getAllocation'), 1)
+})
+
 test('429 → deferred：保留待办与下次重试时间，不交付', async () => {
     const ctx = createSqliteCardServiceDatabase()
     seedOrder(ctx)

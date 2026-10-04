@@ -143,6 +143,8 @@ export type RestockSkipReason =
      * `cards` 外键失败），而且会持续消耗中心库存。
      */
     | 'product_not_found'
+    /** 商品未明确上架，暂停新补货；已有订单和分配的收尾不受影响。 */
+    | 'product_inactive'
     /**
      * 共享卡商品：它的交付方式是「把一张本地卡明文当交付引用发出去」，**绕过 Sell**。
      * 让它从中心领卡等于「卡领出来、明文发出去、中心永远显示未售出」。
@@ -881,6 +883,11 @@ export async function restockProductCards(
     }
     if (product.isShared) {
         return { status: 'skipped', reason: 'shared_product' }
+    }
+    // 候选读取后可能下架，直接/手动补货也必须经过此闸门。
+    // 这里只拦新 Allocate，不影响已有分配对账、订单 Sell 与退款作废。
+    if (!product.isActive) {
+        return { status: 'skipped', reason: 'product_inactive' }
     }
 
     // 上一笔已经 Ack、只是本地物化失败时，暂存和原分配还在。

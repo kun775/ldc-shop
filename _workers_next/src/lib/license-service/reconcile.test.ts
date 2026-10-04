@@ -230,6 +230,25 @@ test('查询遇到鉴权/契约错误：保持暂存不动，标记需人工处�
     assert.equal(ctx.get(`SELECT state FROM ${CARD_SERVICE_ALLOCATIONS_TABLE}`)?.state, 'allocated')
 })
 
+test('商品下架后已有在途分配仍核查并完成 Ack 收尾，不发起新 Allocate', async () => {
+    const ctx = setup()
+    await seedAllocation(ctx, { allocationId: 'alloc_unlisted', expiresAtMs: NOW + 10 * 60_000 })
+    ctx.exec(`UPDATE products SET is_active = 0 WHERE id = '${PRODUCT_ID}'`)
+    const client = createFakeLicenseServiceClient({
+        getAllocation: async (id) => makeAllocationDetail({ allocationId: id, status: 'allocated' }),
+        ack: async (input) => ({ allocationId: (input as { allocationId: string }).allocationId, status: 'acknowledged' }),
+    })
+
+    const summary = await reconcilePendingAckOperations({ client, database: ctx.database, now: () => NOW })
+
+    assert.equal(summary.acknowledged, 1)
+    assert.deepEqual(summary.changedProductIds, [PRODUCT_ID])
+    assert.equal(client.callCount('getAllocation'), 1)
+    assert.equal(client.callCount('ack'), 1)
+    assert.equal(client.callCount('allocate'), 0)
+    assert.equal(countOf(ctx, 'cards'), 1)
+})
+
 test('待办重放：先核对远程真实状态再决定动作，台账缺失与终态分别计入需核查 / 跳过', async () => {
     const ctx = setup()
     await seedAllocation(ctx, { allocationId: 'alloc_active', expiresAtMs: NOW + 10 * 60_000 })

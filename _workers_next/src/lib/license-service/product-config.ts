@@ -62,24 +62,30 @@ export interface CardServiceProductGuard {
     exists: boolean
     /** 是否共享卡商品。共享商品**不能**接入中心供应（它绕过 Sell 直接发明文）。 */
     isShared: boolean
+    /** 只有明确上架（is_active = 1）才允许查询库存、发起新补货。 */
+    isActive: boolean
 }
 
-/** 读商品的接入准入事实。查不到列/表一律按「非共享」处理 —— 这是叠在其它校验之上的策略闸门，失败不改变既有行为。 */
+/** 读商品准入事实。缺列仍兼容配置保存，但上架事实无法确认时禁止新补货。 */
 export async function loadProductSupplyGuard(
     database: CardServiceDatabase,
     productId: string,
 ): Promise<CardServiceProductGuard> {
     try {
-        const rows = await database.query<{ is_shared?: unknown }>(
-            'SELECT is_shared FROM products WHERE id = ? LIMIT 1',
+        const rows = await database.query<{ is_shared?: unknown; is_active?: unknown }>(
+            'SELECT is_shared, is_active FROM products WHERE id = ? LIMIT 1',
             [productId],
         )
-        if (!rows.length) return { exists: false, isShared: false }
-        return { exists: true, isShared: Number(rows[0].is_shared ?? 0) === 1 }
+        if (!rows.length) return { exists: false, isShared: false, isActive: false }
+        return {
+            exists: true,
+            isShared: Number(rows[0].is_shared ?? 0) === 1,
+            isActive: Number(rows[0].is_active) === 1,
+        }
     } catch (error) {
-        if (isMissingTableError(error)) return { exists: false, isShared: false }
-        // 老库缺 `is_shared` 列等结构差异：按「存在且非共享」放行，不因此挡住配置。
-        return { exists: true, isShared: false }
+        if (isMissingTableError(error)) return { exists: false, isShared: false, isActive: false }
+        // 保留老库配置保存的兼容语义；无法确认上架状态时不得继续领卡。
+        return { exists: true, isShared: false, isActive: false }
     }
 }
 
@@ -206,14 +212,17 @@ export async function saveCardServiceProductConfig(
     return { ok: true }
 }
 
-/** 列出所有走通用卡密服务的商品，供补货调度使用。 */
+/** 仅列出明确上架的中心供应商品；下架/已删除商品不进入库存查询和补货轮转。 */
 export async function listCardServiceProgramProducts(
     database: CardServiceDatabase,
 ): Promise<CardServiceProductConfig[]> {
     let rows: Array<Record<string, unknown>>
     try {
         rows = await database.query(
-            `SELECT product_id, supply_mode, program_key, target_stock FROM ${CARD_SERVICE_PRODUCT_CONFIG_TABLE}`,
+            `SELECT pc.product_id, pc.supply_mode, pc.program_key, pc.target_stock
+             FROM ${CARD_SERVICE_PRODUCT_CONFIG_TABLE} pc
+             INNER JOIN products p ON p.id = pc.product_id
+             WHERE pc.supply_mode = 'license_service' AND p.is_active = 1`,
         )
     } catch (error) {
         if (isMissingTableError(error)) return []

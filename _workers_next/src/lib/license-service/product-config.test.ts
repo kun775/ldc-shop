@@ -137,6 +137,62 @@ test('补货扫描只返回 license_service 商品，local / legacy_get 一律�
     assert.equal(products[0].targetStock, 2)
 })
 
+test('补货候选排除下架与 NULL 状态商品，重新上架后原配置恢复候选', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    for (const productId of ['prod_active', 'prod_inactive', 'prod_null']) {
+        seedProduct(ctx, productId)
+        await saveCardServiceProductConfig(ctx.database, {
+            productId,
+            supplyMode: 'license_service',
+            programKey: 'bill-service',
+            targetStock: 2,
+        }, 1_000)
+    }
+    ctx.exec(`UPDATE products SET is_active = 0 WHERE id = 'prod_inactive'`)
+    ctx.exec(`UPDATE products SET is_active = NULL WHERE id = 'prod_null'`)
+
+    assert.deepEqual((await listCardServiceProgramProducts(ctx.database)).map((item) => item.productId), ['prod_active'])
+    for (const productId of ['prod_inactive', 'prod_null']) {
+        assert.deepEqual(await loadProductSupplyGuard(ctx.database, productId), {
+            exists: true, isShared: false, isActive: false,
+        })
+    }
+
+    ctx.exec(`UPDATE products SET is_active = 1 WHERE id = 'prod_inactive'`)
+    assert.deepEqual(
+        (await listCardServiceProgramProducts(ctx.database)).map((item) => item.productId).sort(),
+        ['prod_active', 'prod_inactive'],
+    )
+    assert.deepEqual(await loadProductSupplyGuard(ctx.database, 'prod_inactive'), {
+        exists: true, isShared: false, isActive: true,
+    })
+    assert.equal((await loadCardServiceProductConfig(ctx.database, 'prod_inactive')).targetStock, 2)
+})
+
+test('删除商品留下的孤儿配置不进入补货候选，缺失商品或商品表的守卫均不可补货', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    seedProduct(ctx, 'prod_deleted')
+    await saveCardServiceProductConfig(ctx.database, {
+        productId: 'prod_deleted',
+        supplyMode: 'license_service',
+        programKey: 'bill-service',
+        targetStock: 2,
+    }, 1_000)
+    ctx.exec(`DELETE FROM products WHERE id = 'prod_deleted'`)
+
+    assert.equal(ctx.all(`SELECT * FROM ${CARD_SERVICE_PRODUCT_CONFIG_TABLE}`).length, 1)
+    assert.deepEqual(await listCardServiceProgramProducts(ctx.database), [])
+    assert.deepEqual(await loadProductSupplyGuard(ctx.database, 'prod_deleted'), {
+        exists: false, isShared: false, isActive: false,
+    })
+
+    ctx.exec('DROP TABLE products')
+    assert.deepEqual(await loadProductSupplyGuard(ctx.database, 'prod_deleted'), {
+        exists: false, isShared: false, isActive: false,
+    })
+    assert.deepEqual(await listCardServiceProgramProducts(ctx.database), [])
+})
+
 // ---------------------------------------------------------------------------
 // 准入闸门
 // ---------------------------------------------------------------------------
@@ -169,7 +225,7 @@ test('准入闸门：共享商品不得接入中心供应（它的交付绕过 S
     assert.deepEqual(result, { ok: false, reason: 'shared_product' })
     assert.equal(ctx.all(`SELECT * FROM ${CARD_SERVICE_PRODUCT_CONFIG_TABLE}`).length, 0)
     // 守卫本身也要能读出共享事实，别的调用方（补货兜底闸门）依赖它。
-    assert.deepEqual(await loadProductSupplyGuard(ctx.database, 'prod_shared'), { exists: true, isShared: true })
+    assert.deepEqual(await loadProductSupplyGuard(ctx.database, 'prod_shared'), { exists: true, isShared: true, isActive: true })
 })
 
 test('准入闸门：切离 license_service 时手上有未结清的远端卡必须拒绝', async () => {
