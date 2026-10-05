@@ -295,6 +295,7 @@
         "fulfillmentAuto": "Automatic",
         "fulfillmentManual": "Manual",
         "waitingManualDelivery": "Payment received. Waiting for the merchant to deliver.",
+        "waitingAutoDelivery": "Payment has been received, but automatic delivery is not yet complete. Please refresh later to check; if delivery remains incomplete for an extended period, contact the administrator for assistance. Please do not place another order.",
         "deliveryContent": "Delivery",
         "deliveryFiles": "Files",
         "downloadFile": "Download {{name}}",

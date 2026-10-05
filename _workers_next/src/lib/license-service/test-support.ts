@@ -108,7 +108,14 @@ function normalizeParams(params: readonly unknown[] | undefined) {
     return (params ?? []).map((value) => (value === undefined ? null : value))
 }
 
+function assertD1ParameterBudget(params: readonly unknown[] | undefined) {
+    const count = params?.length ?? 0
+    if (count > 100) throw new Error(`D1 SQL parameter limit exceeded: ${count} > 100`)
+}
+
 export interface SqliteTestContext {
+    /** 记录通过数据库端口执行的每条 SQL，供参数预算断言使用。 */
+    sqlCalls: Array<CardServiceStatement & { kind: 'query' | 'write' }>
     database: CardServiceDatabase
     sqlite: SqliteDatabase
     /** 直接查一行，用于断言表内容。 */
@@ -125,9 +132,12 @@ export function createSqliteCardServiceDatabase(): SqliteTestContext {
     for (const statement of [...CARD_SERVICE_DDL_STATEMENTS, ...CARD_SERVICE_CREDENTIALS_DDL_STATEMENTS]) sqlite.exec(statement)
 
     let pendingWriteError: Error | null = null
+    const sqlCalls: SqliteTestContext['sqlCalls'] = []
 
     const database: CardServiceDatabase = {
         async query<T>(sql: string, params?: readonly unknown[]) {
+            sqlCalls.push({ kind: 'query', sql, params: [...(params ?? [])] })
+            assertD1ParameterBudget(params)
             return sqlite.prepare(sql).all(...normalizeParams(params)) as T[]
         },
 
@@ -143,6 +153,9 @@ export function createSqliteCardServiceDatabase(): SqliteTestContext {
             const results: CardServiceWriteResult[] = []
             try {
                 for (const statement of statements) {
+                    sqlCalls.push({ kind: 'write', sql: statement.sql, params: [...(statement.params ?? [])] })
+                    // 在事务内逐条校验，超限时连同前面已经执行的语句一起回滚。
+                    assertD1ParameterBudget(statement.params)
                     const run = sqlite.prepare(statement.sql).run(...normalizeParams(statement.params))
                     const lastRowId = Number(run.lastInsertRowid)
                     const changes = Number(run.changes)
@@ -163,6 +176,7 @@ export function createSqliteCardServiceDatabase(): SqliteTestContext {
     }
 
     return {
+        sqlCalls,
         database,
         sqlite,
         get(sql, params) {

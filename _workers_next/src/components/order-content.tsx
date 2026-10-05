@@ -161,7 +161,7 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
     const getStatusMessage = (status: string) => {
         switch (status) {
             case 'processing': return t('order.fulfillmentInProgress')
-            case 'paid': return isPayment ? t('payment.paidMessage') : (isManual ? t('order.waitingManualDelivery') : t('order.stockDepleted'))
+            case 'paid': return isPayment ? t('payment.paidMessage') : (isManual ? t('order.waitingManualDelivery') : t('order.waitingAutoDelivery'))
             case 'cancelled': return t('order.cancelledMessage')
             case 'refunded': return t('order.orderRefunded')
             default: return t('order.waitingPayment')
@@ -555,15 +555,13 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                             </div>
                         )
                     ) : (
-                        <div className={`flex items-center justify-between gap-3 p-4 rounded-xl border ${order.status === 'paid'
-                            ? (isPayment || isManual
-                                ? 'bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20'
-                                : 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20')
+                        <div className={`flex items-center justify-between gap-3 p-4 rounded-xl border ${order.status === 'paid' && (isPayment || isManual)
+                            ? 'bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20'
                             : 'bg-muted/20 text-muted-foreground border-border/30'
                             }`}>
                             <div className="flex items-center gap-3">
                                 {order.status === 'paid' ? (
-                                    isPayment || isManual ? <CheckCircle2 className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />
+                                    isPayment || isManual ? <CheckCircle2 className="h-5 w-5" /> : <Clock className="h-5 w-5" />
                                 ) : (
                                     <Clock className="h-5 w-5" />
                                 )}

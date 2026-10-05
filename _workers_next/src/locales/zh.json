@@ -295,6 +295,7 @@
         "fulfillmentAuto": "自动发货",
         "fulfillmentManual": "手动发货",
         "waitingManualDelivery": "付款已收到，等待商家发货。",
+        "waitingAutoDelivery": "付款已收到，自动发货尚未完成。请稍后刷新查看；若长时间未发货，请联系管理员处理，请勿重复下单。",
         "deliveryContent": "发货内容",
         "deliveryFiles": "发货附件",
         "downloadFile": "下载 {{name}}",

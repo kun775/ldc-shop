@@ -223,9 +223,9 @@ function toMappingRow(raw: Record<string, unknown>): OrderRemoteCardRow | null {
     }
 }
 
-function placeholders(count: number) {
-    return Array.from({ length: count }, () => '?').join(', ')
-}
+// D1 每条 SQL 最多 100 个绑定参数；集合用一个 JSON 参数传入，不能展开成 N 个占位符。
+const INTEGER_ID_SET_SQL = 'SELECT CAST(value AS INTEGER) FROM json_each(?)'
+const STRING_ID_SET_SQL = 'SELECT value FROM json_each(?)'
 
 /**
  * 读取这些本地卡对应的远端映射。
@@ -244,9 +244,9 @@ export async function listOrderRemoteCardRows(
     try {
         rows = await database.query(
             `SELECT ${MAPPING_COLUMNS} FROM ${CARD_SERVICE_CARDS_TABLE}
-             WHERE local_card_id IN (${placeholders(ids.length)})
+             WHERE local_card_id IN (${INTEGER_ID_SET_SQL})
              ORDER BY allocation_id ASC, remote_card_id ASC`,
-            ids,
+            [JSON.stringify(ids)],
         )
     } catch (error) {
         if (isMissingTableError(error)) return []
@@ -273,8 +273,8 @@ async function loadAllocationLedgers(
     try {
         rows = await database.query(
             `SELECT allocation_id, external_ref, state FROM ${CARD_SERVICE_ALLOCATIONS_TABLE}
-             WHERE allocation_id IN (${placeholders(allocationIds.length)})`,
-            allocationIds,
+             WHERE allocation_id IN (${STRING_ID_SET_SQL})`,
+            [JSON.stringify(allocationIds)],
         )
     } catch (error) {
         if (isMissingTableError(error)) return result
@@ -325,9 +325,9 @@ export async function loadOrderRemoteSalePlan(
 
     const allRowsRaw = await database.query(
         `SELECT ${MAPPING_COLUMNS} FROM ${CARD_SERVICE_CARDS_TABLE}
-         WHERE allocation_id IN (${placeholders(allocationIds.length)})
+         WHERE allocation_id IN (${STRING_ID_SET_SQL})
          ORDER BY allocation_id ASC, remote_card_id ASC`,
-        allocationIds,
+        [JSON.stringify(allocationIds)],
     )
     const allRows = allRowsRaw
         .map(toMappingRow)
@@ -598,6 +598,7 @@ export interface DeliverOrderStatementsInput {
 export function buildDeliverOrderStatements(input: DeliverOrderStatementsInput): CardServiceStatement[] {
     const cardIds = input.localCardIds.map((id) => Math.trunc(id))
     const cardIdsValue = cardIds.join(',')
+    const cardIdsJson = JSON.stringify(cardIds)
     const remoteGroups = input.remoteGroups ?? []
 
     const orderConditions = [
@@ -605,23 +606,33 @@ export function buildDeliverOrderStatements(input: DeliverOrderStatementsInput):
         `status = 'processing'`,
         `fulfillment_claim_id = ?`,
         `(SELECT COUNT(*) FROM cards
-           WHERE id IN (${placeholders(cardIds.length)})
+           WHERE id IN (${INTEGER_ID_SET_SQL})
              AND reserved_order_id = ?
              AND (is_used = 0 OR is_used IS NULL)) = ?`,
     ]
-    const orderParams: unknown[] = [input.orderId, input.claimId]
-    orderParams.push(...cardIds, input.orderId, cardIds.length)
+    const orderParams: unknown[] = [input.orderId, input.claimId, cardIdsJson, input.orderId, cardIds.length]
 
-    for (const group of remoteGroups) {
-        const groupIds = group.localCardIds.map((id) => Math.trunc(id))
+    if (remoteGroups.length) {
+        // 整个分组计划绑定一次，而非每组重复绑定卡 ID 与订单号。
+        // 任意一组计数/状态/归属不符合都阻断订单，仍由订单行保护后续全部写入。
         orderConditions.push(
-            `(SELECT COUNT(*) FROM ${CARD_SERVICE_CARDS_TABLE}
-               WHERE allocation_id = ?
-                 AND local_card_id IN (${placeholders(groupIds.length)})
-                 AND ((state = 'acknowledged' AND order_id IS NULL)
-                      OR (state = 'sold' AND order_id = ?))) = ?`,
+            `NOT EXISTS (
+                SELECT 1 FROM json_each(?) AS sale_group
+                WHERE (SELECT COUNT(*) FROM ${CARD_SERVICE_CARDS_TABLE}
+                       WHERE allocation_id = json_extract(sale_group.value, '$.allocationId')
+                         AND local_card_id IN (
+                             SELECT CAST(value AS INTEGER)
+                             FROM json_each(json_extract(sale_group.value, '$.localCardIds'))
+                         )
+                         AND ((state = 'acknowledged' AND order_id IS NULL)
+                              OR (state = 'sold' AND order_id = ?)))
+                      <> json_array_length(json_extract(sale_group.value, '$.localCardIds'))
+            )`,
         )
-        orderParams.push(group.allocationId, ...groupIds, input.orderId, groupIds.length)
+        orderParams.push(JSON.stringify(remoteGroups.map((group) => ({
+            allocationId: group.allocationId,
+            localCardIds: group.localCardIds.map((id) => Math.trunc(id)),
+        }))), input.orderId)
     }
 
     const statements: CardServiceStatement[] = [
@@ -651,11 +662,11 @@ export function buildDeliverOrderStatements(input: DeliverOrderStatementsInput):
         {
             sql: `UPDATE cards
                 SET is_used = 1, used_at = ?, reserved_order_id = NULL, reserved_at = NULL
-                WHERE id IN (${placeholders(cardIds.length)})
+                WHERE id IN (${INTEGER_ID_SET_SQL})
                   AND reserved_order_id = ?
                   AND (is_used = 0 OR is_used IS NULL)
                   AND ${DELIVERED_FENCE}`,
-            params: [input.nowMs, ...cardIds, input.orderId, input.orderId, input.nowMs],
+            params: [input.nowMs, cardIdsJson, input.orderId, input.orderId, input.nowMs],
         },
     ]
 
@@ -666,10 +677,10 @@ export function buildDeliverOrderStatements(input: DeliverOrderStatementsInput):
                 sql: `UPDATE ${CARD_SERVICE_CARDS_TABLE}
                     SET state = 'sold', order_id = ?, sold_at = ?, updated_at = ?
                     WHERE allocation_id = ?
-                      AND local_card_id IN (${placeholders(groupIds.length)})
+                      AND local_card_id IN (${INTEGER_ID_SET_SQL})
                       AND state = 'acknowledged'
                       AND ${DELIVERED_FENCE}`,
-                params: [input.orderId, input.nowMs, input.nowMs, group.allocationId, ...groupIds, input.orderId, input.nowMs],
+                params: [input.orderId, input.nowMs, input.nowMs, group.allocationId, JSON.stringify(groupIds), input.orderId, input.nowMs],
             },
             {
                 sql: `UPDATE ${CARD_SERVICE_ALLOCATIONS_TABLE}

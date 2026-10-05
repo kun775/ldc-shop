@@ -707,6 +707,235 @@ test('not_found 首次失败即停止，多次点击不再请求且不能被晚�
     assert.deepEqual(ctx.get('SELECT * FROM card_service_operations'), before)
 })
 
+// ---------------------------------------------------------------------------
+// D1 每条 SQL 参数预算与集合交付回归
+// ---------------------------------------------------------------------------
+
+function assertSqlParameterBudget(ctx: SqliteTestContext) {
+    assert.ok(ctx.sqlCalls.length > 0)
+    for (const call of ctx.sqlCalls) {
+        assert.ok((call.params?.length ?? 0) <= 100,
+            `${call.kind}: ${call.params?.length ?? 0} 个绑定参数\n${call.sql}`)
+    }
+}
+
+function deliverySnapshot(ctx: SqliteTestContext) {
+    return {
+        orders: ctx.all('SELECT * FROM orders ORDER BY order_id'),
+        cards: ctx.all('SELECT * FROM cards ORDER BY id'),
+        mappings: ctx.all('SELECT * FROM card_service_cards ORDER BY local_card_id'),
+        allocations: ctx.all('SELECT * FROM card_service_allocations ORDER BY allocation_id'),
+        operations: ctx.all('SELECT * FROM card_service_operations ORDER BY operation_key'),
+    }
+}
+
+function seedGroupedDelivery(ctx: SqliteTestContext, quantity: number, allocationCount: number) {
+    const ids = seedProcessingOrder(ctx, { quantity })
+    assert.equal(quantity % (allocationCount || 1), 0)
+    const groupSize = allocationCount ? quantity / allocationCount : 0
+    for (let index = 0; index < allocationCount; index++) {
+        const allocationId = `all_batch_${String(index).padStart(3, '0')}`
+        seedAllocation(ctx, {
+            allocationId,
+            externalRef: `ldc-shop:restock:batch-${index}`,
+            quantity: groupSize,
+        })
+        for (const id of ids.slice(index * groupSize, (index + 1) * groupSize)) {
+            seedMapping(ctx, {
+                localCardId: id,
+                remoteCardId: `remote_${String(id).padStart(3, '0')}`,
+                allocationId,
+            })
+        }
+    }
+    return ids
+}
+
+function deliveryInput(ids: readonly number[], remoteGroups: Parameters<typeof buildDeliverOrderStatements>[0]['remoteGroups'] = []) {
+    return {
+        orderId: ORDER_ID,
+        claimId: CLAIM_ID,
+        tradeNo: 'T-BATCH',
+        cardKey: ids.map((id) => `KEY-${id}`).join('\n'),
+        localCardIds: ids,
+        deliveryNote: null,
+        nowMs: 5_000,
+        remoteGroups,
+    }
+}
+
+function successfulSellDeps(ctx: SqliteTestContext) {
+    return depsOf(ctx, {
+        sell: async (input) => ({ allocationId: (input as { allocationId: string }).allocationId, status: 'sold' }),
+    })
+}
+
+function assertDeliveredBatch(ctx: SqliteTestContext, ids: readonly number[], allocationCount: number) {
+    const order = ctx.get('SELECT * FROM orders WHERE order_id = ?', [ORDER_ID])!
+    assert.equal(order.status, 'delivered')
+    assert.equal(order.quantity, ids.length)
+    assert.equal(order.card_key, ids.map((id) => `KEY-${id}`).join('\n'))
+    assert.equal(String(order.card_key).split('\n').length, ids.length)
+    assert.equal(order.card_ids, ids.join(','))
+    assert.equal(order.delivered_at, 5_000)
+    assert.equal(order.fulfillment_claim_id, null)
+    const cards = ctx.all('SELECT id, is_used, used_at, reserved_order_id, reserved_at FROM cards ORDER BY id')
+    assert.deepEqual(cards.map((row) => ({ ...row })), ids.map((id) => ({
+        id, is_used: 1, used_at: 5_000, reserved_order_id: null, reserved_at: null,
+    })))
+    const mappings = ctx.all('SELECT local_card_id, state, order_id, sold_at FROM card_service_cards ORDER BY local_card_id')
+    assert.deepEqual(mappings.map((row) => ({ ...row })), allocationCount ? ids.map((id) => ({
+        local_card_id: id, state: 'sold', order_id: ORDER_ID, sold_at: 5_000,
+    })) : [])
+    const allocations = ctx.all('SELECT state, sold_at FROM card_service_allocations')
+    assert.equal(allocations.length, allocationCount)
+    assert.ok(allocations.every((row) => row.state === 'sold' && row.sold_at === 5_000))
+    const operations = ctx.all('SELECT operation_key, resource_id, order_id, state FROM card_service_operations')
+    assert.equal(operations.length, allocationCount)
+    for (const row of operations) {
+        assert.equal(row.operation_key, `sell:${row.resource_id}:${ORDER_ID}`)
+        assert.equal(row.order_id, ORDER_ID)
+        assert.equal(row.state, 'done')
+    }
+    assertSqlParameterBudget(ctx)
+}
+
+for (const kind of ['query', 'write'] as const) {
+    test(`D1 替身 ${kind} 接受100绑定、拒绝101绑定`, async () => {
+        const ctx = createSqliteCardServiceDatabase()
+        seedProcessingOrder(ctx)
+        const sql = (count: number) => `SELECT id FROM cards WHERE id IN (${Array(count).fill('?').join(',')})`
+        const params = (count: number) => Array(count).fill(1)
+        if (kind === 'query') {
+            assert.equal((await ctx.database.query(sql(100), params(100))).length, 1)
+            await assert.rejects(ctx.database.query(sql(101), params(101)), /D1 SQL parameter limit exceeded: 101 > 100/)
+        } else {
+            const update = (count: number) => sql(count).replace('SELECT id FROM cards', 'UPDATE cards SET used_at = 42')
+            assert.equal((await ctx.database.write([{ sql: update(100), params: params(100) }]))[0].changes, 1)
+            await assert.rejects(ctx.database.write([{ sql: update(101), params: params(101) }]), /D1 SQL parameter limit exceeded: 101 > 100/)
+            assert.equal(ctx.get('SELECT used_at FROM cards WHERE id = 1')?.used_at, 42)
+        }
+    })
+}
+
+for (const failure of ['参数超限', 'SQL执行异常']) {
+    test(`D1 batch 中段${failure}回滚首条写入且不执行尾条`, async () => {
+        const ctx = createSqliteCardServiceDatabase()
+        seedProcessingOrder(ctx)
+        const before = deliverySnapshot(ctx)
+        await assert.rejects(ctx.database.write([
+            { sql: 'UPDATE cards SET is_used = 1 WHERE id = 1' },
+            failure === '参数超限'
+                ? { sql: `UPDATE orders SET status = 'delivered' WHERE order_id IN (${Array(101).fill('?').join(',')})`, params: Array(101).fill(ORDER_ID) }
+                : { sql: 'UPDATE missing_table SET value = 1' },
+            { sql: "UPDATE cards SET reserved_order_id = 'TAIL' WHERE id = 1" },
+        ]), failure === '参数超限' ? /101 > 100/ : /no such table/)
+        assert.deepEqual(deliverySnapshot(ctx), before)
+        assert.equal(ctx.sqlCalls.filter((call) => call.kind === 'write').length, 2)
+        const result = await ctx.database.write([{ sql: 'UPDATE cards SET used_at = 77 WHERE id = 1' }])
+        assert.equal(result[0].changes, 1)
+        assert.equal(ctx.get('SELECT used_at FROM cards WHERE id = 1')?.used_at, 77)
+    })
+}
+
+for (const { quantity, allocationCount, label } of [
+    { quantity: 50, allocationCount: 0, label: '50张本地卡' },
+    { quantity: 50, allocationCount: 1, label: '50张远端卡单allocation' },
+    { quantity: 50, allocationCount: 50, label: '50张远端卡50allocation' },
+    { quantity: 120, allocationCount: 0, label: '120张本地卡（读取集合超过100）' },
+    { quantity: 120, allocationCount: 1, label: '120张远端卡单allocation（组内集合超过100）' },
+    { quantity: 120, allocationCount: 120, label: '120张远端卡120allocation（映射、台账、整批读取集合超过100）' },
+]) {
+    test(`${label}：真实SQL完成全部交付且每条绑定不超过100`, async () => {
+        const ctx = createSqliteCardServiceDatabase()
+        const ids = seedGroupedDelivery(ctx, quantity, allocationCount)
+        const mappingRows = await listOrderRemoteCardRows(ctx.database, [...ids].reverse())
+        assert.equal(mappingRows.length, allocationCount ? quantity : 0)
+        assert.equal(new Set(mappingRows.map((row) => row.localCardId)).size, mappingRows.length)
+        const plan = await loadOrderRemoteSalePlan(ctx.database, { orderId: ORDER_ID, localCardIds: [...ids].reverse() })
+        const { deps, client } = successfulSellDeps(ctx)
+        const groups = allocationCount ? planOf(plan).groups : []
+        if (!allocationCount) assert.deepEqual(plan, { kind: 'none' })
+        assert.equal(groups.length, allocationCount)
+        assert.deepEqual(groups.flatMap((group) => group.localCardIds).sort((a, b) => a - b), allocationCount ? ids : [])
+        if (allocationCount) {
+            assert.deepEqual(await executeOrderRemoteSales(deps, { orderId: ORDER_ID, groups }), { status: 'confirmed' })
+        }
+        assert.equal(client.callCount('sell'), allocationCount)
+        const statements = buildDeliverOrderStatements(deliveryInput(ids, groups))
+        for (const statement of statements) {
+            assert.ok((statement.params?.length ?? 0) <= 100, `${label}: ${statement.params?.length}\n${statement.sql}`)
+            if (!allocationCount) assert.equal(statement.sql.includes('card_service_'), false)
+        }
+        const results = await ctx.database.write(statements)
+        assert.equal(results[0].changes, 1)
+        assertDeliveredBatch(ctx, ids, allocationCount)
+    })
+}
+
+for (const conflict of ['末卡预留被抢', '末映射sold另一单', '末映射ack携带另一单']) {
+    test(`50张交付${conflict}：全部SQL受影响0行，五张表保持原样`, async () => {
+        const ctx = createSqliteCardServiceDatabase()
+        const allocationCount = conflict === '末卡预留被抢' ? 0 : 50
+        const ids = seedGroupedDelivery(ctx, 50, allocationCount)
+        const plan = await loadOrderRemoteSalePlan(ctx.database, { orderId: ORDER_ID, localCardIds: ids })
+        const groups = allocationCount ? planOf(plan).groups : []
+        if (allocationCount) {
+            const { deps } = successfulSellDeps(ctx)
+            assert.deepEqual(await executeOrderRemoteSales(deps, { orderId: ORDER_ID, groups }), { status: 'confirmed' })
+        }
+        if (!allocationCount) {
+            ctx.exec("UPDATE cards SET reserved_order_id = 'ORDER-OTHER' WHERE id = 50")
+        } else {
+            ctx.exec(`UPDATE card_service_cards SET state = '${conflict === '末映射sold另一单' ? 'sold' : 'acknowledged'}',
+                order_id = 'ORDER-OTHER' WHERE local_card_id = 50`)
+            const blocked = await loadOrderRemoteSalePlan(ctx.database, { orderId: ORDER_ID, localCardIds: ids })
+            assert.equal(blocked.kind, 'blocked')
+            assert.equal((blocked as { reason: string }).reason, conflict === '末映射sold另一单' ? 'sold_to_another_order' : 'mapping_unusable')
+        }
+        const before = deliverySnapshot(ctx)
+        const results = await ctx.database.write(buildDeliverOrderStatements(deliveryInput(ids, groups)))
+        assert.ok(results.length > 0)
+        assert.ok(results.every((row) => row.changes === 0), JSON.stringify(results))
+        assert.deepEqual(deliverySnapshot(ctx), before)
+        assert.equal(ctx.get('SELECT card_key FROM orders WHERE order_id = ?', [ORDER_ID])?.card_key, null)
+        assert.equal(ctx.all('SELECT id FROM cards WHERE is_used = 1').length, 0)
+        assertSqlParameterBudget(ctx)
+    })
+}
+
+test('50张远端卡Sell成功后本地批次中段失败：未交付，按原计划原幂等键重试成功', async () => {
+    const ctx = createSqliteCardServiceDatabase()
+    const ids = seedGroupedDelivery(ctx, 50, 1)
+    const plan = planOf(await loadOrderRemoteSalePlan(ctx.database, { orderId: ORDER_ID, localCardIds: ids }))
+    const { deps, client } = successfulSellDeps(ctx)
+    assert.deepEqual(await executeOrderRemoteSales(deps, { orderId: ORDER_ID, groups: plan.groups }), { status: 'confirmed' })
+    const before = deliverySnapshot(ctx)
+    ctx.exec(`CREATE TRIGGER fail_last_mapping BEFORE UPDATE ON card_service_cards
+        WHEN NEW.local_card_id = 50 AND NEW.state = 'sold'
+        BEGIN SELECT RAISE(ABORT, '本地交付写入失败'); END`)
+    await assert.rejects(ctx.database.write(buildDeliverOrderStatements(deliveryInput(ids, plan.groups))), /本地交付写入失败/)
+    assert.deepEqual(deliverySnapshot(ctx), before)
+    const order = ctx.get('SELECT status, card_key, card_ids, delivered_at, fulfillment_claim_id FROM orders')
+    assert.deepEqual({ ...order }, { status: 'processing', card_key: null, card_ids: null, delivered_at: null, fulfillment_claim_id: CLAIM_ID })
+    assert.equal(ctx.all('SELECT id FROM cards WHERE is_used = 1').length, 0)
+    assert.equal(ctx.all('SELECT id FROM cards WHERE reserved_order_id = ?', [ORDER_ID]).length, 50)
+    assert.equal(ctx.get('SELECT state FROM card_service_operations')?.state, 'pending')
+    ctx.exec('DROP TRIGGER fail_last_mapping')
+    assert.deepEqual(await executeOrderRemoteSales(deps, { orderId: ORDER_ID, groups: plan.groups }), { status: 'confirmed' })
+    const sellCalls = client.callsOf('sell')
+    assert.equal(sellCalls.length, 2)
+    assert.deepEqual(sellCalls[1], sellCalls[0])
+    assert.deepEqual(sellCalls[0], {
+        allocationId: plan.groups[0].allocationId,
+        cardIds: plan.groups[0].remoteCardIds,
+        externalRef: plan.groups[0].externalRef,
+        idempotencyKey: `sell:${plan.groups[0].allocationId}:${ORDER_ID}`,
+    })
+    await ctx.database.write(buildDeliverOrderStatements(deliveryInput(ids, plan.groups)))
+    assertDeliveredBatch(ctx, ids, 1)
+})
+
 for (const transient of [false, true]) {
     test(`${transient ? '临时' : '拒绝'}错误遵守退避且最多请求 12 次`, async () => {
         const ctx = createSqliteCardServiceDatabase()
