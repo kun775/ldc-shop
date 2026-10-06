@@ -2,6 +2,14 @@
 
 基于 **Next.js 16**、**Cloudflare Workers** (OpenNext)、**D1 Database** 和 **Shadcn UI** 构建的无服务器虚拟商品商店。
 
+## 当前状态（2026-10-06，v2.2.0）
+
+- 卡密服务后台支持一次补货 1–100 张，默认输入 10；部分成功显示已补/申请数量及失败原因。
+- 多张领取要求先升级中心，支持 `POST /api/v1/allocations/batch`。一个请求生成多个独立单卡分配，仍可拆成不同订单售出；单张保留旧接口。
+- 批量暂存用 3 条 JSON 集合 SQL 原子提交，Ack 后才入可售库存。无新增数据库迁移。
+- 100 张同步处理依赖 Workers Paid 的调用预算；不保证 Workers Free 50 次预算可完成。上线前还需真实 PostgreSQL 并发测试与目标 Worker 联调。
+- 本版本新增批量操作，提升 minor 版本（2.1.1 → 2.2.0），不是仅修复实现细节。
+
 ## 🛠 技术架构 (Technical Architecture)
 
 本版本采用 **Next.js on Workers** 的前沿技术路线，而非传统的单文件 Worker：

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
     extractErrorRequestId,
     fallbackErrorCodeForStatus,
+    parseAllocationBatch,
     parseAllocationDetail,
     parseAllocationListPage,
     parseAllocationStatusUpdate,
@@ -41,6 +42,90 @@ function rawAllocation(overrides: Record<string, unknown> = {}): Record<string, 
         },
     }
 }
+
+function rawBatch(quantity = 2, externalRef = '批量父引用') {
+    return {
+        ok: true,
+        data: { allocations: Array.from({ length: quantity }, (_, index) => rawAllocation({
+            allocation_id: `all_${index + 1}`,
+            external_ref: externalRef ? `${externalRef}:${index + 1}` : '',
+            cards: [{ id: `card_${index + 1}`, key: `KEY-${index + 1}` }],
+        }).data as Record<string, unknown>) },
+    }
+}
+
+const batchExpectation = { programKey: 'bill-service', quantity: 2, externalRef: '批量父引用' }
+
+test('批量分配解析独立单卡分配，保持顺序、子引用和明文；空父引用不添加序号', () => {
+    const parsed = parseAllocationBatch(rawBatch(), batchExpectation)
+    assert.ok(parsed.ok)
+    assert.deepEqual(parsed.value.map((a) => [a.allocationId, a.quantity, a.externalRef, a.cards[0].id, a.cards[0].key]), [
+        ['all_1', 1, '批量父引用:1', 'card_1', 'KEY-1'],
+        ['all_2', 1, '批量父引用:2', 'card_2', 'KEY-2'],
+    ])
+    assert.ok(parseAllocationBatch(rawBatch(2, ''), { ...batchExpectation, externalRef: '' }).ok)
+})
+
+test('批量响应必须使用标准成功信封和 allocations 数组且长度匹配请求', () => {
+    for (const [payload, reason] of [
+        [null, 'not_object'],
+        [{ ok: false, data: {} }, 'not_ok_envelope'],
+        [{ ok: true }, 'missing_data'],
+        [{ ok: true, data: null }, 'invalid_data'],
+        [{ ok: true, data: [] }, 'invalid_data'],
+        [rawAllocation(), 'invalid_allocations'],
+        [{ ok: true, data: { allocations: {} } }, 'invalid_allocations'],
+        [rawBatch(0), 'allocation_count_mismatch'],
+        [rawBatch(1), 'allocation_count_mismatch'],
+        [rawBatch(3), 'allocation_count_mismatch'],
+    ] as const) {
+        assert.deepEqual(parseAllocationBatch(payload, batchExpectation), { ok: false, reason })
+    }
+    const invalid = rawBatch()
+    invalid.data.allocations[1] = null as unknown as Record<string, unknown>
+    assert.deepEqual(parseAllocationBatch(invalid, batchExpectation), { ok: false, reason: 'invalid_allocation' })
+})
+
+const invalidBatchItems: Array<[Record<string, unknown>, string]> = [
+    [{ quantity: 1.9 }, 'invalid_quantity'],
+    [{ quantity: '1' }, 'invalid_quantity'],
+    [{ quantity: 2 }, 'invalid_quantity'],
+    [{ status: 'acknowledged' }, 'invalid_allocation_status'],
+    [{ status: 'sold' }, 'invalid_allocation_status'],
+    [{ program_key: 'other-program' }, 'program_key_mismatch'],
+    [{ allocation_id: '' }, 'empty_allocation_id'],
+    [{ allocation_id: 'all_1' }, 'duplicate_allocation_id'],
+    [{ cards: [{ id: 'card_1', key: 'OTHER-KEY' }] }, 'duplicate_card_id'],
+    [{ cards: [{ id: 'card_2' }] }, 'missing_card_key'],
+    [{ cards: [{ id: 'card_2', key: '  ' }] }, 'missing_card_key'],
+    [{ cards: [] }, 'quantity_mismatch'],
+    [{ cards: [{ id: 'card_2', key: 'K2' }, { id: 'card_3', key: 'K3' }] }, 'quantity_mismatch'],
+    [{ external_ref: '批量父引用:1' }, 'external_ref_mismatch'],
+    [{ external_ref: '批量父引用' }, 'external_ref_mismatch'],
+    [{ external_ref: undefined }, 'external_ref_mismatch'],
+    [{ external_ref: null }, 'external_ref_mismatch'],
+    [{ created_at: 'invalid' }, 'invalid_created_at'],
+    [{ expires_at: null }, 'invalid_expires_at'],
+    [{ expires_at: 'invalid' }, 'invalid_expires_at'],
+    [{ created_at: '0001-01-01T00:00:00Z' }, 'invalid_allocation_time'],
+    [{ expires_at: '2026-09-22T08:00:00Z' }, 'invalid_allocation_time'],
+    [{ expires_at: '2026-09-21T08:00:00Z' }, 'invalid_allocation_time'],
+]
+
+for (const [overrides, reason] of invalidBatchItems) {
+    test(`批量响应整批拒绝异常项：${reason} ${Object.keys(overrides).join(',')}`, () => {
+        const payload = rawBatch()
+        Object.assign(payload.data.allocations[1], overrides)
+        assert.deepEqual(parseAllocationBatch(payload, batchExpectation), { ok: false, reason })
+    })
+}
+
+test('批量子引用不做 trim，空父引用必须精确返回空字符串', () => {
+    assert.ok(parseAllocationBatch(rawBatch(2, '  '), { ...batchExpectation, externalRef: '  ' }).ok)
+    const payload = rawBatch(2, '')
+    payload.data.allocations[1].external_ref = ' '
+    assert.deepEqual(parseAllocationBatch(payload, { ...batchExpectation, externalRef: '' }), { ok: false, reason: 'external_ref_mismatch' })
+})
 
 test('成功信封必须 ok===true 且有 data：代理错误页不会被当成功响应', () => {
     assert.deepEqual(unwrapSuccessEnvelope(null), { ok: false, reason: 'not_object' })

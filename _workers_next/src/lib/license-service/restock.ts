@@ -31,6 +31,7 @@ import {
     CARD_SERVICE_STAGED_CARDS_TABLE,
 } from '../db/license-service-schema.ts'
 import type { LicenseServiceClient } from './client.ts'
+import type { AllocationDetail } from './contract.ts'
 import { LicenseServiceError, toLicenseServiceError, type LicenseServiceErrorCategory } from './errors.ts'
 import {
     buildAckIdempotencyKey,
@@ -846,21 +847,19 @@ async function recordMaterializeFailure(
 
 export interface RestockOptions {
     productId: string
-    /** 首期建议恒为 1：Sell 要求整批卡同时售出，一单多卡会绑死订单与批次。 */
+    /** 批量入口限 1..100；旧入口保持原有整批分配语义。 */
     quantity?: number
     /** 触发来源，写入 Allocate 的 `metadata.source`，便于中心侧排障。 */
     reason?: string
 }
 
-export async function restockProductCards(
+async function loadRestockAdmission(
     deps: RestockDeps,
-    options: RestockOptions,
-): Promise<RestockResult> {
-    const quantity = Math.max(1, Math.trunc(options.quantity ?? 1))
-
+    productId: string,
+): Promise<{ programKey: string } | Extract<RestockResult, { status: 'skipped' }>> {
     // 读取配置本身不会抛「表不存在」——`loadCardServiceProductConfig` 会把它
     // 折算成「未接入」。因此这里只需按配置分流，无需再兜数据库错误。
-    const config = await loadCardServiceProductConfig(deps.database, options.productId)
+    const config = await loadCardServiceProductConfig(deps.database, productId)
     if (!config.configured) {
         return { status: 'skipped', reason: 'not_configured' }
     }
@@ -877,7 +876,7 @@ export async function restockProductCards(
     // ⚠️ `exists` 与 `isShared` 必须**都**看：商品删除后供应配置行仍在，低水位扫描
     // 会继续对着一个不存在的商品 Allocate / Ack（物化时本地 `cards` 外键失败），
     // 而中心那几张卡已经扣掉库存，只会越积越多。
-    const product = await loadProductSupplyGuard(deps.database, options.productId)
+    const product = await loadProductSupplyGuard(deps.database, productId)
     if (!product.exists) {
         return { status: 'skipped', reason: 'product_not_found' }
     }
@@ -892,13 +891,23 @@ export async function restockProductCards(
 
     // 上一笔已经 Ack、只是本地物化失败时，暂存和原分配还在。
     // 这里再领会在中心扣掉另一批卡，而旧的那批仍等对账重放。
-    if (await hasUnmaterializedAllocation(deps.database, options.productId)) {
+    if (await hasUnmaterializedAllocation(deps.database, productId)) {
         return { status: 'skipped', reason: 'materialize_pending' }
     }
+    return { programKey: config.programKey }
+}
+
+export async function restockProductCards(
+    deps: RestockDeps,
+    options: RestockOptions,
+): Promise<RestockResult> {
+    const quantity = Math.max(1, Math.trunc(options.quantity ?? 1))
+    const admission = await loadRestockAdmission(deps, options.productId)
+    if ('status' in admission) return admission
 
     const intent = createRestockIntent({
         productId: options.productId,
-        programKey: config.programKey,
+        programKey: admission.programKey,
         quantity,
         reason: options.reason ?? 'restock',
         ...(deps.randomUUID ? { taskId: buildRestockTaskId(deps.randomUUID) } : {}),
@@ -1003,4 +1012,225 @@ export async function restockProductCards(
         // 只有码和操作名，调用方据此分不清是哪一种本地失败。
         message: outcome.error.causeMessage ?? outcome.error.message,
     }
+}
+
+export interface RestockBatchResult {
+    requested: number
+    restocked: number
+    results: RestockResult[]
+}
+
+function summarizeRestockBatch(requested: number, results: RestockResult[]): RestockBatchResult {
+    return {
+        requested,
+        // 批量入口每个成功子分配恰好一张；物化已提交时，ID 读回失败不能少计。
+        restocked: new Set(results.flatMap((result) => result.status === 'restocked' ? [result.allocationId] : [])).size,
+        results,
+    }
+}
+
+/** 批量路径不透传异常原文或远端 cause，避免假客户端/存储错误携带明文。 */
+function batchFailure(
+    error: LicenseServiceError,
+    message: string,
+    taskId: string | null = null,
+    allocationId: string | null = null,
+): RestockResult {
+    return { status: 'failed', taskId, allocationId, errorCode: error.code, category: error.category, message }
+}
+
+function validateRestockBatch(allocations: AllocationDetail[], intent: RestockIntent): void {
+    const invalid = () => new LicenseServiceError({ code: 'invalid_response', operation: 'allocateBatch' })
+    const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
+    if (!Array.isArray(allocations) || allocations.length !== intent.quantity) throw invalid()
+    const allocationIds = new Set<string>()
+    const cardIds = new Set<string>()
+    for (const [index, allocation] of allocations.entries()) {
+        if (!allocation || !nonempty(allocation.allocationId) || allocationIds.has(allocation.allocationId)
+            || !nonempty(allocation.programId) || allocation.programId !== allocations[0].programId
+            || allocation.programKey !== intent.programKey || allocation.quantity !== 1
+            || allocation.status !== 'allocated' || allocation.externalRef !== `${intent.externalRef}:${index + 1}`
+            || !Number.isSafeInteger(allocation.createdAtMs) || allocation.createdAtMs <= 0
+            || !Number.isSafeInteger(allocation.expiresAtMs) || allocation.expiresAtMs <= allocation.createdAtMs
+            || !Array.isArray(allocation.cards) || allocation.cards.length !== 1) throw invalid()
+        const card = allocation.cards[0]
+        if (!card || !nonempty(card.id) || cardIds.has(card.id) || !nonempty(card.key)
+            || (card.maskedKey !== null && typeof card.maskedKey !== 'string')) throw invalid()
+        allocationIds.add(allocation.allocationId)
+        cardIds.add(card.id)
+    }
+}
+
+/** N>1 只领一次独立单卡分配，全批暂存后逐子确认；失败的子任务留给原键重放。 */
+export async function restockProductCardsBatch(
+    deps: RestockDeps,
+    options: RestockOptions,
+): Promise<RestockBatchResult> {
+    const quantity = options.quantity === undefined ? 1 : options.quantity
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100) {
+        return summarizeRestockBatch(quantity, [batchFailure(
+            new LicenseServiceError({ code: 'invalid_request' }), 'invalid_restock_quantity',
+        )])
+    }
+    if (quantity === 1) {
+        try {
+            const result = await restockProductCards(deps, { ...options, quantity })
+            // 旧入口的单张契约不变，但批量对外结果不能携带错误原文。
+            if (result.status === 'failed') result.message = `restock_failed:${result.errorCode}`
+            return summarizeRestockBatch(quantity, [result])
+        } catch {
+            return summarizeRestockBatch(quantity, [batchFailure(
+                new LicenseServiceError({ code: 'invalid_response' }), 'local_restock_failed',
+            )])
+        }
+    }
+
+    let admission: Awaited<ReturnType<typeof loadRestockAdmission>>
+    try {
+        admission = await loadRestockAdmission(deps, options.productId)
+    } catch {
+        return summarizeRestockBatch(quantity, [batchFailure(
+            new LicenseServiceError({ code: 'invalid_response' }), 'local_restock_admission_failed',
+        )])
+    }
+    if ('status' in admission) return summarizeRestockBatch(quantity, [admission])
+    const parent = createRestockIntent({
+        productId: options.productId,
+        programKey: admission.programKey,
+        quantity,
+        reason: options.reason ?? 'restock',
+        ...(deps.randomUUID ? { taskId: buildRestockTaskId(deps.randomUUID) } : {}),
+    })
+    let allocations: AllocationDetail[]
+    try {
+        allocations = await runWithRetry(() => deps.client.allocateBatch({
+            productId: parent.productId,
+            programKey: parent.programKey,
+            quantity: parent.quantity,
+            externalRef: parent.externalRef,
+            metadata: { source: parent.reason },
+            idempotencyKey: parent.allocateIdempotencyKey,
+        }), retryOptions(deps, 'allocateBatch'))
+        validateRestockBatch(allocations, parent)
+    } catch (error) {
+        return summarizeRestockBatch(quantity, [batchFailure(
+            toLicenseServiceError(error, 'allocateBatch'), 'batch_allocate_failed', parent.taskId,
+        )])
+    }
+
+    const now = resolveNow(deps)
+    const stagedAtMs = now()
+    const children = allocations.map((allocation, index) => {
+        const taskId = `${parent.taskId}:${index + 1}`
+        const intent: RestockIntent = Object.freeze({
+            ...parent,
+            taskId,
+            quantity: 1,
+            // externalRef 必须精确等于中心返回值，不再经截断函数派生。
+            externalRef: allocation.externalRef,
+            ackIdempotencyKey: buildAckIdempotencyKey(taskId),
+        })
+        const row: CardServiceAllocationRow = {
+            allocationId: allocation.allocationId,
+            productId: intent.productId,
+            programKey: intent.programKey,
+            externalRef: intent.externalRef,
+            quantity: 1,
+            state: 'allocated',
+            // request_key 没有唯一约束；所有子分配都由同一个父请求领取。
+            requestKey: parent.allocateIdempotencyKey,
+            ackKey: intent.ackIdempotencyKey,
+            expiresAtMs: allocation.expiresAtMs,
+            ackedAtMs: null,
+        }
+        return { taskId, row }
+    })
+    // 只序列化受控字段；每子已经验证为独立单卡。三条语句共用固定 JSON 绑定，
+    // 保留普通 INSERT 的全部唯一/非空/外键约束，不用 OR IGNORE 掩盖冲突。
+    const stagedJson = JSON.stringify(children.map(({ row }, index) => ({
+        allocationId: row.allocationId,
+        productId: row.productId,
+        programKey: row.programKey,
+        externalRef: row.externalRef,
+        quantity: row.quantity,
+        requestKey: row.requestKey,
+        ackKey: row.ackKey,
+        expiresAtMs: row.expiresAtMs,
+        remoteCardId: allocations[index].cards[0].id,
+        cardKey: allocations[index].cards[0].key,
+        maskedKey: allocations[index].cards[0].maskedKey,
+        stagedAtMs,
+    })))
+    const statements: CardServiceStatement[] = [
+        {
+            sql: `INSERT INTO ${CARD_SERVICE_ALLOCATIONS_TABLE}
+                (allocation_id, product_id, program_key, external_ref, quantity, state,
+                 request_key, ack_key, expires_at, acked_at, sold_at, last_error_code, created_at, updated_at)
+                SELECT json_extract(value, '$.allocationId'), json_extract(value, '$.productId'),
+                       json_extract(value, '$.programKey'), json_extract(value, '$.externalRef'),
+                       json_extract(value, '$.quantity'), 'allocated', json_extract(value, '$.requestKey'),
+                       json_extract(value, '$.ackKey'), json_extract(value, '$.expiresAtMs'), NULL, NULL, NULL,
+                       json_extract(value, '$.stagedAtMs'), json_extract(value, '$.stagedAtMs')
+                FROM json_each(?) ORDER BY CAST(key AS INTEGER)`,
+            params: [stagedJson],
+        },
+        {
+            sql: `INSERT INTO ${CARD_SERVICE_STAGED_CARDS_TABLE}
+                (remote_card_id, allocation_id, product_id, card_key, masked_key, created_at)
+                SELECT json_extract(value, '$.remoteCardId'), json_extract(value, '$.allocationId'),
+                       json_extract(value, '$.productId'), json_extract(value, '$.cardKey'),
+                       json_extract(value, '$.maskedKey'), json_extract(value, '$.stagedAtMs')
+                FROM json_each(?) ORDER BY CAST(key AS INTEGER)`,
+            params: [stagedJson],
+        },
+        {
+            sql: `INSERT INTO ${CARD_SERVICE_OPERATIONS_TABLE}
+                (operation_key, operation, resource_id, order_id, state, attempts,
+                 next_retry_at, request_id, last_error_code, created_at, updated_at)
+                SELECT json_extract(value, '$.ackKey'), '${CARD_SERVICE_OPERATION_ACK}',
+                       json_extract(value, '$.allocationId'), NULL, 'pending', 0, NULL, NULL, NULL,
+                       json_extract(value, '$.stagedAtMs'), json_extract(value, '$.stagedAtMs')
+                FROM json_each(?) ORDER BY CAST(key AS INTEGER)`,
+            params: [stagedJson],
+        },
+    ]
+    try {
+        // N100 核心成功路径 706 SQL（含 3 条准入查询）；凭据路由另约 101，低于 Paid 1000。
+        // Free 50 不保证，默认 20 张仍需 Paid 或分批；这里不调整调用方预算。
+        await deps.database.write(statements)
+    } catch {
+        // 全批未 Ack，中心仍可安全回收。绝不继续确认未持久化的分配。
+        return summarizeRestockBatch(quantity, children.map(({ taskId, row }) => batchFailure(
+            new LicenseServiceError({ code: 'invalid_response' }), 'local_batch_staging_failed_unacked',
+            taskId, row.allocationId,
+        )))
+    }
+
+    const results: RestockResult[] = []
+    for (const { taskId, row } of children) {
+        try {
+            const outcome = await ackAndMaterializeAllocation(deps, row)
+            if (outcome.status === 'acknowledged') {
+                results.push({
+                    status: 'restocked', taskId, allocationId: row.allocationId,
+                    remoteCardIds: outcome.remoteCardIds, localCardIds: outcome.localCardIds,
+                    expiresAtMs: row.expiresAtMs,
+                })
+            } else if (outcome.status === 'expired') {
+                results.push({ status: 'expired', taskId, allocationId: row.allocationId,
+                    errorCode: outcome.errorCode, requiresNewTask: true })
+            } else if (outcome.status === 'deferred') {
+                results.push({ status: 'deferred', taskId, allocationId: row.allocationId,
+                    errorCode: outcome.error.code, category: outcome.error.category,
+                    nextRetryAtMs: outcome.error.retryAfterMs === null ? null : now() + outcome.error.retryAfterMs })
+            } else {
+                results.push(batchFailure(outcome.error, 'batch_ack_or_materialize_failed', taskId, row.allocationId))
+            }
+        } catch {
+            // 包括读取暂存、失败落账自身抛错：批次 A 的原待办仍可重放，继续后续子分配。
+            results.push(batchFailure(new LicenseServiceError({ code: 'invalid_response' }),
+                'local_batch_child_failed_replay_required', taskId, row.allocationId))
+        }
+    }
+    return summarizeRestockBatch(quantity, results)
 }

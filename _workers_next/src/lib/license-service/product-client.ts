@@ -42,6 +42,7 @@ export function createProductLicenseServiceClient(database: CardServiceDatabase,
     return {
         baseUrl: env.LICENSE_SERVICE_BASE_URL || '',
         async allocate(input) { return (await forProduct(input.productId || '', input.programKey)).allocate(input) },
+        async allocateBatch(input) { return (await forProduct(input.productId || '', input.programKey)).allocateBatch(input) },
         async ack(input) { return (await forAllocation(input.allocationId)).ack(input) },
         async sell(input) { return (await forAllocation(input.allocationId)).sell(input) },
         async cancel(input) { return (await forAllocation(input.allocationId)).cancel(input) },

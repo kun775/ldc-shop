@@ -36,6 +36,16 @@ function fakeFactory() {
             return makeAllocationDetail({ allocationId: `alloc_${sequence}`, programKey: input.programKey, externalRef: input.externalRef,
                 cards: [{ id: `remote_${sequence}`, key: `CARD-${sequence}`, maskedKey: null }], expiresAtMs: NOW + 30 * 60_000 })
         },
+        allocateBatch: async (raw) => {
+            const input = raw as AllocateInput
+            events.push({ key: options.apiKey, method: 'allocateBatch', resource: input.programKey })
+            return Array.from({ length: input.quantity! }, (_, index) => {
+                sequence += 1
+                return makeAllocationDetail({ allocationId: `alloc_${sequence}`, programKey: input.programKey,
+                    externalRef: input.externalRef ? `${input.externalRef}:${index + 1}` : '',
+                    cards: [{ id: `remote_${sequence}`, key: `CARD-${sequence}`, maskedKey: null }], expiresAtMs: NOW + 30 * 60_000 })
+            })
+        },
         ack: async (raw) => {
             const input = raw as { allocationId: string }
             events.push({ key: options.apiKey, method: 'ack', resource: input.allocationId })
@@ -124,6 +134,71 @@ test('同名 Program 在不同商品上的 Key 独立，缺少 Key 不借用另�
     await fresh.allocate({ productId: 'p1', programKey: 'same-program', idempotencyKey: 'restock:p1:allocate' })
     await fresh.allocate({ productId: 'p2', programKey: 'same-program', idempotencyKey: 'restock:p2:allocate' })
     assert.deepEqual(f.events.map((e) => e.key), ['key-p1', 'key-p2'])
+})
+
+test('批量分配按商品和 Program 路由，同名 Program 不串 Key，缓存不串路由且无全局回退', async () => {
+    const ctx = setup()
+    await save(ctx, 'p1', 'same-program', 'key-p1')
+    const f = fakeFactory()
+    const missing = createProductLicenseServiceClient(ctx.database, ENV, f.factory)
+    const input = { programKey: 'same-program', quantity: 2, externalRef: '父引用', idempotencyKey: 'batch:product:allocate' }
+    for (const overrides of [{ productId: 'p2' }, { productId: undefined }, { productId: 'p1', programKey: 'missing' }]) {
+        await assert.rejects(missing.allocateBatch({ ...input, ...overrides }),
+            (error: unknown) => error instanceof LicenseServiceError && error.code === 'config_error')
+    }
+    assert.equal(f.events.length, 0)
+    await save(ctx, 'p2', 'same-program', 'key-p2')
+    await save(ctx, 'p1', 'new-program', 'key-new')
+    let factories = 0
+    const client = createProductLicenseServiceClient(ctx.database, ENV, (options) => {
+        factories += 1
+        return f.factory(options)
+    })
+    const [one, two] = await Promise.all([
+        client.allocateBatch({ ...input, productId: 'p1' }),
+        client.allocateBatch({ ...input, productId: 'p2' }),
+    ])
+    assert.equal(one.length, 2)
+    assert.equal(two.length, 2)
+    assert.deepEqual(one.map((a) => a.externalRef), ['父引用:1', '父引用:2'])
+    await client.allocateBatch({ ...input, productId: 'p1', programKey: 'new-program' })
+    await client.allocateBatch({ ...input, productId: 'p1' })
+    assert.equal(factories, 3)
+    assert.deepEqual(f.events.map(({ key, method }) => [key, method]), [
+        ['key-p1', 'allocateBatch'], ['key-p2', 'allocateBatch'], ['key-new', 'allocateBatch'], ['key-p1', 'allocateBatch'],
+    ])
+})
+
+test('批量分配真实 HTTP 使用商品 Key 且 productId 仅本地路由，错误从底层原样传回', async () => {
+    const ctx = setup()
+    await save(ctx, 'p1', 'same-program', 'key-p1')
+    await save(ctx, 'p2', 'same-program', 'key-p2')
+    const captured: Array<{ url: string; auth: string | null; body: Record<string, unknown> }> = []
+    const fetchImpl = (async (url: RequestInfo | URL, init: RequestInit = {}) => {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        captured.push({ url: String(url), auth: new Headers(init.headers).get('Authorization'), body })
+        return Response.json({ ok: true, data: { allocations: Array.from({ length: body.quantity as number }, (_, index) => ({
+            allocation_id: `allocation-${index}`, program_id: 'program-id', program_key: body.program_key,
+            external_ref: body.external_ref ? `${body.external_ref}:${index + 1}` : '', quantity: 1, status: 'allocated',
+            cards: [{ id: `card-${index}`, key: `CARD-KEY-${index}` }],
+            expires_at: '2026-10-01T08:30:00Z', created_at: '2026-10-01T08:00:00Z',
+        })) } }, { status: 201 })
+    }) as typeof fetch
+    const client = createProductLicenseServiceClient(ctx.database, ENV, (options) => createLicenseServiceClient({ ...options, fetchImpl }))
+    const input = { programKey: 'same-program', quantity: 2, idempotencyKey: 'batch:product:allocate' }
+    await client.allocateBatch({ ...input, productId: 'p1', externalRef: 'parent', metadata: { source: 'manual' } })
+    await client.allocateBatch({ ...input, productId: 'p2' })
+    assert.deepEqual(captured.map((c) => c.auth), ['Bearer key-p1', 'Bearer key-p2'])
+    assert.ok(captured.every((c) => c.url === 'https://lks.test/api/v1/allocations/batch'))
+    assert.deepEqual(captured.map((c) => c.body), [
+        { program_key: 'same-program', quantity: 2, external_ref: 'parent', metadata: { source: 'manual' } },
+        { program_key: 'same-program', quantity: 2 },
+    ])
+    const failure = new LicenseServiceError({ code: 'not_found', operation: 'allocateBatch', httpStatus: 404 })
+    const failing = createProductLicenseServiceClient(ctx.database, ENV, () => createFakeLicenseServiceClient({
+        allocateBatch: async () => { throw failure },
+    }))
+    await assert.rejects(failing.allocateBatch({ ...input, productId: 'p1' }), (error) => error === failure)
 })
 
 test('Program 和 Key 同批次保存；凭据写入失败时配置更新原子回滚', async () => {

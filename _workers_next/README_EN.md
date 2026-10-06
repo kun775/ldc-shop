@@ -7,6 +7,14 @@
 
 Serverless virtual goods store built with **Next.js 16**, **Cloudflare Workers** (OpenNext), **D1 Database**, and **Shadcn UI**.
 
+## Current status (2026-10-06, v2.2.0)
+
+- Admin restocking accepts 1–100 cards (default input: 10), with accurate partial-success counts and failure reasons.
+- Upgrade the center first to provide `POST /api/v1/allocations/batch`. One request creates independent single-card allocations, which can be sold to separate orders. Single-card requests retain the legacy endpoint.
+- Three JSON-set SQL statements atomically stage the whole batch; cards become sellable only after Ack. No database migration is added.
+- Processing 100 cards synchronously requires the Workers Paid invocation budget; the Free 50-call budget is not guaranteed. Real PostgreSQL concurrency tests and target Worker integration remain release prerequisites.
+- The new observable batch operation raises the minor version from 2.1.1 to 2.2.0.
+
 ## 🛠 Technical Architecture
 
 This version adopts the cutting-edge **Next.js on Workers** approach, rather than a traditional single-file Worker:

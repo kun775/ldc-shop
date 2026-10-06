@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createLicenseServiceClient, type LicenseServiceClientOptions } from './client.ts'
+import { createLicenseServiceClient, type AllocateInput, type LicenseServiceClientOptions } from './client.ts'
+import { createFakeLicenseServiceClient, makeAllocationDetail } from './test-support.ts'
 import { isLicenseServiceError } from './errors.ts'
 
 interface CapturedRequest {
@@ -89,6 +90,187 @@ test('Allocate 请求形态：路径、方法、三个头与严格请求体', as
 
     assert.equal(detail.allocationId, 'all_1')
     assert.equal(detail.cards[0].key, 'CS-7K2M-9XPT-4WQH-8CDE-1')
+})
+
+function batchEnvelope(quantity: number, externalRef = '', programKey = 'bill-service') {
+    return { ok: true, data: { allocations: Array.from({ length: quantity }, (_, index) => allocationEnvelope({
+        allocation_id: `all_${index + 1}`,
+        program_key: programKey,
+        external_ref: externalRef ? `${externalRef}:${index + 1}` : '',
+        cards: [{ id: `card_${index + 1}`, key: `KEY-${index + 1}` }],
+    }).data) } }
+}
+
+const batchInput: AllocateInput = {
+    programKey: 'bill-service', quantity: 2, idempotencyKey: 'batch:task-1:allocate',
+}
+
+test('AllocateBatch 只发一次 POST，严格四字段请求体且 productId 不发给中心', async () => {
+    const { impl, calls } = stubFetch(() => jsonResponse(batchEnvelope(2, '父引用'), 201))
+    const details = await makeClient(impl).allocateBatch({
+        ...batchInput, productId: 'local-product', externalRef: '父引用', metadata: { source: 'manual' },
+    })
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].url, 'https://lks.test/api/v1/allocations/batch')
+    assert.equal(calls[0].init.method, 'POST')
+    assert.equal(headerOf(calls[0], 'Authorization'), 'Bearer cs_live_sales')
+    assert.equal(headerOf(calls[0], 'Accept'), 'application/json')
+    assert.equal(headerOf(calls[0], 'Idempotency-Key'), batchInput.idempotencyKey)
+    assert.equal(headerOf(calls[0], 'X-Request-ID'), 'req_fixed')
+    assert.equal(headerOf(calls[0], 'Content-Type'), 'application/json')
+    assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+        program_key: 'bill-service', quantity: 2, external_ref: '父引用', metadata: { source: 'manual' },
+    })
+    assert.deepEqual(details.map((a) => [a.allocationId, a.cards[0].id, a.externalRef]), [
+        ['all_1', 'card_1', '父引用:1'], ['all_2', 'card_2', '父引用:2'],
+    ])
+})
+
+test('AllocateBatch 数量严格 integer 1..100，不默认、不截断且非法输入不联网', async () => {
+    const { impl, calls } = stubFetch(() => jsonResponse(batchEnvelope(2)))
+    const client = makeClient(impl)
+    for (const quantity of [undefined, 0, -1, 101, 1.9, 100.9, NaN, Infinity, -Infinity, '2', null]) {
+        await assert.rejects(client.allocateBatch({ ...batchInput, quantity: quantity as number }),
+            (error: unknown) => isLicenseServiceError(error) && error.code === 'invalid_request' && error.operation === 'allocateBatch')
+    }
+    for (const input of [
+        { ...batchInput, programKey: '  ' },
+        { ...batchInput, idempotencyKey: 'short' },
+        { ...batchInput, externalRef: 123 as unknown as string },
+    ]) {
+        await assert.rejects(client.allocateBatch(input),
+            (error: unknown) => isLicenseServiceError(error) && error.code === 'invalid_request')
+    }
+    assert.equal(calls.length, 0)
+})
+
+test('AllocateBatch 1/9/10/99/100 数量边界与 Unicode 父引用长度预留最大序号', async () => {
+    const { impl, calls } = stubFetch((_url, init) => {
+        const body = JSON.parse(String(init.body))
+        return jsonResponse(batchEnvelope(body.quantity, body.external_ref))
+    })
+    const client = makeClient(impl)
+    for (const quantity of [1, 9, 10, 99, 100]) {
+        const maxParentLength = 128 - 1 - String(quantity).length
+        for (const char of ['x', '中', '😀']) {
+            const externalRef = char.repeat(maxParentLength)
+            assert.equal((await client.allocateBatch({ ...batchInput, quantity, externalRef })).length, quantity)
+            const before = calls.length
+            await assert.rejects(client.allocateBatch({ ...batchInput, quantity, externalRef: externalRef + char }),
+                (error: unknown) => isLicenseServiceError(error) && error.code === 'invalid_request')
+            assert.equal(calls.length, before)
+        }
+    }
+    for (const externalRef of [undefined, '']) {
+        const details = await client.allocateBatch({ ...batchInput, externalRef })
+        assert.deepEqual(details.map((a) => a.externalRef), ['', ''])
+        assert.deepEqual(JSON.parse(String(calls.at(-1)!.init.body)), { program_key: 'bill-service', quantity: 2 })
+    }
+})
+
+test('AllocateBatch HTTP 404 明确要求升级中心，不降级成 N 次 Allocate', async () => {
+    for (const payload of ['404 page not found', { ok: false, error: { code: 'not_found', message: 'missing', retryable: false } }]) {
+        const { impl, calls } = stubFetch(() => typeof payload === 'string'
+            ? new Response(payload, { status: 404, headers: { 'X-Request-ID': 'req_old' } })
+            : jsonResponse({ ...payload, request_id: 'req_old' }, 404))
+        await assert.rejects(makeClient(impl).allocateBatch(batchInput), (error: unknown) => {
+            assert.ok(isLicenseServiceError(error))
+            assert.equal(error.operation, 'allocateBatch')
+            assert.equal(error.httpStatus, 404)
+            assert.equal(error.code, 'not_found')
+            assert.equal(error.retryable, false)
+            assert.equal(error.requestId, 'req_old')
+            assert.match(error.message, /升级中心/)
+            assert.match(error.causeMessage!, /不会降级/)
+            return true
+        })
+        assert.equal(calls.length, 1)
+        assert.equal(calls[0].url, 'https://lks.test/api/v1/allocations/batch')
+    }
+})
+
+test('AllocateBatch 异常响应整批 invalid_response，携带 operation 且不重试或泄露明文', async () => {
+    const mutations: Array<(payload: ReturnType<typeof batchEnvelope>) => void> = [
+        (p) => { p.ok = false },
+        (p) => { p.data.allocations.pop() },
+        (p) => { p.data.allocations[1] = p.data.allocations[0] },
+        (p) => { (p.data.allocations[1] as Record<string, unknown>).quantity = 1.9 },
+        (p) => { (p.data.allocations[1] as Record<string, unknown>).program_key = 'other' },
+        (p) => { (p.data.allocations[1] as Record<string, unknown>).status = 'sold' },
+        (p) => { (p.data.allocations[1] as Record<string, unknown>).cards = [{ id: 'card_1', key: 'SECRET-KEY' }] },
+        (p) => { (p.data.allocations[1] as Record<string, unknown>).cards = [{ id: 'card_2' }] },
+        (p) => { (p.data.allocations[1] as Record<string, unknown>).external_ref = ':2' },
+        (p) => { (p.data.allocations[1] as Record<string, unknown>).expires_at = 'invalid' },
+    ]
+    for (const mutate of mutations) {
+        const payload = batchEnvelope(2)
+        mutate(payload)
+        const { impl, calls } = stubFetch(() => jsonResponse(payload))
+        await assert.rejects(makeClient(impl).allocateBatch(batchInput), (error: unknown) => {
+            assert.ok(isLicenseServiceError(error))
+            assert.equal(error.code, 'invalid_response')
+            assert.equal(error.operation, 'allocateBatch')
+            assert.equal(error.retryable, false)
+            assert.ok(!JSON.stringify(error).includes('SECRET-KEY'))
+            return true
+        })
+        assert.equal(calls.length, 1)
+    }
+})
+
+test('AllocateBatch 复用错误信封映射、幂等冲突指纹和响应大小限制', async () => {
+    for (const [status, code, retryable] of [[409, 'idempotency_conflict', false], [403, 'program_not_allowed', false], [503, 'temporarily_unavailable', true]] as const) {
+        const { impl, calls } = stubFetch(() => jsonResponse({
+            ok: false, error: { code, message: '批量请求失败', retryable }, request_id: 'req_batch',
+        }, status, { 'Retry-After': '2' }))
+        await assert.rejects(makeClient(impl).allocateBatch(batchInput), (error: unknown) => {
+            assert.ok(isLicenseServiceError(error))
+            assert.equal(error.operation, 'allocateBatch')
+            assert.equal(error.code, code)
+            assert.equal(error.retryable, retryable)
+            assert.equal(error.requestId, 'req_batch')
+            assert.equal(error.retryAfterMs, 2_000)
+            assert.equal(error.bodyFingerprint?.length ?? null, code === 'idempotency_conflict' ? 16 : null)
+            return true
+        })
+        assert.equal(calls.length, 1)
+    }
+    const { impl } = stubFetch(() => jsonResponse(batchEnvelope(2)))
+    await assert.rejects(makeClient(impl, { maxResponseBytes: 64 }).allocateBatch(batchInput),
+        (error: unknown) => isLicenseServiceError(error) && error.code === 'response_too_large' && error.operation === 'allocateBatch')
+})
+
+test('单次 Allocate 保持一个分配包含多卡的原协议，不走 batch 路径', async () => {
+    const { impl, calls } = stubFetch(() => jsonResponse(allocationEnvelope({
+        quantity: 2, cards: [{ id: 'card_a', key: 'KEY-A' }, { id: 'card_b', key: 'KEY-B' }],
+    })))
+    const detail = await makeClient(impl).allocate({ ...batchInput, productId: 'local-only' })
+    assert.equal(detail.quantity, 2)
+    assert.equal(detail.cards.length, 2)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].url, 'https://lks.test/api/v1/allocations')
+    assert.deepEqual(JSON.parse(String(calls[0].init.body)), { program_key: 'bill-service', quantity: 2 })
+})
+
+test('FakeClient 批量行为独立计次、记录参数并原样返回或抛错，不调用单次 Allocate', async () => {
+    const result = [makeAllocationDetail()]
+    const failure = new Error('批量失败')
+    const attempts: number[] = []
+    const fake = createFakeLicenseServiceClient({ allocateBatch: async (input, attempt) => {
+        assert.equal(input, batchInput)
+        attempts.push(attempt)
+        if (attempt === 2) throw failure
+        return result
+    } })
+    assert.equal(await fake.allocateBatch(batchInput), result)
+    await assert.rejects(fake.allocateBatch(batchInput), (error) => error === failure)
+    assert.deepEqual(attempts, [1, 2])
+    assert.equal(fake.callCount('allocateBatch'), 2)
+    assert.equal(fake.callCount('allocate'), 0)
+    assert.deepEqual(fake.callsOf('allocateBatch'), [batchInput, batchInput])
+    const unstubbed = createFakeLicenseServiceClient()
+    await assert.rejects(unstubbed.allocateBatch(batchInput), /allocateBatch is not stubbed/)
+    assert.equal(unstubbed.callCount('allocateBatch'), 1)
 })
 
 test('本地参数缺陷就地失败：不发请求，也不会把注定被 400 的请求发出去', async () => {

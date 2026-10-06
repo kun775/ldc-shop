@@ -21,6 +21,7 @@ import { fingerprintIdempotentRequest, isValidIdempotencyKey } from './idempoten
 import {
     extractErrorRequestId,
     fallbackErrorCodeForStatus,
+    parseAllocationBatch,
     parseAllocationDetail,
     parseAllocationListPage,
     parseAllocationStatusUpdate,
@@ -39,6 +40,7 @@ import {
 
 export type LicenseServiceOperation =
     | 'allocate'
+    | 'allocateBatch'
     | 'ack'
     | 'sell'
     | 'cancel'
@@ -103,6 +105,7 @@ export interface ListAllocationsQuery {
 export interface LicenseServiceClient {
     readonly baseUrl: string
     allocate(input: AllocateInput): Promise<AllocationDetail>
+    allocateBatch(input: AllocateInput): Promise<AllocationDetail[]>
     ack(input: AckInput): Promise<AllocationStatusUpdate>
     sell(input: SellInput): Promise<AllocationStatusUpdate>
     cancel(input: CancelInput): Promise<AllocationStatusUpdate>
@@ -314,16 +317,21 @@ export function createLicenseServiceClient(options: LicenseServiceClientOptions)
         if (!response.ok) {
             const envelope = parseErrorEnvelope(parsed)
             const code = envelope.code ?? fallbackErrorCodeForStatus(response.status)
-            throw new LicenseServiceError({
+            const upgradeMessage = operation === 'allocateBatch' && response.status === 404
+                ? '中心不支持 POST /allocations/batch，请升级中心后重试；客户端不会降级为多次 Allocate 请求。'
+                : null
+            const error = new LicenseServiceError({
                 code,
                 httpStatus: response.status,
                 requestId: extractErrorRequestId(parsed, response.headers.get('X-Request-ID')),
-                retryable: envelope.retryable === true,
+                retryable: upgradeMessage ? false : envelope.retryable === true,
                 operation,
                 bodyFingerprint: await conflictFingerprint(code, body),
                 retryAfterMs: parseRetryAfterMs(response.headers.get('Retry-After'), now()),
-                cause: envelope.message,
+                cause: upgradeMessage ?? envelope.message,
             })
+            if (upgradeMessage) error.message += `：${upgradeMessage}`
+            throw error
         }
 
         const envelope = unwrapSuccessEnvelope(parsed)
@@ -376,6 +384,35 @@ export function createLicenseServiceClient(options: LicenseServiceClientOptions)
                 expectation: { programKey, quantity },
             })
             return takeParsed(detail, operation, response.status)
+        },
+
+        async allocateBatch(input) {
+            const operation: LicenseServiceOperation = 'allocateBatch'
+            const programKey = requireNonEmpty(input.programKey, 'program_key', operation)
+            requireIdempotencyKey(input.idempotencyKey, operation)
+            const quantity = input.quantity
+            if (quantity === undefined || !Number.isInteger(quantity) || quantity < 1 || quantity > 100) {
+                localRequestError(operation, 'quantity 必须是 1 到 100 之间的整数')
+            }
+            const externalRef = input.externalRef ?? ''
+            if (typeof externalRef !== 'string' ||
+                (externalRef !== '' && Array.from(externalRef).length + 1 + String(quantity).length > 128)) {
+                localRequestError(operation, 'external_ref 加上冒号与最大子序号后不得超过 128 个 Unicode 字符')
+            }
+
+            const response = await request({
+                operation,
+                method: 'POST',
+                path: '/allocations/batch',
+                idempotencyKey: input.idempotencyKey,
+                body: {
+                    program_key: programKey,
+                    quantity,
+                    ...(externalRef ? { external_ref: externalRef } : {}),
+                    ...(input.metadata ? { metadata: input.metadata } : {}),
+                },
+            })
+            return takeParsed(parseAllocationBatch(response.payload, { programKey, quantity, externalRef }), operation, response.status)
         },
 
         async ack(input) {

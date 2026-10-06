@@ -211,6 +211,7 @@ export interface FakeLicenseServiceClient extends LicenseServiceClient {
 
 export interface FakeClientBehavior {
     allocate?: (input: unknown, attempt: number) => Promise<AllocationDetail>
+    allocateBatch?: (input: unknown, attempt: number) => Promise<AllocationDetail[]>
     ack?: (input: unknown, attempt: number) => Promise<AllocationStatusUpdate>
     sell?: (input: unknown, attempt: number) => Promise<AllocationStatusUpdate>
     cancel?: (input: unknown, attempt: number) => Promise<AllocationStatusUpdate>
@@ -249,6 +250,11 @@ export function createFakeLicenseServiceClient(behavior: FakeClientBehavior = {}
             const attempt = record('allocate', input)
             if (!behavior.allocate) return unimplemented('allocate')
             return behavior.allocate(input, attempt)
+        },
+        async allocateBatch(input) {
+            const attempt = record('allocateBatch', input)
+            if (!behavior.allocateBatch) return unimplemented('allocateBatch')
+            return behavior.allocateBatch(input, attempt)
         },
         async ack(input) {
             const attempt = record('ack', input)

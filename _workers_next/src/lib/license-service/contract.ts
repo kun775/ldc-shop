@@ -232,6 +232,44 @@ export function parseAllocationDetail(
     }
 }
 
+/** 批量分配必须是按请求顺序返回的独立单卡分配，不能复用单次分配的宽松字段归一。 */
+export function parseAllocationBatch(
+    payload: unknown,
+    expectation: { programKey: string; quantity: number; externalRef?: string },
+): ContractParseResult<AllocationDetail[]> {
+    const envelope = unwrapSuccessEnvelope(payload)
+    if (!envelope.ok) return fail(envelope.reason)
+    if (!isPlainObject(envelope.value)) return fail('invalid_data')
+    const raw = envelope.value.allocations
+    if (!Array.isArray(raw)) return fail('invalid_allocations')
+    if (raw.length !== expectation.quantity) return fail('allocation_count_mismatch')
+
+    const allocations: AllocationDetail[] = []
+    const allocationIds = new Set<string>()
+    const cardIds = new Set<string>()
+    const parentRef = expectation.externalRef ?? ''
+    for (const [index, item] of raw.entries()) {
+        if (!isPlainObject(item)) return fail('invalid_allocation')
+        if (item.quantity !== 1) return fail('invalid_quantity')
+        if (item.status !== 'allocated') return fail('invalid_allocation_status')
+        const childRef = parentRef ? `${parentRef}:${index + 1}` : ''
+        if (item.external_ref !== childRef) return fail('external_ref_mismatch')
+        const detail = parseAllocationDetail({ ok: true, data: item }, {
+            requireCardKeys: true,
+            expectation: { programKey: expectation.programKey, quantity: 1 },
+        })
+        if (!detail.ok) return fail(detail.reason)
+        const value = detail.value
+        if (value.createdAtMs <= 0 || value.expiresAtMs <= value.createdAtMs) return fail('invalid_allocation_time')
+        if (allocationIds.has(value.allocationId)) return fail('duplicate_allocation_id')
+        if (cardIds.has(value.cards[0].id)) return fail('duplicate_card_id')
+        allocationIds.add(value.allocationId)
+        cardIds.add(value.cards[0].id)
+        allocations.push(value)
+    }
+    return { ok: true, value: allocations }
+}
+
 /** 解析 `GET /allocations` 的分页结果。 */
 export function parseAllocationListPage(payload: unknown): ContractParseResult<AllocationListPage> {
     const envelope = unwrapSuccessEnvelope(payload)

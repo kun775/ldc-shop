@@ -1222,10 +1222,15 @@
                 "saved": "Saved",
                 "edit": "Edit",
                 "cancel": "Cancel",
-                "restock": "Restock one",
-                "restocked": "One card restocked"
+                "restock": "Batch restock",
+                "restockQuantity": "Restock quantity (1–100)",
+                "restocked": "Restock completed"
             },
             "restock": {
+                "invalidQuantity": "Restock quantity must be an integer from 1 to 100",
+                "progress": "Restocked {{restocked}}/{{requested}}",
+                "incomplete": "{{count}} cards incomplete",
+                "skipped_materialize_pending": "An allocation is not yet sellable. Wait for reconciliation before restocking again.",
                 "skipped_not_configured": "This product is not connected to the card center",
                 "skipped_supply_mode_not_license_service": "This product does not use the card center",
                 "skipped_program_key_missing": "This product has no Program configured",

@@ -26,8 +26,9 @@ import {
     executeOrderRevokePlan,
     loadCardServiceSnapshot,
     reloadRevokePlan,
-    restockProductCard,
+    restockProductCardBatch,
     type CardServiceSnapshot,
+    type RestockResult,
 } from '@/lib/license-service'
 import { CARD_SERVICE_MAX_OPERATION_ATTEMPTS } from '@/lib/license-service/operation-queue'
 import { completePaidOrderDelivery } from '@/lib/order-processing'
@@ -35,6 +36,13 @@ import { completePaidOrderDelivery } from '@/lib/order-processing'
 export type CardServiceActionResult =
     | { ok: true }
     | { ok: false; errorKey: string; errorId: string }
+
+export type CardServiceRestockActionResult = CardServiceActionResult & {
+    requested?: number
+    restocked?: number
+    incomplete?: number
+    errorKeys?: string[]
+}
 
 export type { CardServiceSnapshot }
 
@@ -133,30 +141,44 @@ export async function saveCardServiceProgramAction(input: {
     }
 }
 
-/** 手动补一张卡（辅助触发，不是可靠补货系统）。 */
-export async function restockCardServiceProductAction(productId: string): Promise<CardServiceActionResult> {
+/** 手动批量补货；只有全部进入可售库存才返回 ok。 */
+export async function restockCardServiceProductAction(productId: string, quantity: number = 1): Promise<CardServiceRestockActionResult> {
+    let progress: Pick<CardServiceRestockActionResult, 'requested' | 'restocked' | 'incomplete' | 'errorKeys'> | undefined
     try {
         await checkAdmin()
-        const result = await restockProductCard((productId || '').trim())
+        if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100) {
+            return { ok: false, errorKey: 'admin.cardService.restock.invalidQuantity', errorId: '' }
+        }
+        const id = typeof productId === 'string' ? productId.trim() : ''
+        if (!id) return { ok: false, errorKey: 'admin.cardService.errorProductId', errorId: '' }
+
+        const result: { requested: number; restocked: number; results: RestockResult[] } = await restockProductCardBatch(id, quantity)
+        // 只传稳定的业务原因，不把核心结果里的密钥、错误原文或内部 ID 带到客户端。
+        const errorKeys = [...new Set(result.results.flatMap((item: RestockResult) => item.status === 'restocked'
+            ? []
+            : [item.status === 'skipped'
+                ? `admin.cardService.restock.skipped_${item.reason}`
+                : `admin.cardService.restock.${item.status}`]))]
+        const incomplete = result.requested - result.restocked
+        progress = { requested: result.requested, restocked: result.restocked, incomplete, errorKeys }
+        const ok = incomplete === 0 && errorKeys.length === 0
         revalidatePath('/admin/card-service')
 
-        if (result.status !== 'restocked') {
-            await recordAuditEvent({
-                eventName: 'cardService.restock.skipped',
-                actorType: 'admin',
-                targetId: productId,
-                source: 'admin.cardService',
-                metadata: { productId, status: result.status },
-            })
-            // `skipped` 只是一个筐，真正要看的是原因（未配置 / 非中心供应 / 缺 Program）。
-            const errorKey = result.status === 'skipped'
-                ? `admin.cardService.restock.skipped_${result.reason}`
-                : `admin.cardService.restock.${result.status}`
-            return { ok: false, errorKey, errorId: '' }
-        }
-        return { ok: true }
+        await recordAuditEvent({
+            eventName: ok ? 'cardService.restock.completed' : 'cardService.restock.skipped',
+            result: ok ? 'success' : 'failure',
+            actorType: 'admin',
+            targetId: id,
+            source: 'admin.cardService',
+            metadata: { productId: id, requested: result.requested, restocked: result.restocked,
+                statuses: result.results.map((item: RestockResult) => item.status) },
+        })
+        return ok
+            ? { ok: true, ...progress }
+            : { ok: false, ...progress, errorKey: errorKeys[0] ?? 'admin.cardService.restock.failed', errorId: '' }
     } catch (error) {
-        return failure('admin.cardService.restock', error)
+        // 核心已返回后，即使审计或刷新失败，也保留已经补入的数量。
+        return { ...failure('admin.cardService.restock', error), ...progress }
     }
 }
 

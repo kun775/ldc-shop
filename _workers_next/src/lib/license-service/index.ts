@@ -53,6 +53,8 @@ import {
 } from './revoke.ts'
 import {
     restockProductCards,
+    restockProductCardsBatch,
+    type RestockBatchResult,
     type RestockDeps,
     type RestockOptions,
     type RestockResult,
@@ -63,7 +65,8 @@ import type { DiscardFailedAllocationResult } from './discard.ts'
 
 export type { ReplenishOptions, ReplenishSummary } from './replenish.ts'
 export type { ReconcileSummary, ReconcileOutcome } from './reconcile.ts'
-export type { RestockDeps, RestockOptions, RestockResult, RestockSkipReason } from './restock.ts'
+export type { RestockBatchResult, RestockDeps, RestockOptions, RestockResult, RestockSkipReason } from './restock.ts'
+export { restockProductCardsBatch } from './restock.ts'
 export type { LicenseServiceClient } from './client.ts'
 export type { LicenseServiceConfig } from './config.ts'
 export type { LicenseServiceErrorCategory, LicenseServiceErrorCode } from './errors.ts'
@@ -318,6 +321,17 @@ export async function restockProductCard(
     // `restocked` 的语义就是「卡已经搬进 `cards`」，因此必须重算前台库存。
     // 其余状态（skipped / deferred / expired / failed）都不改变本地卡池。
     if (result.status === 'restocked') await recalcStorefrontStock([productId])
+    return result
+}
+
+/** 批量手动补货；部分成功也只重算一次，读回失败的已物化卡同样触发重算。 */
+export async function restockProductCardBatch(
+    productId: string,
+    quantity: number,
+    env: Record<string, string | undefined> = process.env,
+): Promise<RestockBatchResult> {
+    const result = await restockProductCardsBatch(buildCardServiceDeps(env), { productId, quantity })
+    if (result.results.some((child) => child.status === 'restocked')) await recalcStorefrontStock([productId])
     return result
 }
 

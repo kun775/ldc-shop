@@ -26,6 +26,7 @@ import {
     retryCardServiceRevokeAction,
     saveCardServiceProgramAction,
     type CardServiceActionResult,
+    type CardServiceRestockActionResult,
     type CardServiceSnapshot,
 } from '@/actions/card-service'
 import { AdminPageShell } from '@/components/admin/admin-page-shell'
@@ -137,6 +138,8 @@ export function CardServiceContent({
     const [editingId, setEditingId] = useState<string | null>(null)
     const [drafts, setDrafts] = useState<Record<string, ProductDraft>>({})
     const [manualOrderId, setManualOrderId] = useState('')
+    const [restockQuantities, setRestockQuantities] = useState<Record<string, string>>({})
+    const [restockResults, setRestockResults] = useState<Record<string, CardServiceRestockActionResult>>({})
 
     const overview = snapshot?.overview ?? null
     const review = snapshot?.review ?? null
@@ -184,6 +187,52 @@ export function CardServiceContent({
                 }
             } catch (error) {
                 console.error('[CardService] action failed:', error)
+                toast.error(t('common.error'))
+            } finally {
+                setBusyKey(null)
+            }
+        })
+    }
+
+    const restockMessage = (result: CardServiceRestockActionResult) => {
+        const parts: string[] = []
+        if (result.requested !== undefined && result.restocked !== undefined) {
+            parts.push(t('admin.cardService.restock.progress', { requested: result.requested, restocked: result.restocked }))
+            if (result.incomplete) parts.push(t('admin.cardService.restock.incomplete', { count: result.incomplete }))
+        }
+        if (!result.ok) {
+            const errorKeys = [...new Set([...(result.errorKeys ?? []), result.errorKey])]
+            parts.push(...errorKeys.map((errorKey) => t(errorKey)))
+            if (result.errorId) parts.push(result.errorId)
+        }
+        return parts.join(' · ')
+    }
+
+    const runRestock = (productId: string) => {
+        const quantity = Number(restockQuantities[productId] ?? '10')
+        if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100) {
+            toast.error(t('admin.cardService.restock.invalidQuantity'))
+            return
+        }
+        setBusyKey(`restock:${productId}`)
+        startTask(async () => {
+            try {
+                const result = await restockCardServiceProductAction(productId, quantity)
+                setRestockResults((prev) => ({ ...prev, [productId]: result }))
+                const message = restockMessage(result)
+                if (result.ok) toast.success(message)
+                else if (result.restocked && result.restocked > 0) toast.warning(message)
+                else toast.error(message)
+
+                // 读取失败不代表补货失败，保留本次结果并单独提示刷新异常。
+                try {
+                    setSnapshot(await loadCardServiceSnapshotAction())
+                } catch (error) {
+                    console.error('[CardService] restock refresh failed:', error)
+                    toast.error(t('admin.cardService.refreshFailed'))
+                }
+            } catch (error) {
+                console.error('[CardService] restock action failed:', error)
                 toast.error(t('common.error'))
             } finally {
                 setBusyKey(null)
@@ -702,6 +751,11 @@ export function CardServiceContent({
                         const isEditing = editingId === product.productId
                         const savedTargetStock = product.targetStock === null ? '' : String(product.targetStock)
                         const targetStock = draft?.targetStock ?? savedTargetStock
+                        const restockQuantity = restockQuantities[product.productId] ?? '10'
+                        const parsedRestockQuantity = Number(restockQuantity)
+                        const validRestockQuantity = Number.isSafeInteger(parsedRestockQuantity)
+                            && parsedRestockQuantity >= 1 && parsedRestockQuantity <= 100
+                        const restockResult = restockResults[product.productId]
                         return (
                             <div key={product.productId} className="border-b border-border/50 px-4 py-3 last:border-b-0">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -735,19 +789,28 @@ export function CardServiceContent({
                                             <span>{t('admin.cardService.metrics.pendingRevoke')}：<span className="tabular-nums">{product.pendingRevoke}</span></span>
                                         </div>
                                     </div>
-                                    <div className="flex shrink-0 flex-wrap gap-2">
+                                    <div className="flex shrink-0 flex-wrap items-end gap-2">
                                         <Button variant="outline" size="sm" disabled={busy} onClick={() => startEdit(product)}>
                                             {t('admin.cardService.products.edit')}
                                         </Button>
+                                        <label className="space-y-1 text-[11px] text-muted-foreground">
+                                            <span className="block">{t('admin.cardService.products.restockQuantity')}</span>
+                                            <Input
+                                                className="h-9 w-28 tabular-nums"
+                                                type="number"
+                                                min={1}
+                                                max={100}
+                                                step={1}
+                                                value={restockQuantity}
+                                                disabled={busy || !enabled || !product.apiKeyPresent}
+                                                onChange={(event) => setRestockQuantities((prev) => ({ ...prev, [product.productId]: event.target.value }))}
+                                            />
+                                        </label>
                                         <Button
                                             variant="outline"
                                             size="sm"
-                                            disabled={busy || !enabled || !product.apiKeyPresent}
-                                            onClick={() => runTask(
-                                                `restock:${product.productId}`,
-                                                () => restockCardServiceProductAction(product.productId),
-                                                'admin.cardService.products.restocked',
-                                            )}
+                                            disabled={busy || !enabled || !product.apiKeyPresent || !validRestockQuantity}
+                                            onClick={() => runRestock(product.productId)}
                                         >
                                             {busyKey === `restock:${product.productId}`
                                                 ? <Loader2 className="h-4 w-4 animate-spin" />
@@ -756,6 +819,14 @@ export function CardServiceContent({
                                         </Button>
                                     </div>
                                 </div>
+
+                                {restockResult ? (
+                                    <p role="status" className={cn('mt-2 text-xs', restockResult.ok
+                                        ? 'text-emerald-700 dark:text-emerald-300'
+                                        : 'text-amber-700 dark:text-amber-300')}>
+                                        {restockMessage(restockResult)}
+                                    </p>
+                                ) : null}
 
                                 {!isEditing ? (
                                     <div className="mt-3 flex flex-wrap items-end gap-3">

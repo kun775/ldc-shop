@@ -1222,10 +1222,15 @@
                 "saved": "已保存",
                 "edit": "编辑",
                 "cancel": "取消",
-                "restock": "补一张卡",
-                "restocked": "已补一张卡"
+                "restock": "批量补货",
+                "restockQuantity": "补货数量（1–100）",
+                "restocked": "补货已完成"
             },
             "restock": {
+                "invalidQuantity": "补货数量必须是 1 到 100 的整数",
+                "progress": "已补 {{restocked}}/{{requested}}",
+                "incomplete": "未完成 {{count}} 张",
+                "skipped_materialize_pending": "已有分配尚未进入可售库存，请等待对账完成后再补货",
                 "skipped_not_configured": "该商品未接入卡密中心",
                 "skipped_supply_mode_not_license_service": "该商品当前不使用卡密中心供应",
                 "skipped_program_key_missing": "该商品未配置 Program",

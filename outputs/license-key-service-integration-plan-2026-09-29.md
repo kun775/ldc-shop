@@ -154,7 +154,30 @@
 - **商城仓库：**`src/lib/card-api.ts:102-167`（旧 GET，保留而不硬改）；`src/lib/db/schema.ts:4-80`、`src/lib/db/database-upgrade-registry.ts:4-65`、`src/lib/db/queries.ts:254-287,593-661,664-967`（升级：结构探针与升级执行器）、`src/lib/db/queries.ts:1280-1361`（数据：商品评分汇总重算，非升级）；`src/actions/checkout.ts:223-268`（库存检查）、`src/actions/checkout.ts:306-481`（本地预留）、`src/actions/checkout.ts:509-569`（零元直发）；`src/lib/order-processing.ts:382-525`（付款履约）；`src/actions/order.ts:19-75`（订单页轮询）、`src/actions/order.ts:77-185`（取消）；`src/actions/refund.ts:20-135`、`src/actions/refund-requests.ts:173-269`（退款）；`src/actions/admin.ts:382-409`、`src/actions/admin-orders.ts:53-149,279-428`（后台操作）。
 - **明确不在首期：**核销方 grant 业务解释与权益发放（服务 `docs/API.md:381-450` 为独立对接）；共享卡；重构既有历史明文卡密；跨两个数据库的原子事务。上述事项必须另行建账与补偿，不能凭接口幂等推导出跨服务强一致。
 
-## 6. 当前运维配置
+## 6. 批量补货增量实施（2026-10-06）
+
+基线：商城 `a6b92fb`；中心 `4f44a60`。以下进度仅覆盖本次批量补货增量，不据此宣称历史阶段 A–E 的全部上线门槛已关闭。
+
+| 批次 | 对应阶段 | 内容与状态 | 版本 |
+|---|---|---|---|
+| B1 | A（中心契约） | 本地提交 `453f8d8`；新增 `/allocations/batch`，一次事务创建 N 条独立单卡分配；重放按当前 Key 的 Program 白名单鉴权；本地测试通过 | API v1，增量兼容，无迁移 |
+| B2 | C + E（商城核心与管理端） | 严格批量契约、全批原子暂存、逐子 Ack、部分成功反馈、数量输入实现并通过本地验证；待本地提交 | 2.2.0 |
+| B3 | C（自动推进） | 自动批量策略尚待独立提交；本批次记录不替代线上运行验收 | 待定 |
+
+### D-BATCH-01：批量传输，独立单卡分配
+
+- 背景：旧中心的一个 Allocation 必须整批 Sell；直接增大旧 quantity 会阻断拆单交付。
+- 决定：新增兼容接口，一次领取返回 N 条 quantity=1 的 Allocation；单张继续旧接口，原 Sell/退款模型不变。
+- 边界：中心库存不足整批失败；全批暂存失败不 Ack；逐子 Ack 失败保留原待办继续其他子任务。100 张暂存压缩到 3 条 JSON 集合 SQL，每条不超过 100 绑定。已提交入库但 ID 读回失败仍计成功。
+- 被否决：不直接用旧 quantity=N，不删除 allocation_incomplete 守卫，不在 404 时默默降级 N 次领取，不做跨库事务。
+
+### 验证与未关闭门槛
+
+商城工作树全量 932/932 通过，tsc、RSC/i18n 审计通过，eslint 368 warning / 0 error（原基线 382）；该数字包含待独立提交的自动补货测试。中心 `go test ./...`、`go vet ./...` 通过，真实 PostgreSQL 集成测试因未配置测试库而跳过。未运行本机已知不可用的 Next 构建。
+
+上线顺序：中心 → 商城；中心 Program 的 `max_batch_allocation_size` 必须不小于实际领取数量（否则整批拒绝）。无新增表/列，不需新的 D1 升级项。100 张核心成功路径实测 706 条 SQL；商品凭据路由与聚合额外占预算，100 张依赖 Workers Paid，不承诺 Free 50 次预算。真实 PG 同键并发/库存竞争、目标 Worker 调用预算与耗时、实站独立卡跨订单售出仍待验证。此处全部为本地代码与测试状态，尚未推送或部署。
+
+## 7. 当前运维配置
 
 在商城后台「卡密服务运维」中，从商品下拉框选择已有商品，再填写服务端 Program 的 Slug。下拉框只显示尚未接入且非共享的商品，保存时使用选中商品的 ID。
 
