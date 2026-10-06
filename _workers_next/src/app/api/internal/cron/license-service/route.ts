@@ -59,11 +59,7 @@ export async function POST(request: Request) {
         steps.deliveries = await retryPendingCardServiceDeliveries({ limit });
         steps.reconcile = await reconcileCardService({ limit });
         steps.revokes = await replayPendingCardServiceRevokes({ limit });
-        steps.replenish = await replenishCardStock({
-            maxProducts: limit,
-            maxCards: limit,
-            maxPerProduct: 1,
-        });
+        steps.replenish = await replenishCardStock();
     } catch (error) {
         console.error("[cron-license-service] failed", error);
         return NextResponse.json(

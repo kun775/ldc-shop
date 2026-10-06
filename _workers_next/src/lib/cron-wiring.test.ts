@@ -173,12 +173,46 @@ test('卡密 cron 的 limit：缺失、空串、非数字用 1，合法值夹在
     assert.equal(clampCardServiceCronLimit(''), 1)
     assert.equal(clampCardServiceCronLimit('   '), 1)
     assert.equal(clampCardServiceCronLimit('abc'), 1)
+    assert.equal(clampCardServiceCronLimit('NaN'), 1)
+    assert.equal(clampCardServiceCronLimit('Infinity'), 1)
+    assert.equal(clampCardServiceCronLimit('-Infinity'), 1)
     assert.equal(clampCardServiceCronLimit('-3'), 1)
     assert.equal(clampCardServiceCronLimit('0'), 1)
     assert.equal(clampCardServiceCronLimit('4'), 4)
     assert.equal(clampCardServiceCronLimit('10'), 10)
     assert.equal(clampCardServiceCronLimit('50'), 10)
     assert.equal(clampCardServiceCronLimit('1e2'), 10)
+})
+
+test('卡密 cron 补货使用独立默认预算，limit 仅传给交付、对账和作废', async () => {
+    const route = source('../app/api/internal/cron/license-service/route.ts').replace(/\r\n/g, '\n')
+    assert.match(route, /steps\.replenish = await replenishCardStock\(\)/)
+    assert.doesNotMatch(route, /maxPerProduct:\s*1/)
+    const start = route.indexOf('export async function POST(')
+    const body = route.slice(route.indexOf('{', start) + 1, route.lastIndexOf('}'))
+        .replace('const steps: Record<string, unknown>', 'const steps')
+    for (const rawLimit of [null, '4', '100', 'NaN', 'Infinity']) {
+        const calls: Array<[string, unknown[]]> = []
+        const step = (name: string) => async (...args: unknown[]) => {
+            calls.push([name, args])
+            return { success: true }
+        }
+        const execute = new Function('NextResponse', 'getCronToken', 'isAuthorizedCronRequest',
+            'isLicenseServiceConfigured', 'clampCardServiceCronLimit', 'retryPendingCardServiceDeliveries',
+            'reconcileCardService', 'replayPendingCardServiceRevokes', 'replenishCardStock',
+            `return async function(request) {${body}}`)(
+            { json: (value: unknown) => value }, () => 'token', () => true, () => true,
+            clampCardServiceCronLimit, step('deliveries'), step('reconcile'), step('revokes'), step('replenish'),
+        )
+        const url = new URL('https://shop.example.com/api/internal/cron/license-service')
+        if (rawLimit !== null) url.searchParams.set('limit', rawLimit)
+        const result = await execute(new Request(url, { method: 'POST' }))
+        assert.equal(result.success, true)
+        const limit = clampCardServiceCronLimit(rawLimit)
+        assert.deepEqual(calls, [
+            ['deliveries', [{ limit }]], ['reconcile', [{ limit }]], ['revokes', [{ limit }]], ['replenish', []],
+        ])
+    }
 })
 
 test('scheduled jobs use separate public HTTP requests without invoking Next.js locally', async () => {

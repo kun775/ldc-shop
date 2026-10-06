@@ -7,6 +7,13 @@
 
 Serverless virtual goods store built with **Next.js 16**, **Cloudflare Workers** (OpenNext), **D1 Database**, and **Shadcn UI**.
 
+## Current status (2026-10-06, v2.2.1)
+
+- Fix the scheduled entry point that restricted restocking to one card: replenish toward the target each minute, requesting at most 20 cards per product and per round, scanning up to 20 active products by default.
+- One batch request per product per round; reserve the budget by requested count, not successful count, and retain cursor fairness after partial success.
+- Delivery, reconciliation, and revocation still default to one item. Restocking has an independent budget. An empty target remains one; explicit zero pauses replenishment.
+- 2.2.0 to 2.2.1 fixes the existing replenishment pacing, without a new interface or schema. The automatic path changes; upgrading the center, setting the Program batch limit, and using Workers Paid remain release prerequisites.
+
 ## Current status (2026-10-06, v2.2.0)
 
 - Admin restocking accepts 1–100 cards (default input: 10), with accurate partial-success counts and failure reasons.
