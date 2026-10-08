@@ -7,6 +7,13 @@
 
 Serverless virtual goods store built with **Next.js 16**, **Cloudflare Workers** (OpenNext), **D1 Database**, and **Shadcn UI**.
 
+## Current status (2026-10-08, v2.2.2)
+
+- Fix per-card reservation for multi-quantity orders: free cards are now reserved in a single statement, so checkout queries no longer grow with quantity. Large orders no longer fail on the Workers Free limit of 50 D1 queries per invocation.
+- When a reservation falls short or fails midway, the cards already reserved for that order are released immediately instead of being held for 5 minutes. Under concurrent orders, a later order releases only its own reservations.
+- The stock check and the actual reservation use the same rules and both exclude expired cards; shared products also exclude expired cards.
+- 2.2.1 to 2.2.2 fixes checkout reservation, without a new interface or schema. Card-service products still call Sell once per card after payment, so large orders require Workers Paid.
+
 ## Current status (2026-10-06, v2.2.1)
 
 - Fix the scheduled entry point that restricted restocking to one card: replenish toward the target each minute, requesting at most 20 cards per product and per round, scanning up to 20 active products by default.
