@@ -1,6 +1,8 @@
 'use server'
 
 import { buildZeroPriceTradeNo } from '@/lib/orders/trade-number'
+import { countReservableCards, reserveCardsForNewOrder, type ReservedCard } from '@/lib/orders/card-reservation'
+import { createD1CardServiceDatabase } from '@/lib/license-service/database'
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { products, cards, orders, loginUsers } from "@/lib/db/schema"
@@ -222,6 +224,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
     const resolvedDeliveryEmail = isValidEmail(contactInfo) ? contactInfo : null
 
     // 2. Check Stock
+    const cardDatabase = createD1CardServiceDatabase()
     const getAvailableStock = async () => {
         if (manualFulfillment) {
             const row = await db.select({ stock: products.manualStockCount })
@@ -232,25 +235,23 @@ export async function createOrder(productId: string, quantity: number = 1, email
         }
         // For shared products, we just need ANY unused card to exist. Reservation status doesn't matter since we don't reserve.
         if (product.isShared) {
+            // 与 pickSharedDeliveryCard 同口径排除已过期卡，否则只剩过期卡时会通过检查却取不到卡。
             const result = await db.select({ count: sql<number>`count(*)` })
                 .from(cards)
                 .where(and(
                     eq(cards.productId, productId),
-                    or(isNull(cards.isUsed), eq(cards.isUsed, false))
+                    or(isNull(cards.isUsed), eq(cards.isUsed, false)),
+                    or(isNull(cards.expiresAt), gt(cards.expiresAt, new Date()))
                 ));
             // If we have at least 1 card, treat as infinite stock
             return (result[0]?.count || 0) > 0 ? INFINITE_STOCK : 0;
         }
 
-        // SQLite count returns number directly usually
-        const result = await db.select({ count: sql<number>`count(*)` })
-            .from(cards)
-            .where(and(
-                eq(cards.productId, productId),
-                or(isNull(cards.isUsed), eq(cards.isUsed, false)),
-                or(isNull(cards.reservedAt), lt(cards.reservedAt, new Date(Date.now() - RESERVATION_TTL_MS)))
-            ))
-        return result[0]?.count || 0
+        return countReservableCards(cardDatabase, {
+            productId,
+            nowMs: Date.now(),
+            reservationTtlMs: RESERVATION_TTL_MS,
+        })
     }
 
     const runStockCleanupFallback = async () => {
@@ -319,6 +320,94 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
         const reservedCards: { id: number, key: string }[] = []
 
+        // 回收一张他人已过期的预留；返回 null 表示没有可回收的卡。
+        // 已被网关确认付款或状态无法确认的订单不会被抢卡。
+        const reclaimExpiredReservation = async (): Promise<ReservedCard | null> => {
+            for (let attempts = 0; attempts < 3; attempts++) {
+                // B. Fallback: Expired reservation
+                const fiveMinutesAgo = new Date(Date.now() - RESERVATION_TTL_MS);
+                const nowMsExpired = Date.now();
+                const expiredCandidates = await db.select({
+                    id: cards.id,
+                    cardKey: cards.cardKey,
+                    reservedOrderId: cards.reservedOrderId
+                })
+                    .from(cards)
+                    .where(and(
+                        eq(cards.productId, productId),
+                        or(eq(cards.isUsed, false), isNull(cards.isUsed)),
+                        lt(cards.reservedAt, fiveMinutesAgo),
+                        or(isNull(cards.expiresAt), gt(cards.expiresAt, new Date(nowMsExpired)))
+                    ))
+                    .limit(1);
+
+                if (expiredCandidates.length === 0) {
+                    return null
+                }
+
+                const candidate = expiredCandidates[0]
+                const candidateCardId = candidate.id
+                const candidateOrderId = candidate.reservedOrderId
+
+                let reservationCanBeReclaimed = !candidateOrderId
+                if (candidateOrderId) {
+                    const candidateOrder = await db.query.orders.findFirst({
+                        where: eq(orders.orderId, candidateOrderId),
+                        columns: {
+                            status: true,
+                            amount: true,
+                            currentPaymentId: true,
+                        },
+                    })
+
+                    if (!candidateOrder || candidateOrder.status === 'cancelled' || candidateOrder.status === 'refunded') {
+                        reservationCanBeReclaimed = true
+                    } else if (candidateOrder.status === 'pending') {
+                        const statusRes = await queryOrderStatus(candidateOrder.currentPaymentId || candidateOrderId)
+                        if (statusRes.success && statusRes.status === 1) {
+                            const paidAmount = Number.parseFloat(statusRes.data?.money || candidateOrder.amount)
+                            const tradeNo = statusRes.data?.trade_no
+                                || statusRes.data?.transaction_id
+                                || `RESERVATION_RECOVERY_${Date.now()}`
+                            try {
+                                await processOrderFulfillment(candidateOrderId, paidAmount, tradeNo)
+                            } catch (error) {
+                                console.error(`[Checkout] Failed to fulfill paid expired reservation ${candidateOrderId}:`, error)
+                            }
+                            // Never steal from an order that the gateway confirmed as paid,
+                            // even when fulfillment needs a later retry.
+                            continue
+                        }
+                        reservationCanBeReclaimed = statusRes.success && statusRes.status === 0
+                    }
+                }
+
+                if (!reservationCanBeReclaimed) {
+                    // Gateway errors and active paid/processing orders are inconclusive.
+                    // Keep their reservation instead of risking duplicate delivery.
+                    continue
+                }
+
+                // Steal the expired card only if it is still expired and unchanged
+                const updated = await db.update(cards)
+                    .set({ reservedOrderId: orderId, reservedAt: new Date() })
+                    .where(and(
+                        eq(cards.id, candidateCardId),
+                        or(eq(cards.isUsed, false), isNull(cards.isUsed)),
+                        lt(cards.reservedAt, fiveMinutesAgo),
+                        candidateOrderId
+                            ? eq(cards.reservedOrderId, candidateOrderId)
+                            : isNull(cards.reservedOrderId)
+                    ))
+                    .returning({ id: cards.id, cardKey: cards.cardKey });
+
+                if (updated.length > 0) {
+                    return { id: updated[0].id, key: updated[0].cardKey }
+                }
+            }
+            return null
+        }
+
         if (manualFulfillment) {
             await createOrderRecord([], '', isZeroPrice, pointsToUse, user, session?.user?.username, resolvedContactInfo, product, orderId, quantity, checkoutFieldValuesPayload)
             return
@@ -354,129 +443,16 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
             // We do NOT update DB to reserve.
         } else {
-            // Normal Product Reservation Logic
-            for (let i = 0; i < quantity; i++) {
-                let attempts = 0
-                const maxAttempts = 3
-                let success = false
-
-                while (attempts < maxAttempts && !success) {
-                    attempts++
-
-                    // A. Try strictly free card (single atomic UPDATE ... RETURNING)
-                    const nowMs = Date.now();
-                    const claimResult: any = await db.run(sql`
-                        UPDATE cards
-                        SET reserved_order_id = ${orderId}, reserved_at = ${nowMs}
-                        WHERE id = (
-                            SELECT id FROM cards
-                            WHERE product_id = ${productId}
-                              AND (is_used = 0 OR is_used IS NULL)
-                              AND reserved_at IS NULL
-                              AND (expires_at IS NULL OR expires_at > ${nowMs})
-                            LIMIT 1
-                        )
-                        RETURNING id, card_key
-                    `);
-
-                    const claimedRows = claimResult?.results || claimResult?.rows || [];
-                    if (claimedRows.length > 0) {
-                        const row = claimedRows[0];
-                        const id = Number(row.id);
-                        const key = row.card_key ?? row.cardKey;
-                        reservedCards.push({ id, key });
-                        success = true;
-                        continue;
-                    }
-
-                    // B. Fallback: Expired reservation
-                    const fiveMinutesAgo = new Date(Date.now() - RESERVATION_TTL_MS);
-                    const nowMsExpired = Date.now();
-                    const expiredCandidates = await db.select({
-                        id: cards.id,
-                        cardKey: cards.cardKey,
-                        reservedOrderId: cards.reservedOrderId
-                    })
-                        .from(cards)
-                        .where(and(
-                            eq(cards.productId, productId),
-                            or(eq(cards.isUsed, false), isNull(cards.isUsed)),
-                            lt(cards.reservedAt, fiveMinutesAgo),
-                            or(isNull(cards.expiresAt), gt(cards.expiresAt, new Date(nowMsExpired)))
-                        ))
-                        .limit(1);
-
-                    if (expiredCandidates.length === 0) {
-                        break
-                    }
-
-                    const candidate = expiredCandidates[0]
-                    const candidateCardId = candidate.id
-                    const candidateOrderId = candidate.reservedOrderId
-
-                    let reservationCanBeReclaimed = !candidateOrderId
-                    if (candidateOrderId) {
-                        const candidateOrder = await db.query.orders.findFirst({
-                            where: eq(orders.orderId, candidateOrderId),
-                            columns: {
-                                status: true,
-                                amount: true,
-                                currentPaymentId: true,
-                            },
-                        })
-
-                        if (!candidateOrder || candidateOrder.status === 'cancelled' || candidateOrder.status === 'refunded') {
-                            reservationCanBeReclaimed = true
-                        } else if (candidateOrder.status === 'pending') {
-                            const statusRes = await queryOrderStatus(candidateOrder.currentPaymentId || candidateOrderId)
-                            if (statusRes.success && statusRes.status === 1) {
-                                const paidAmount = Number.parseFloat(statusRes.data?.money || candidateOrder.amount)
-                                const tradeNo = statusRes.data?.trade_no
-                                    || statusRes.data?.transaction_id
-                                    || `RESERVATION_RECOVERY_${Date.now()}`
-                                try {
-                                    await processOrderFulfillment(candidateOrderId, paidAmount, tradeNo)
-                                } catch (error) {
-                                    console.error(`[Checkout] Failed to fulfill paid expired reservation ${candidateOrderId}:`, error)
-                                }
-                                // Never steal from an order that the gateway confirmed as paid,
-                                // even when fulfillment needs a later retry.
-                                continue
-                            }
-                            reservationCanBeReclaimed = statusRes.success && statusRes.status === 0
-                        }
-                    }
-
-                    if (reservationCanBeReclaimed) {
-                        // Steal the expired card only if it is still expired and unchanged
-                        const now = new Date();
-                        const updated = await db.update(cards)
-                            .set({ reservedOrderId: orderId, reservedAt: now })
-                            .where(and(
-                                eq(cards.id, candidateCardId),
-                                or(eq(cards.isUsed, false), isNull(cards.isUsed)),
-                                lt(cards.reservedAt, fiveMinutesAgo),
-                                candidateOrderId
-                                    ? eq(cards.reservedOrderId, candidateOrderId)
-                                    : isNull(cards.reservedOrderId)
-                            ))
-                            .returning({ id: cards.id, cardKey: cards.cardKey });
-
-                        if (updated.length > 0) {
-                            reservedCards.push({ id: updated[0].id, key: updated[0].cardKey });
-                            success = true;
-                        }
-                    } else {
-                        // Gateway errors and active paid/processing orders are inconclusive.
-                        // Keep their reservation instead of risking duplicate delivery.
-                        continue
-                    }
-                } // end while
-
-                if (!success) {
-                    throw new Error('stock_locked')
-                }
-            } // end for
+            // 空闲卡一条语句批量领取，不足部分逐张回收过期预留；
+            // 领不满或中途出错时，按订单号释放本次已领取的卡（此时订单行尚未写入）。
+            const claimedCards = await reserveCardsForNewOrder(cardDatabase, {
+                orderId,
+                productId,
+                quantity,
+                nowMs: Date.now(),
+                reclaimExpiredCard: reclaimExpiredReservation,
+            })
+            reservedCards.push(...claimedCards)
         }
 
         const joinedKeys = reservedCards.map(c => c.key).join('\n')
